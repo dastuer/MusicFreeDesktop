@@ -1,0 +1,57 @@
+{
+  "name": "musicfree-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MusicFree macOS 桌面版 - 参考网易云桌面端交互重构",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outdir=dist-electron --watch --sourcemap",
+    "dev:electron": "wait-on tcp:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .",
+    "build:renderer": "vite build",
+    "build:main": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --external:electron --minify --outdir=dist-electron",
+    "build": "npm run build:renderer && npm run build:main",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "@types/he": "^1.2.3",
+    "@types/object-path": "^0.11.4",
+    "@types/qs": "^6.9.15",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "big-integer": "^1.6.52",
+    "cheerio": "^1.0.0",
+    "compare-versions": "^6.1.1",
+    "crypto-js": "^4.2.0",
+    "dayjs": "^1.11.13",
+    "eventemitter3": "^5.0.1",
+    "he": "^1.2.0",
+    "immer": "^10.1.1",
+    "jotai": "^2.10.3",
+    "music-metadata": "^10.5.0",
+    "nanoid": "^5.0.9",
+    "object-path": "^0.11.8",
+    "qs": "^6.13.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "webdav": "^5.7.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "esbuild@0.24.2": true,
+    "esbuild@0.25.12": true
+  }
+}

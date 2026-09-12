@@ -1,0 +1,6 @@
+node_modules/
+dist-electron/
+dist-renderer/
+.idea/
+.DS_Store
+*.log
