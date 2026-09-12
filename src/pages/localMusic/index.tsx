@@ -21,7 +21,29 @@ export default function LocalMusicPage() {
     };
 
     useEffect(() => {
-        refresh();
+        (async () => {
+            const saved = (await ipcInvoke("localMusic:getSavedMusicList")) ?? [];
+            if (saved.length) {
+                setMusicList(saved);
+                return;
+            }
+            // 没有已保存列表时，默认扫描下载目录
+            const downloadDir = await ipcInvoke("download:getDir");
+            if (!downloadDir) {
+                return;
+            }
+            setFolder(downloadDir);
+            setLoading(true);
+            const result = await ipcInvoke("localMusic:scan", downloadDir);
+            if (result?.success) {
+                setMusicList(result.data);
+                await ipcInvoke("config:set", "localMusic.list", result.data);
+                if (result.data?.length) {
+                    showToast(`已从下载目录扫描到 ${result.data.length} 首本地音乐`);
+                }
+            }
+            setLoading(false);
+        })();
     }, []);
 
     const pickAndScan = async () => {

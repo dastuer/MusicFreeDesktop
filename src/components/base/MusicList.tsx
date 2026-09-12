@@ -192,6 +192,14 @@ export default function MusicList(props: IMusicListProps) {
             showToast("没有可删除的本地文件");
             return;
         }
+        // 正在播放/在播放队列中的歌曲先清理播放状态，避免删除后播放异常
+        for (const it of items) {
+            if (TrackPlayerSingleton.isCurrentMusic(it)) {
+                await TrackPlayerSingleton.clearPlayList();
+            } else {
+                await TrackPlayerSingleton.remove(it);
+            }
+        }
         const result = await ipcInvoke("localMusic:delete", paths);
         if (result?.success) {
             showToast(`已删除 ${result.data ?? paths.length} 首本地音乐`);

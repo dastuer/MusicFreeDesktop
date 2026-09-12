@@ -27,6 +27,7 @@ const allowedChannels = [
     "download:clearCompleted",
     "download:openInFolder",
     "download:getDir",
+    "download:pickDir",
     "app:getInfo",
 ];
 

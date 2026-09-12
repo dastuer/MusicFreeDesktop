@@ -64,8 +64,8 @@ export async function retryDownload(taskId: string) {
     await window.mfp.invoke("download:retry", taskId);
 }
 
-export async function removeDownload(taskId: string) {
-    await window.mfp.invoke("download:remove", taskId);
+export async function removeDownload(taskId: string, deleteFile = false) {
+    return window.mfp.invoke("download:remove", taskId, deleteFile);
 }
 
 export async function clearCompletedDownloads() {

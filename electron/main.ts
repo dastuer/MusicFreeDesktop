@@ -153,6 +153,8 @@ ipcMain.handle("plugin:call", async (_e, payload: { hash: string; method: string
 ipcMain.handle("localMusic:pickFolder", async () => {
     const result = await dialog.showOpenDialog({
         properties: ["openDirectory"],
+        // 默认定位到下载目录
+        defaultPath: downloadService.getDownloadDir(),
     });
     if (result.canceled || !result.filePaths.length) {
         return null;
@@ -216,11 +218,42 @@ ipcMain.handle("download:start", (_e, items: any[], quality: string) =>
     downloadService.addTasks(items, quality));
 ipcMain.handle("download:list", () => downloadService.getSerializedTasks());
 ipcMain.handle("download:retry", (_e, taskId: string) => downloadService.retryTask(taskId));
-ipcMain.handle("download:remove", (_e, taskId: string) => downloadService.removeTask(taskId));
+ipcMain.handle("download:remove", async (_e, taskId: string, deleteFile = false) => {
+    if (deleteFile) {
+        const { response } = await dialog.showMessageBox({
+            type: "warning",
+            title: "删除下载",
+            message: "确定要删除该下载记录和已下载的文件吗？",
+            detail: "文件将从磁盘删除，此操作不可恢复。",
+            buttons: ["取消", "删除"],
+            defaultId: 0,
+            cancelId: 0,
+        });
+        if (response !== 1) {
+            return { success: false, canceled: true };
+        }
+    }
+    downloadService.removeTask(taskId, deleteFile);
+    return { success: true };
+});
 ipcMain.handle("download:clearCompleted", () => downloadService.clearCompleted());
 ipcMain.handle("download:openInFolder", (_e, taskId: string) =>
     downloadService.openInFolder(taskId));
 ipcMain.handle("download:getDir", () => downloadService.getDownloadDir());
+// 选择新的下载目录（原生对话框），成功后返回新目录
+ipcMain.handle("download:pickDir", async () => {
+    const result = await dialog.showOpenDialog({
+        title: "选择下载目录",
+        properties: ["openDirectory", "createDirectory"],
+        defaultPath: downloadService.getDownloadDir(),
+    });
+    if (result.canceled || !result.filePaths.length) {
+        return null;
+    }
+    const dir = result.filePaths[0];
+    downloadService.setDownloadDir(dir);
+    return dir;
+});
 
 // 默认音乐（内置示例曲目）
 ipcMain.handle("builtinMusic:list", () => builtinMusic.list());

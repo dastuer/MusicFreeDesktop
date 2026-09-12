@@ -62,11 +62,12 @@ class DownloadService {
     private notifyTimer: NodeJS.Timeout | null = null;
 
     setup(downloadDir: string, configStore: typeof configStoreInstance, notify: () => void) {
-        this.downloadDir = downloadDir;
         this.configStore = configStore;
+        // 用户在设置中配置过下载目录则优先使用
+        this.downloadDir = configStore.get("download.dir", downloadDir);
         this.notify = notify;
-        if (!fs.existsSync(downloadDir)) {
-            fs.mkdirSync(downloadDir, { recursive: true });
+        if (!fs.existsSync(this.downloadDir)) {
+            fs.mkdirSync(this.downloadDir, { recursive: true });
         }
         // 恢复历史任务：running/pending 重置为 failed（可重试）
         const saved: IDownloadTask[] = configStore.get("download.tasks", []);
@@ -107,6 +108,15 @@ class DownloadService {
 
     getDownloadDir() {
         return this.downloadDir;
+    }
+
+    /** 更改默认下载目录（持久化，后续下载保存到新目录） */
+    setDownloadDir(dir: string) {
+        this.downloadDir = dir;
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        this.configStore.set("download.dir", dir);
     }
 
     /** 批量添加下载任务，返回新增数量 */
@@ -168,7 +178,7 @@ class DownloadService {
         }
     }
 
-    removeTask(taskId: string) {
+    removeTask(taskId: string, deleteFile = false) {
         const idx = this.tasks.findIndex((t) => t.id === taskId);
         if (idx >= 0) {
             const task = this.tasks[idx];
@@ -176,6 +186,15 @@ class DownloadService {
             if (task.status === "running") {
                 task.status = "failed";
                 task.error = "已取消";
+            }
+            if (deleteFile && task.filePath) {
+                try {
+                    if (fs.existsSync(task.filePath)) {
+                        fs.unlinkSync(task.filePath);
+                    }
+                } catch {
+                    // 文件删除失败不阻塞记录移除
+                }
             }
             this.tasks.splice(idx, 1);
             this.persist();

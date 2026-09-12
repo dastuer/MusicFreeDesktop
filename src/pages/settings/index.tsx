@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { setTheme, useThemeType } from "@/core/theme";
 import { getQuality, setQuality } from "@/core/appConfig";
 import { ipcInvoke } from "@/core/ipc";
+import { showToast } from "@/components/base/Toast";
 
 /**
  * 设置页：外观 / 播放 / 关于
@@ -18,10 +19,20 @@ export default function SettingsPage() {
     const themeType = useThemeType();
     const [quality, setQualityState] = useState<IMusic.IQualityKey>(getQuality());
     const [appInfo, setAppInfo] = useState<any>(null);
+    const [downloadDir, setDownloadDir] = useState("");
 
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
+        ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
     }, []);
+
+    const changeDownloadDir = async () => {
+        const dir = await ipcInvoke("download:pickDir");
+        if (dir) {
+            setDownloadDir(dir);
+            showToast(`下载目录已更改为 ${dir}`);
+        }
+    };
 
     return (
         <div style={{ maxWidth: 640 }}>
@@ -74,6 +85,27 @@ export default function SettingsPage() {
                             </button>
                         ))}
                     </div>
+                </div>
+            </div>
+
+            <div className="settings-group">
+                <div className="settings-group-title">下载</div>
+                <div className="settings-item">
+                    <div style={{ minWidth: 0 }}>
+                        <div className="settings-item-label">下载目录</div>
+                        <div
+                            className="settings-item-desc"
+                            style={{
+                                wordBreak: "break-all",
+                                whiteSpace: "normal",
+                            }}
+                        >
+                            {downloadDir || "加载中…"}
+                        </div>
+                    </div>
+                    <button className="btn-ghost" style={{ flexShrink: 0 }} onClick={changeDownloadDir}>
+                        修改目录
+                    </button>
                 </div>
             </div>
 

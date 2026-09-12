@@ -94,13 +94,46 @@ export default function DownloadingPage() {
                 onClick: () => retryDownload(task.id),
             });
         }
-        items.push({
-            title: "删除记录",
-            icon: "close",
-            danger: true,
-            onClick: () => removeDownload(task.id),
-        });
+        if (task.status === "completed" && task.filePath) {
+            items.push(
+                {
+                    title: "删除记录",
+                    icon: "close",
+                    onClick: () => removeDownload(task.id),
+                },
+                {
+                    title: "删除记录和文件",
+                    icon: "trash",
+                    danger: true,
+                    onClick: async () => {
+                        const result = await removeDownload(task.id, true);
+                        if (!result?.canceled) {
+                            showToast(result?.success ? "已删除下载记录和文件" : "删除失败");
+                        }
+                    },
+                },
+            );
+        } else {
+            items.push({
+                title: "删除记录",
+                icon: "close",
+                danger: true,
+                onClick: () => removeDownload(task.id),
+            });
+        }
         showContextMenu(e.clientX, e.clientY, items);
+    };
+
+    /** 行内删除：已完成的任务删除记录+文件（原生二次确认），其余仅删除记录 */
+    const handleRowDelete = async (task: IDownloadTask) => {
+        if (task.status === "completed" && task.filePath) {
+            const result = await removeDownload(task.id, true);
+            if (!result?.canceled) {
+                showToast(result?.success ? "已删除下载记录和文件" : "删除失败");
+            }
+        } else {
+            removeDownload(task.id);
+        }
     };
 
     const activeCount = tasks.filter(
@@ -239,11 +272,11 @@ export default function DownloadingPage() {
                             </>
                         )}
                         <Icon
-                            name="close"
+                            name="trash"
                             size={15}
-                            title="删除记录"
+                            title={task.status === "completed" ? "删除记录和文件" : "删除记录"}
                             style={{ cursor: "pointer", color: "var(--text-tertiary)" }}
-                            onClick={() => removeDownload(task.id)}
+                            onClick={() => handleRowDelete(task)}
                         />
                     </div>
                 </div>
