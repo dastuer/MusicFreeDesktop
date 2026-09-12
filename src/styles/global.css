@@ -496,7 +496,8 @@ img {
     white-space: nowrap;
 }
 
-.music-selection-bar .btn-ghost {
+.music-selection-bar .btn-ghost,
+.music-selection-bar .btn-primary {
     white-space: nowrap;
     flex-shrink: 0;
     padding: 5px 10px;
