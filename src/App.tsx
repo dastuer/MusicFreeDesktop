@@ -64,7 +64,7 @@ function MainContent(props: { onOpenDetail: () => void }) {
                         onClick={() => goBack()}
                         title="后退"
                     >
-                        <Icon name="back" size={16} />
+                        <Icon name="back" size={18} />
                     </button>
                     <div style={{ width: 10 }} />
                     <div className="search-input-wrap">

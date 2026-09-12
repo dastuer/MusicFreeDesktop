@@ -152,10 +152,10 @@ img {
 
 .titlebar-nav-btn {
     -webkit-app-region: no-drag;
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    border: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid var(--divider);
     background: transparent;
     color: var(--text-color);
     display: flex;
