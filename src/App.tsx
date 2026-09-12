@@ -66,7 +66,6 @@ function MainContent(props: { onOpenDetail: () => void }) {
                     >
                         <Icon name="back" size={18} />
                     </button>
-                    <div style={{ width: 10 }} />
                     <div className="search-input-wrap">
                         <Icon name="search" size={14} style={{ color: "var(--text-tertiary)" }} />
                         <input
