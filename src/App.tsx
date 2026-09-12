@@ -92,6 +92,7 @@ function MainContent(props: { onOpenDetail: () => void }) {
                             }}
                         />
                     </div>
+                    <div style={{ flex: 1 }} />
                     <div style={{ width: 8 }} />
                 </div>
                 <div className="page-container" key={`${route.path}-${JSON.stringify(route.params)}`}>
