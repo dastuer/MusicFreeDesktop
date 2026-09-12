@@ -75,6 +75,8 @@ export default function MusicList(props: IMusicListProps) {
 
     const [likedKeys, setLikedKeys] = useState<Set<string>>(new Set());
     const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+    /** 多选模式：默认关闭，进入后才显示选择框 */
+    const [selectMode, setSelectMode] = useState(false);
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -147,12 +149,25 @@ export default function MusicList(props: IMusicListProps) {
 
     const clearSelection = () => setSelectedKeys(new Set());
 
+    const exitSelectMode = () => {
+        clearSelection();
+        setSelectMode(false);
+    };
+
     const downloadSelected = () => {
+        if (!selectedItems.length) {
+            showToast("请先选择歌曲");
+            return;
+        }
         showDownloadPanel(selectedItems);
         clearSelection();
     };
 
     const likeSelected = async (like: boolean) => {
+        if (!selectedItems.length) {
+            showToast("请先选择歌曲");
+            return;
+        }
         await batchSetLike(selectedItems, like);
         showToast(like ? `已收藏 ${selectedItems.length} 首歌曲` : `已取消收藏 ${selectedItems.length} 首歌曲`);
         clearSelection();
@@ -269,9 +284,20 @@ export default function MusicList(props: IMusicListProps) {
     };
 
     return (
-        <div className={`music-list ${selectable ? "selectable" : ""} ${className ?? ""}`}>
+        <div className={`music-list ${selectable && selectMode ? "selecting" : ""} ${className ?? ""}`}>
+            {selectable && (
+                <div className="music-list-toolbar">
+                    <button
+                        className="btn-ghost"
+                        onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                    >
+                        <Icon name={selectMode ? "close" : "check"} size={13} />
+                        {selectMode ? "退出多选" : "多选"}
+                    </button>
+                </div>
+            )}
             <div className="music-list-header">
-                {selectable && (
+                {selectable && selectMode && (
                     <div
                         className={`music-row-check header-check${allSelected ? " checked" : ""}`}
                         title={allSelected ? "取消全选" : "全选"}
@@ -289,17 +315,17 @@ export default function MusicList(props: IMusicListProps) {
             {musicList.map((musicItem, index) => {
                 const playing = TrackPlayerSingleton.isCurrentMusic(musicItem);
                 const k = keyOf(musicItem, index);
-                const checked = selectable && selectedKeys.has(k);
+                const checked = selectMode && selectedKeys.has(k);
                 const liked = likedKeys.has(k);
                 return (
                     <div
                         key={`${k}-${index}`}
-                        className={`music-row${playing ? " playing" : ""}${checked ? " selected" : ""}`}
+                        className={`music-row${playing ? " playing" : ""}`}
                         onDoubleClick={() => TrackPlayerSingleton.play(musicItem, true)}
                         onClick={() => TrackPlayerSingleton.play(musicItem)}
                         onContextMenu={(e) => openMenu(e, musicItem)}
                     >
-                        {selectable && (
+                        {selectMode && (
                             <div
                                 className={`music-row-check${checked ? " checked" : ""}`}
                                 onClick={(e) => {
@@ -360,7 +386,7 @@ export default function MusicList(props: IMusicListProps) {
             {!loading && !musicList.length && (
                 <div className="empty-hint">这里空空如也</div>
             )}
-            {selectable && selectedKeys.size > 0 && (
+            {selectable && selectMode && (
                 <div className="music-selection-bar">
                     <span className="music-selection-count">
                         已选 {selectedKeys.size} 首
@@ -382,7 +408,10 @@ export default function MusicList(props: IMusicListProps) {
                     </button>
                     <button className="btn-ghost" onClick={clearSelection}>
                         <Icon name="close" size={13} />
-                        取消
+                        清除选择
+                    </button>
+                    <button className="btn-primary" onClick={exitSelectMode}>
+                        完成
                     </button>
                 </div>
             )}

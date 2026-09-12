@@ -327,8 +327,8 @@ img {
     z-index: 5;
 }
 
-.music-list.selectable .music-list-header,
-.music-list.selectable .music-row {
+.music-list.selecting .music-list-header,
+.music-list.selecting .music-row {
     grid-template-columns: 28px 36px 1fr 1.2fr 1fr 122px;
 }
 
@@ -346,8 +346,16 @@ img {
     background: var(--hover-bg);
 }
 
-.music-row.selected {
-    background: var(--active-bg);
+/* ---------- 多选工具条 ---------- */
+.music-list-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 8px 10px;
+}
+
+.music-list-toolbar .btn-ghost {
+    padding: 5px 12px;
+    font-size: 12px;
 }
 
 .music-row.playing .music-row-title {
