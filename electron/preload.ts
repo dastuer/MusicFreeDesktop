@@ -17,6 +17,8 @@ const allowedChannels = [
     "localMusic:scan",
     "localMusic:getSavedMusicList",
     "localMusic:readCover",
+    "localMusic:openInFinder",
+    "localMusic:delete",
     "builtinMusic:list",
     "download:start",
     "download:list",

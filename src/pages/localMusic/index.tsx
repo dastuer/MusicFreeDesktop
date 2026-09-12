@@ -14,12 +14,14 @@ export default function LocalMusicPage() {
     const [loading, setLoading] = useState(false);
     const [folder, setFolder] = useState<string>("");
 
-    useEffect(() => {
+    const refresh = () => {
         ipcInvoke("localMusic:getSavedMusicList").then((list) => {
-            if (list?.length) {
-                setMusicList(list);
-            }
+            setMusicList(list ?? []);
         });
+    };
+
+    useEffect(() => {
+        refresh();
     }, []);
 
     const pickAndScan = async () => {
@@ -55,7 +57,13 @@ export default function LocalMusicPage() {
                     </button>
                 }
             />
-            <MusicList musicList={musicList} loading={loading} isEnd />
+            <MusicList
+                musicList={musicList}
+                loading={loading}
+                isEnd
+                localMode
+                onMusicChanged={refresh}
+            />
         </div>
     );
 }

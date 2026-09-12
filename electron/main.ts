@@ -170,6 +170,47 @@ ipcMain.handle("localMusic:getSavedMusicList", () => localMusic.getSavedMusicLis
 ipcMain.handle("localMusic:readCover", (_e, localPath: string) =>
     localMusic.readCover(localPath));
 
+// 在访达中显示本地音乐文件
+ipcMain.handle("localMusic:openInFinder", (_e, localPath: string) => {
+    if (localPath && fs.existsSync(localPath)) {
+        shell.showItemInFolder(localPath);
+    }
+});
+
+// 删除本地音乐：原生弹窗二次确认后再删文件
+ipcMain.handle("localMusic:delete", async (_e, localPaths: string[]) => {
+    console.log("[localMusic:delete] invoked with", localPaths);
+    const paths = (localPaths ?? []).filter((p) => p && fs.existsSync(p));
+    console.log("[localMusic:delete] filtered paths:", paths);
+    if (!paths.length) {
+        return { success: false, message: "文件不存在或已被删除" };
+    }
+    try {
+        const { response } = await dialog.showMessageBox({
+            type: "warning",
+            title: "删除本地音乐",
+            message:
+                paths.length === 1
+                    ? `确定要删除「${path.basename(paths[0])}」吗？`
+                    : `确定要删除这 ${paths.length} 首本地音乐吗？`,
+            detail: "文件将从磁盘删除，此操作不可恢复。",
+            buttons: ["取消", "删除"],
+            defaultId: 0,
+            cancelId: 0,
+        });
+        console.log("[localMusic:delete] dialog response:", response);
+        if (response !== 1) {
+            return { success: false, canceled: true };
+        }
+        const deleted = await localMusic.deleteMusic(paths);
+        console.log("[localMusic:delete] deleted:", deleted);
+        return { success: true, data: deleted };
+    } catch (e: any) {
+        console.error("[localMusic:delete] error:", e);
+        return { success: false, message: e?.message ?? String(e) };
+    }
+});
+
 // 下载
 ipcMain.handle("download:start", (_e, items: any[], quality: string) =>
     downloadService.addTasks(items, quality));

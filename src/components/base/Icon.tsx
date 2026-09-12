@@ -40,6 +40,11 @@ const iconPaths: Record<string, React.ReactNode> = {
     heart: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     heartFilled: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="currentColor" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     check: <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />,
+    trash: (
+        <>
+            <path d="M4 6h16M9.5 6V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1V6m4.5 0-.9 13.1a2 2 0 0 1-2 1.9H7.9a2 2 0 0 1-2-1.9L5 6m4.5 4v7m5-7v7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+    ),
     plus: <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
     close: <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
     back: <path d="M14.5 6 8.5 12l6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,

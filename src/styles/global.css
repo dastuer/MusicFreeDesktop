@@ -461,6 +461,14 @@ img {
     opacity: 1;
 }
 
+.music-action-btn.danger:hover {
+    color: var(--primary-color);
+}
+
+.btn-ghost.danger {
+    color: var(--primary-color);
+}
+
 .music-action-btn.downloading {
     opacity: 1;
     animation: mfs-spin 1s linear infinite;

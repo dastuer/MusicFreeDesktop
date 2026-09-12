@@ -103,6 +103,27 @@ class LocalMusicService {
             return null;
         }
     }
+
+    /** 删除本地音乐文件并从已保存列表移除，返回成功删除的数量（-1 表示用户取消） */
+    async deleteMusic(localPaths: string[]): Promise<number> {
+        const pathSet = new Set(localPaths);
+        const list = this.getSavedMusicList();
+        const remaining = list.filter((it: any) => !pathSet.has(it.localPath));
+        let deleted = 0;
+        for (const p of localPaths) {
+            try {
+                await fs.promises.unlink(p);
+                deleted += 1;
+            } catch (e: any) {
+                if (e?.code !== "ENOENT") {
+                    throw e;
+                }
+                deleted += 1; // 文件本来就不存在，视为已删除
+            }
+        }
+        this.saveMusicList(remaining);
+        return deleted;
+    }
 }
 
 export default new LocalMusicService();

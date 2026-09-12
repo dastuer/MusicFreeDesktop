@@ -20,6 +20,7 @@ import {
     openDownloadInFolder,
     useDownloadSetup,
 } from "@/core/downloadManager";
+import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "./Toast";
 
 /**
@@ -51,6 +52,8 @@ interface IMusicListProps {
     renderHeader?: React.ReactNode;
     /** 是否启用多选（默认启用） */
     selectable?: boolean;
+    /** 本地音乐模式：行内显示「在访达中打开/删除」，多选操作栏用删除替代下载 */
+    localMode?: boolean;
     /** 传入后在右键菜单中出现「从歌单中移除」 */
     onRemove?: (musicItem: IMusic.IMusicItem) => void;
     /** 喜欢/移除等操作后的回调（页面刷新用） */
@@ -65,6 +68,7 @@ export default function MusicList(props: IMusicListProps) {
         loading = false,
         className,
         selectable = true,
+        localMode = false,
         onRemove,
         onMusicChanged,
     } = props;
@@ -174,6 +178,30 @@ export default function MusicList(props: IMusicListProps) {
         onMusicChanged?.();
     };
 
+    const openInFinder = (musicItem: IMusic.IMusicItem) => {
+        if (!musicItem.localPath) {
+            showToast("该歌曲没有本地文件");
+            return;
+        }
+        ipcInvoke("localMusic:openInFinder", musicItem.localPath);
+    };
+
+    const deleteLocalMusic = async (items: IMusic.IMusicItem[]) => {
+        const paths = items.map((it) => it.localPath).filter(Boolean);
+        if (!paths.length) {
+            showToast("没有可删除的本地文件");
+            return;
+        }
+        const result = await ipcInvoke("localMusic:delete", paths);
+        if (result?.success) {
+            showToast(`已删除 ${result.data ?? paths.length} 首本地音乐`);
+            clearSelection();
+            onMusicChanged?.();
+        } else if (!result?.canceled) {
+            showToast(`删除失败：${result?.message ?? "未知错误"}`);
+        }
+    };
+
     const openMenu = async (e: React.MouseEvent, musicItem: IMusic.IMusicItem) => {
         e.preventDefault();
         e.stopPropagation();
@@ -209,12 +237,29 @@ export default function MusicList(props: IMusicListProps) {
                 icon: "playQueue",
                 onClick: () => showAddToSheetPanel(musicItem),
             },
-            {
+        ];
+
+        if (localMode) {
+            items.push(
+                {
+                    title: "在访达中打开",
+                    icon: "open",
+                    onClick: () => openInFinder(musicItem),
+                },
+                {
+                    title: "删除音乐",
+                    icon: "trash",
+                    danger: true,
+                    onClick: () => deleteLocalMusic([musicItem]),
+                },
+            );
+        } else {
+            items.push({
                 title: "下载",
                 icon: "download",
                 onClick: () => showDownloadPanel([musicItem]),
-            },
-        ];
+            });
+        }
 
         if (onRemove) {
             items.push({
@@ -225,7 +270,7 @@ export default function MusicList(props: IMusicListProps) {
             });
         }
 
-        if (musicItem.album) {
+        if (!localMode && musicItem.album) {
             items.push({
                 title: "查看专辑",
                 icon: "musicNote",
@@ -247,6 +292,9 @@ export default function MusicList(props: IMusicListProps) {
     };
 
     const renderDownloadAction = (musicItem: IMusic.IMusicItem) => {
+        if (localMode) {
+            return null;
+        }
         const dl = downloadStatusMap[musicKey(musicItem)];
         if (dl?.status === "completed") {
             return (
@@ -365,7 +413,32 @@ export default function MusicList(props: IMusicListProps) {
                             >
                                 <Icon name={liked ? "heartFilled" : "heart"} size={15} />
                             </span>
-                            {renderDownloadAction(musicItem)}
+                            {localMode ? (
+                                <>
+                                    <span
+                                        className="music-action-btn"
+                                        title="在访达中打开"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            openInFinder(musicItem);
+                                        }}
+                                    >
+                                        <Icon name="open" size={15} />
+                                    </span>
+                                    <span
+                                        className="music-action-btn danger"
+                                        title="删除音乐"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            deleteLocalMusic([musicItem]);
+                                        }}
+                                    >
+                                        <Icon name="trash" size={15} />
+                                    </span>
+                                </>
+                            ) : (
+                                renderDownloadAction(musicItem)
+                            )}
                             <span className="music-row-duration">
                                 {formatDuration(musicItem.duration)}
                             </span>
@@ -394,10 +467,17 @@ export default function MusicList(props: IMusicListProps) {
                     <button className="btn-ghost" onClick={toggleSelectAll}>
                         {allSelected ? "取消全选" : "全选"}
                     </button>
-                    <button className="btn-ghost" onClick={downloadSelected}>
-                        <Icon name="download" size={14} />
-                        下载
-                    </button>
+                    {localMode ? (
+                        <button className="btn-ghost danger" onClick={() => deleteLocalMusic(selectedItems)}>
+                            <Icon name="trash" size={14} />
+                            删除
+                        </button>
+                    ) : (
+                        <button className="btn-ghost" onClick={downloadSelected}>
+                            <Icon name="download" size={14} />
+                            下载
+                        </button>
+                    )}
                     <button className="btn-ghost" onClick={() => likeSelected(true)}>
                         <Icon name="heartFilled" size={14} />
                         收藏
