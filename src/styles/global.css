@@ -315,7 +315,7 @@ img {
 
 .music-list-header {
     display: grid;
-    grid-template-columns: 36px 1fr 1.2fr 1fr 60px;
+    grid-template-columns: 36px 1fr 1.2fr 1fr 122px;
     gap: 12px;
     color: var(--text-tertiary);
     font-size: 12px;
@@ -327,9 +327,14 @@ img {
     z-index: 5;
 }
 
+.music-list.selectable .music-list-header,
+.music-list.selectable .music-row {
+    grid-template-columns: 28px 36px 1fr 1.2fr 1fr 122px;
+}
+
 .music-row {
     display: grid;
-    grid-template-columns: 36px 1fr 1.2fr 1fr 60px;
+    grid-template-columns: 36px 1fr 1.2fr 1fr 122px;
     gap: 12px;
     align-items: center;
     padding: 8px;
@@ -339,6 +344,10 @@ img {
 
 .music-row:hover {
     background: var(--hover-bg);
+}
+
+.music-row.selected {
+    background: var(--active-bg);
 }
 
 .music-row.playing .music-row-title {
@@ -381,6 +390,108 @@ img {
     color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
     text-align: right;
+    font-size: 12px;
+}
+
+/* ---------- 行内多选框 / 快捷操作 ---------- */
+.music-row-check {
+    width: 16px;
+    height: 16px;
+    margin: 0 auto;
+    border: 1.5px solid var(--text-tertiary);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+
+.music-row-check:hover {
+    border-color: var(--primary-color);
+}
+
+.music-row-check.checked {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.music-row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.music-action-btn {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    opacity: 0.35;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.music-action-btn:hover {
+    background: var(--hover-bg);
+    opacity: 1;
+}
+
+.music-row:hover .music-action-btn {
+    opacity: 1;
+}
+
+.music-action-btn.liked,
+.music-action-btn.done {
+    color: var(--primary-color);
+    opacity: 1;
+}
+
+.music-action-btn.downloading {
+    opacity: 1;
+    animation: mfs-spin 1s linear infinite;
+}
+
+@keyframes mfs-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ---------- 多选批量操作栏 ---------- */
+.music-selection-bar {
+    position: fixed;
+    bottom: calc(var(--playerbar-height) + 16px);
+    left: calc(var(--sidebar-width) + (100vw - var(--sidebar-width)) / 2);
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--page-bg);
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    z-index: 60;
+}
+
+.music-selection-count {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-right: 4px;
+    white-space: nowrap;
+}
+
+.music-selection-bar .btn-ghost {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 5px 10px;
     font-size: 12px;
 }
 

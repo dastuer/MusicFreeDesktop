@@ -1,9 +1,18 @@
 import { nanoid } from "nanoid";
+import { atom, getDefaultStore } from "jotai";
 import { ipcInvoke } from "./ipc";
 
 /**
  * 用户歌单（收藏/自建）：持久化在主进程 configStore
  */
+
+/** 喜欢列表版本号：任何喜欢状态变化后自增，驱动列表刷新红心状态 */
+export const likesVersionAtom = atom(0);
+
+function bumpLikesVersion() {
+    const store = getDefaultStore();
+    store.set(likesVersionAtom, store.get(likesVersionAtom) + 1);
+}
 
 export interface IUserSheet {
     id: string;
@@ -107,18 +116,50 @@ export async function isLiked(musicItem: IMusic.IMusicItem): Promise<boolean> {
     return likes.musicList.some((it) => isSameMedia(it, musicItem));
 }
 
+export async function getLikedMusicList(): Promise<IMusic.IMusicItem[]> {
+    return (await ensureLikesSheet()).musicList;
+}
+
 /** 喜欢/取消喜欢，返回操作后的状态 */
 export async function toggleLike(musicItem: IMusic.IMusicItem): Promise<boolean> {
     await ensureLikesSheet();
     const sheets = await getUserSheets();
     const likes = sheets.find((it) => it.id === LIKES_SHEET_ID)!;
     const idx = likes.musicList.findIndex((it) => isSameMedia(it, musicItem));
+    let liked: boolean;
     if (idx >= 0) {
         likes.musicList.splice(idx, 1);
-        await saveSheets(sheets);
-        return false;
+        liked = false;
+    } else {
+        likes.musicList.unshift(musicItem);
+        liked = true;
     }
-    likes.musicList.unshift(musicItem);
     await saveSheets(sheets);
-    return true;
+    bumpLikesVersion();
+    return liked;
+}
+
+/** 批量喜欢/取消喜欢（一次持久化，列表顺序保持传入顺序） */
+export async function batchSetLike(
+    musicItems: IMusic.IMusicItem[],
+    like: boolean,
+): Promise<void> {
+    if (!musicItems.length) {
+        return;
+    }
+    await ensureLikesSheet();
+    const sheets = await getUserSheets();
+    const likes = sheets.find((it) => it.id === LIKES_SHEET_ID)!;
+    if (like) {
+        const existing = new Set(likes.musicList.map((it) => `${it.platform}-${it.id}`));
+        const toAdd = musicItems.filter((it) => !existing.has(`${it.platform}-${it.id}`));
+        likes.musicList.unshift(...toAdd.reverse());
+    } else {
+        const removeKeys = new Set(musicItems.map((it) => `${it.platform}-${it.id}`));
+        likes.musicList = likes.musicList.filter(
+            (it) => !removeKeys.has(`${it.platform}-${it.id}`),
+        );
+    }
+    await saveSheets(sheets);
+    bumpLikesVersion();
 }
