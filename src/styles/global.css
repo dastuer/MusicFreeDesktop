@@ -825,7 +825,7 @@ img {
 
 /* 封面随窗口宽度伸缩，限制最大尺寸 */
 .music-detail-cover-wrap {
-    width: clamp(240px, 34vw, 420px);
+    width: clamp(240px, 38vw, 480px);
     aspect-ratio: 1;
     flex-shrink: 0;
 }
@@ -838,8 +838,8 @@ img {
 
 /* 右侧信息列：标题/歌手/歌词居中对齐，宽度随窗口伸缩 */
 .music-detail-info {
-    width: clamp(300px, 38vw, 480px);
-    height: min(64vh, 560px);
+    width: clamp(300px, 42vw, 560px);
+    height: min(68vh, 640px);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -847,7 +847,7 @@ img {
 }
 
 .music-detail-title {
-    font-size: clamp(20px, 2.2vw, 28px);
+    font-size: clamp(22px, 2.6vw, 34px);
     font-weight: 700;
     text-align: center;
 }
@@ -864,7 +864,7 @@ img {
     min-height: 0;
     overflow-y: auto;
     text-align: center;
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text-secondary);
     mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
     -webkit-mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
@@ -884,7 +884,7 @@ img {
 
 .lyric-line.active {
     color: var(--text-color);
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 600;
     transform: scale(1.02);
 }
