@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useAtomValue } from "jotai";
 import Icon from "../base/Icon";
 import Cover from "../base/Cover";
 import Slider from "../base/Slider";
@@ -9,7 +10,7 @@ import {
     useProgress,
     useRepeatMode,
 } from "@/core/trackPlayer";
-import { isLiked, toggleLike } from "@/core/musicSheet";
+import { isLiked, likesVersionAtom, toggleLike } from "@/core/musicSheet";
 import { showDownloadPanel } from "../base/DownloadPanel";
 import { showToast } from "../base/Toast";
 import { showPlayQueuePanel } from "./PlayQueuePanel";
@@ -35,14 +36,16 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const [volume, setVolumeState] = useState(TrackPlayerSingleton.getVolume());
     const [muted, setMuted] = useState(false);
     const [liked, setLiked] = useState(false);
+    const likesVersion = useAtomValue(likesVersionAtom);
 
+    // 订阅喜欢状态版本号：列表/播放栏任何位置切换喜欢后同步刷新
     useEffect(() => {
         if (currentMusic) {
             isLiked(currentMusic).then(setLiked);
         } else {
             setLiked(false);
         }
-    }, [currentMusic?.id, currentMusic?.platform]);
+    }, [currentMusic?.id, currentMusic?.platform, likesVersion]);
 
     const handleToggleLike = async () => {
         if (!currentMusic) {
@@ -138,7 +141,7 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             onClick={handleToggleLike}
                         >
                             <Icon
-                                name="heart"
+                                name={liked ? "heartFilled" : "heart"}
                                 size={17}
                                 style={{
                                     color: liked ? "var(--primary-color)" : "var(--text-color)",
