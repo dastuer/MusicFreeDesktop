@@ -817,23 +817,51 @@ img {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 72px;
-    padding: 24px 64px;
+    /* 间距与留白随窗口宽度伸缩 */
+    gap: clamp(32px, 6vw, 96px);
+    padding: 24px clamp(32px, 6vw, 96px);
     min-height: 0;
 }
 
+/* 封面随窗口宽度伸缩，限制最大尺寸 */
+.music-detail-cover-wrap {
+    width: clamp(240px, 34vw, 420px);
+    aspect-ratio: 1;
+    flex-shrink: 0;
+}
+
 .music-detail-cover {
-    width: 320px;
-    height: 320px;
     border-radius: 12px;
     object-fit: cover;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
 }
 
+/* 右侧信息列：标题/歌手/歌词居中对齐，宽度随窗口伸缩 */
+.music-detail-info {
+    width: clamp(300px, 38vw, 480px);
+    height: min(64vh, 560px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 0;
+}
+
+.music-detail-title {
+    font-size: clamp(20px, 2.2vw, 28px);
+    font-weight: 700;
+    text-align: center;
+}
+
+.music-detail-artist {
+    color: var(--text-secondary);
+    margin: 6px 0 20px;
+    text-align: center;
+}
+
 .music-detail-lyric {
-    width: 380px;
-    height: 100%;
-    max-height: 480px;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     text-align: center;
     font-size: 14px;

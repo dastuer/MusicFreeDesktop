@@ -84,13 +84,16 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                 </button>
             </div>
             <div className="music-detail-body">
-                <Cover
-                    src={currentMusic.artwork}
-                    size={320}
-                    borderRadius={12}
-                    className="music-detail-cover"
-                />
-                <div style={{ display: "flex", flexDirection: "column", height: 480 }}>
+                <div className="music-detail-cover-wrap">
+                    <Cover
+                        src={currentMusic.artwork}
+                        size="100%"
+                        borderRadius={12}
+                        className="music-detail-cover"
+                        style={{ width: "100%", height: "100%" }}
+                    />
+                </div>
+                <div className="music-detail-info">
                     <div className="music-detail-title">{currentMusic.title}</div>
                     <div className="music-detail-artist">
                         {currentMusic.artist}
