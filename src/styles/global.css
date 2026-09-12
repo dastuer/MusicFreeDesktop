@@ -122,8 +122,9 @@ img {
 .app-main {
     grid-row: 1;
     grid-column: 2;
-    overflow-y: auto;
-    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     position: relative;
 }
 
@@ -228,6 +229,10 @@ img {
 
 /* ---------- 通用 ---------- */
 .page-container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: 0 24px 24px;
 }
 
