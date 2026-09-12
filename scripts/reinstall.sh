@@ -97,6 +97,16 @@ if [ ! -w "/Applications" ]; then
 fi
 
 rm -rf "${APP_INSTALL}"
+# 必须确认真的删掉了：删不掉就直接中止。
+# 否则 ditto 会把新包盖在残留的旧包上，得到一个新旧混杂的 .app ——
+# 它可能还能启动，但跑的是什么代码谁也说不清。
+if [ -d "${APP_INSTALL}" ]; then
+    echo
+    echo "删除旧版本失败：${APP_INSTALL}"
+    echo "未做任何改动。常见原因：应用仍在运行（先手动退出）、或当前终端没有 /Applications 写权限 / 被沙箱拦截。"
+    exit 1
+fi
+
 ditto "${APP_BUILD}" "${APP_INSTALL}"
 echo "    已安装（未签名版本，仅限本机自用）"
 
@@ -106,4 +116,6 @@ echo "==> 4/4 启动"
 open "${APP_INSTALL}"
 
 echo
-echo "完成。应用数据仍在 ~/Library/Application Support/${APP_NAME}/，本次替换不会清除歌单与插件。"
+# 数据目录名取自 package.json 的 name（小写 musicfree-desktop），不是应用名（MusicFreeDesktop）
+DATA_DIR="$(node -p "require('${PROJECT_DIR}/package.json').name" 2>/dev/null || echo '?')"
+echo "完成。应用数据仍在 ~/Library/Application Support/${DATA_DIR}/，本次替换不会清除歌单与插件。"

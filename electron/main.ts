@@ -8,6 +8,10 @@ import configStore from "./services/configStore";
 import localMusic from "./services/localMusic";
 import builtinMusic from "./services/builtinMusic";
 import downloadService from "./services/downloadService";
+import cacheManager, { CacheKey } from "./services/cacheManager";
+import mediaCache, {
+    DEFAULT_MEDIA_CACHE_LIMIT,
+} from "./services/mediaCache";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -102,6 +106,10 @@ app.whenReady().then(() => {
         configStore,
     );
     localMusic.setup(configStore, dataDir);
+    mediaCache.setup(dataDir);
+    mediaCache.setLimit(
+        configStore.get("mediaCache.limit", DEFAULT_MEDIA_CACHE_LIMIT),
+    );
     builtinMusic.setup(dataDir);
     downloadService.setup(
         path.join(app.getPath("userData"), "downloads"),
@@ -219,6 +227,15 @@ ipcMain.handle("localMusic:getSavedMusicList", () => localMusic.getSavedMusicLis
 ipcMain.handle("localMusic:readCover", (_e, localPath: string) =>
     localMusic.readCover(localPath));
 
+// 重新生成本地音乐封面（封面缓存被清空后的修复手段，可能耗时，调用方需提示等待）
+ipcMain.handle("localMusic:rebuildCovers", async (_e, onlyMissing?: boolean) => {
+    try {
+        return { success: true, data: await localMusic.rebuildCovers(onlyMissing !== false) };
+    } catch (e: any) {
+        return { success: false, message: e?.message ?? String(e) };
+    }
+});
+
 // 在访达中显示本地音乐文件
 ipcMain.handle("localMusic:openInFinder", (_e, localPath: string) => {
     if (localPath && fs.existsSync(localPath)) {
@@ -304,6 +321,90 @@ ipcMain.handle("download:pickDir", async () => {
 
 // 默认音乐（内置示例曲目）
 ipcMain.handle("builtinMusic:list", () => builtinMusic.list());
+
+/** ---------- 缓存 ---------- */
+
+/** 主进程侧的体积格式化（原生确认弹窗里要显示「预计释放 XX」） */
+function humanSize(bytes: number): string {
+    if (!bytes || bytes < 0) {
+        return "0 B";
+    }
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+ipcMain.handle("cache:info", () => cacheManager.getInfo());
+
+ipcMain.handle("cache:clear", async (_e, rawKeys: string[], extraRefs: string[] = []) => {
+    // 只用已知类别，避免渲染层传来奇怪的 key
+    const keys = (rawKeys ?? []).filter((k): k is CacheKey =>
+        ["media", "cover", "http", "temp", "storage"].includes(k),
+    );
+    if (!keys.length) {
+        return { success: false, canceled: true };
+    }
+    try {
+        const info = await cacheManager.getInfo();
+        const targets = info.categories.filter((c) => keys.includes(c.key));
+        // 用「实际可清理」而不是总占用：封面缓存只删残留，数字对不上会让人以为没清掉
+        const total = targets.reduce((sum, c) => sum + c.clearable, 0);
+        if (total === 0) {
+            return { success: false, canceled: true, empty: true };
+        }
+
+        const notes: string[] = [];
+        if (keys.includes("media")) {
+            notes.push("播放缓存清除后，下次播放这些歌曲需要重新下载。");
+        }
+        if (keys.includes("cover")) {
+            notes.push("封面缓存只清理无人引用的残留文件，正在显示的封面会保留。");
+        }
+        if (keys.includes("storage")) {
+            notes.push("本地存储包含当前播放列表与界面偏好，清除后需重启应用生效。");
+        }
+
+        const { response } = await dialog.showMessageBox({
+            type: keys.includes("storage") ? "warning" : "info",
+            title: "清除缓存",
+            message: `确定清除「${targets.map((c) => c.label).join("、")}」吗？`,
+            detail: `预计释放 ${humanSize(total)}。${notes.length ? `\n\n${notes.join("\n")}` : ""}`,
+            buttons: ["取消", "清除"],
+            defaultId: 0,
+            cancelId: 0,
+        });
+        if (response !== 1) {
+            return { success: false, canceled: true };
+        }
+
+        const freed = await cacheManager.clear(keys, extraRefs);
+        const freedTotal = Object.values(freed).reduce((a, b) => a + b, 0);
+        return { success: true, freed, freedTotal };
+    } catch (e: any) {
+        return { success: false, message: e?.message ?? String(e) };
+    }
+});
+
+/** 播放缓存容量上限：字节数，0 表示关闭缓存 */
+ipcMain.handle("mediaCache:getLimit", () => mediaCache.getLimit());
+ipcMain.handle("mediaCache:setLimit", (_e, bytes: number) => {
+    mediaCache.setLimit(Number(bytes) || 0);
+    configStore.set("mediaCache.limit", mediaCache.getLimit());
+    return mediaCache.getLimit();
+});
+
+ipcMain.handle("cache:openDir", () => {
+    const dir = cacheManager.getCoverDir();
+    if (dir) {
+        shell.openPath(dir);
+    }
+    return dir;
+});
 
 // 应用信息
 ipcMain.handle("app:getInfo", () => ({

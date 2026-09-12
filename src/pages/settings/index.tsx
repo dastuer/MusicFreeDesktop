@@ -3,9 +3,10 @@ import { setTheme, useThemeType } from "@/core/theme";
 import { getQuality, setQuality } from "@/core/appConfig";
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
+import CacheSection from "./CacheSection";
 
 /**
- * 设置页：外观 / 播放 / 关于
+ * 设置页：外观 / 播放 / 下载 / 存储与缓存 / 关于
  */
 
 const qualityLabels: Record<IMusic.IQualityKey, string> = {
@@ -108,6 +109,8 @@ export default function SettingsPage() {
                     </button>
                 </div>
             </div>
+
+            <CacheSection />
 
             <div className="settings-group">
                 <div className="settings-group-title">关于</div>

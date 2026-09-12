@@ -58,6 +58,10 @@ class LocalMusicService {
         this.referencedCovers = new Set();
         await coverCache.ensureDir();
         const list = await this.parseAll(filePaths);
+        // 扫描结果自己落盘，不依赖渲染层记得再 set 一次：
+        // 缓存清理是靠 store 里的 artwork 短链判断「哪些封面正在用」的，
+        // 列表没落盘就会把所有封面当成残留删掉，界面集体掉封面。
+        this.saveMusicList(list);
         // 清掉上一轮扫描留下的、本轮没人引用的封面文件
         await coverCache.pruneLocal(this.referencedCovers);
         return list;
@@ -336,6 +340,79 @@ class LocalMusicService {
             return name ? coverCache.readAsDataUrl(name) : null;
         } catch {
             return null;
+        }
+    }
+
+    /**
+     * 重新抽取本地音乐的封面，写回 artwork。
+     * 用于封面缓存被清空 / 封面文件丢失后的修复——不重新扫目录，只按列表里的 localPath 重读文件。
+     * 默认只处理「封面文件已经不在了」的条目；传 onlyMissing=false 可全量重建。
+     */
+    async rebuildCovers(
+        onlyMissing = true,
+    ): Promise<{ checked: number; updated: number; missingFile: number }> {
+        const list = this.getSavedMusicList();
+        const targets: any[] = [];
+        let missingFile = 0;
+        for (const it of list) {
+            if (!it?.localPath) {
+                continue;
+            }
+            if (!fs.existsSync(it.localPath)) {
+                missingFile += 1;
+                continue;
+            }
+            if (onlyMissing) {
+                const name = coverFileNameFromArtwork(it.artwork);
+                if (name && fs.existsSync(path.join(coverCache.getDir(), name))) {
+                    continue;
+                }
+            }
+            targets.push(it);
+        }
+        let updated = 0;
+        if (targets.length) {
+            await coverCache.ensureDir();
+            let cursor = 0;
+            const worker = async () => {
+                while (cursor < targets.length) {
+                    const item = targets[cursor];
+                    cursor += 1;
+                    if (await this.extractCover(item)) {
+                        updated += 1;
+                    }
+                }
+            };
+            await Promise.all(
+                Array.from(
+                    { length: Math.min(PARSE_CONCURRENCY, targets.length) },
+                    () => worker(),
+                ),
+            );
+        }
+        if (updated) {
+            this.saveMusicList(list);
+        }
+        return { checked: targets.length, updated, missingFile };
+    }
+
+    /** 重新解析单个条目的内嵌封面并写回 artwork，成功返回 true */
+    private async extractCover(item: any): Promise<boolean> {
+        try {
+            // duration: false —— 只要封面，不必为算时长把整个文件读完
+            const meta = await parseFile(item.localPath, { duration: false });
+            const cover = meta.common.picture?.[0];
+            if (!cover?.data) {
+                return false;
+            }
+            const fileName = await this.cacheCover(item.localPath, cover);
+            if (!fileName) {
+                return false;
+            }
+            item.artwork = COVER_URL_PREFIX + fileName;
+            return true;
+        } catch {
+            return false;
         }
     }
 

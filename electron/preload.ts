@@ -17,6 +17,7 @@ const allowedChannels = [
     "localMusic:scan",
     "localMusic:getSavedMusicList",
     "localMusic:readCover",
+    "localMusic:rebuildCovers",
     "localMusic:openInFinder",
     "localMusic:delete",
     "builtinMusic:list",
@@ -29,6 +30,11 @@ const allowedChannels = [
     "download:getDir",
     "download:pickDir",
     "app:getInfo",
+    "cache:info",
+    "cache:clear",
+    "cache:openDir",
+    "mediaCache:getLimit",
+    "mediaCache:setLimit",
 ];
 
 contextBridge.exposeInMainWorld("mfp", {

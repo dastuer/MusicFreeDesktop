@@ -29,14 +29,23 @@ const iconPaths: Record<string, React.ReactNode> = {
     ),
     play: <path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" />,
     pause: <path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z" fill="currentColor" />,
-    prev: <path d="M7 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zm10.5.2-8.2 5.2a.7.7 0 0 0 0 1.2l8.2 5.2A.8.8 0 0 0 18.8 17V7a.8.8 0 0 0-1.3-.8z" fill="currentColor" transform="scale(-1,1) translate(-24,0)" />,
-    next: <path d="M17 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zM6.5 6.2l8.2 5.2a.7.7 0 0 1 0 1.2l-8.2 5.2A.8.8 0 0 1 5.2 17V7a.8.8 0 0 1 1.3-.8z" fill="currentColor" transform="scale(-1,1) translate(-24,0)" />,
+    // 上一首：左侧竖条 + 左向三角。路径本身已经是正确的朝向，
+    // 早期误加的 scale(-1,1) 会把两个图标一起镜像，导致「上一首/下一首」看起来反了。
+    prev: <path d="M7 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zm10.5.2-8.2 5.2a.7.7 0 0 0 0 1.2l8.2 5.2A.8.8 0 0 0 18.8 17V7a.8.8 0 0 0-1.3-.8z" fill="currentColor" />,
+    next: <path d="M17 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zM6.5 6.2l8.2 5.2a.7.7 0 0 1 0 1.2l-8.2 5.2A.8.8 0 0 1 5.2 17V7a.8.8 0 0 1 1.3-.8z" fill="currentColor" />,
     volume: <path d="M4 9.5h3L12 5v14l-5-4.5H4zM15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     volumeMute: <path d="M4 9.5h3L12 5v14l-5-4.5H4zM16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     repeatOff: <path d="M7 7h10a4 4 0 0 1 4 4v1M17 17H7a4 4 0 0 1-4-4v-1m1-5L7 4m-3 3h3m10 10 3 3m3-3h-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     repeatQueue: <path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     repeatSingle: <path d="M7 7h10a4 4 0 0 1 4 4v1M17 17H7a4 4 0 0 1-4-4v-1m1-5L7 4m-3 3h3m10 10 3 3m3-3h-3M12 10v5m0-5-1.5 1M12 10l1.5 1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     playQueue: <path d="M4 6h12M4 12h12M4 18h8M19 9v9m0 0a2.2 2.2 0 1 1-2-2.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
+    /** 收藏到歌单：三条列表线 + 右下角加号 */
+    addToSheet: (
+        <>
+            <path d="M4 6h9M4 12h9M4 18h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M17.5 10.5v7M14 14h7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </>
+    ),
     heart: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     heartFilled: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="currentColor" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     check: <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />,

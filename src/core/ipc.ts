@@ -101,6 +101,12 @@ export function buildRemoteMediaUrl(payload: {
     url: string;
     headers?: Record<string, string>;
     userAgent?: string;
+    /**
+     * 播放缓存的键。必须用「平台 + 歌曲 id + 音质」而不是 URL：
+     * 音源每次解析出来的直链可能带签名/时效参数，按 URL 做键永远命中不了。
+     * 不传则不缓存。
+     */
+    cacheKey?: { platform: string; id: string; quality?: string };
 }): string {
     return `mfs://media/${b64urlEncode(JSON.stringify(payload))}`;
 }

@@ -11,6 +11,7 @@ import {
     useRepeatMode,
 } from "@/core/trackPlayer";
 import { isLiked, likesVersionAtom, toggleLike } from "@/core/musicSheet";
+import { showAddToSheetPanel } from "../base/AddToSheetPanel";
 import { showDownloadPanel } from "../base/DownloadPanel";
 import { showToast } from "../base/Toast";
 import { showPlayQueuePanel } from "./PlayQueuePanel";
@@ -147,6 +148,15 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                                     color: liked ? "var(--primary-color)" : "var(--text-color)",
                                 }}
                             />
+                        </button>
+                    )}
+                    {currentMusic && (
+                        <button
+                            className="playerbar-control-btn"
+                            title="收藏到歌单"
+                            onClick={() => showAddToSheetPanel(currentMusic)}
+                        >
+                            <Icon name="addToSheet" size={16} />
                         </button>
                     )}
                     <button

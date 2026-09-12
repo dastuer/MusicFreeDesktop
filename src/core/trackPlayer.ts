@@ -54,6 +54,9 @@ class TrackPlayer extends EventEmitter {
     private _currentMusic: IMusic.IMusicItem | null = null;
     private _rate = 1;
     private pendingPlayId = "";
+    /** 播放停滞自救用的定时器与次数（见 onAudioStall） */
+    private stallTimer: ReturnType<typeof setTimeout> | null = null;
+    private stallNudges = 0;
 
     setup() {
         if (this.audio) {
@@ -67,7 +70,11 @@ class TrackPlayer extends EventEmitter {
         audio.addEventListener("loadedmetadata", this.onProgress);
         audio.addEventListener("pause", this.onAudioPause);
         audio.addEventListener("play", this.onAudioPlay);
+        audio.addEventListener("playing", this.clearStallWatch);
         audio.addEventListener("error", this.onAudioError);
+        // waiting / stalled：音源侧断流时浏览器会一直等下去，进度不再前进
+        audio.addEventListener("waiting", this.onAudioStall);
+        audio.addEventListener("stalled", this.onAudioStall);
         this.audio = audio;
 
         // 恢复播放列表
@@ -97,6 +104,8 @@ class TrackPlayer extends EventEmitter {
         if (!this.audio) {
             return;
         }
+        // 进度还在走就说明没卡，撤掉停滞自救的定时器
+        this.clearStallWatch();
         const progress = {
             position: this.audio.currentTime || 0,
             duration: this.audio.duration || 0,
@@ -105,7 +114,49 @@ class TrackPlayer extends EventEmitter {
         this.emit(TrackPlayerEvents.ProgressChanged, progress);
     };
 
+    private clearStallWatch = () => {
+        if (this.stallTimer) {
+            clearTimeout(this.stallTimer);
+            this.stallTimer = null;
+        }
+    };
+
+    /**
+     * 播放停滞自救。
+     *
+     * 音源/上游断流时，Chromium 会停在 waiting/stalled 一直等（甚至 paused 仍是 false），
+     * 表现就是「播放到一半卡住」，而手动拖一下进度条就能恢复——因为那会重新发一次
+     * Range 请求。这里把这个人工动作自动化：12 秒还没恢复就微调一点进度，
+     * 强制浏览器重新取流。每首歌最多 3 次，避免对着彻底坏掉的音源空转。
+     */
+    private onAudioStall = () => {
+        if (this.stallTimer) {
+            return;
+        }
+        this.stallTimer = setTimeout(() => {
+            this.stallTimer = null;
+            const audio = this.audio;
+            if (!audio || audio.paused || audio.ended) {
+                return;
+            }
+            if (this.stallNudges >= 3) {
+                return;
+            }
+            this.stallNudges += 1;
+            console.warn(
+                `[trackPlayer] 播放停滞超过 12s，自动微调进度重新取流（第 ${this.stallNudges} 次）`,
+            );
+            try {
+                // +0.05s 听感上约等于原地，但足以让浏览器作废当前缓冲区、重新请求
+                audio.currentTime = (audio.currentTime || 0) + 0.05;
+            } catch {
+                // ignore
+            }
+        }, 12000);
+    };
+
     private onAudioPause = () => {
+        this.clearStallWatch();
         if (this._currentMusic) {
             setAtom(musicStateAtom, "paused");
         }
@@ -295,6 +346,12 @@ class TrackPlayer extends EventEmitter {
                                 url: source.url,
                                 headers: source.headers,
                                 userAgent: source.userAgent,
+                                // 缓存键用歌曲身份而非直链：直链可能带时效参数，下次就换了
+                                cacheKey: {
+                                    platform: musicItem.platform,
+                                    id: musicItem.id,
+                                    quality,
+                                },
                             }),
                             source,
                         };
@@ -308,7 +365,16 @@ class TrackPlayer extends EventEmitter {
             }
         }
         if (musicItem.url) {
-            return { src: buildRemoteMediaUrl({ url: musicItem.url }) };
+            return {
+                src: buildRemoteMediaUrl({
+                    url: musicItem.url,
+                    cacheKey: {
+                        platform: musicItem.platform,
+                        id: musicItem.id,
+                        quality: "",
+                    },
+                }),
+            };
         }
         return null;
     }
@@ -374,6 +440,9 @@ class TrackPlayer extends EventEmitter {
 
         const isNew = !this.isCurrentMusic(target);
         if (isNew) {
+            // 换歌：停滞自救的次数与定时器都归零
+            this.clearStallWatch();
+            this.stallNudges = 0;
             if (!this.isInPlayList(target)) {
                 this.add(target);
             }

@@ -309,6 +309,43 @@ class CoverCache {
         return doomed.length;
     }
 
+    /**
+     * 删除所有没被引用到的封面文件（不限命名空间），返回删除数量与释放字节。
+     *
+     * 缓存清理只走这条路：正在使用的封面一律不动。
+     * 之前图省事「整个目录清空」，结果列表里的 artwork 短链全部指向不存在的文件，
+     * 界面上 182 首歌集体掉封面 —— 而封面只在下次扫描时才会重建，等于把缓存清成了故障。
+     */
+    async pruneUnreferenced(referenced: Set<string>): Promise<{ removed: number; freed: number }> {
+        let entries: string[];
+        try {
+            entries = await fs.promises.readdir(this.dir);
+        } catch {
+            return { removed: 0, freed: 0 };
+        }
+        const doomed = entries.filter(
+            (name) => isCoverFileName(name) && !referenced.has(name),
+        );
+        if (!doomed.length) {
+            return { removed: 0, freed: 0 };
+        }
+        const sizes = await Promise.all(
+            doomed.map(async (name) => {
+                try {
+                    const size = (await fs.promises.lstat(path.join(this.dir, name))).size;
+                    await fs.promises.unlink(path.join(this.dir, name));
+                    return size;
+                } catch {
+                    return 0;
+                }
+            }),
+        );
+        return {
+            removed: doomed.length,
+            freed: sizes.reduce((a, b) => a + b, 0),
+        };
+    }
+
     /** 当前目录里「本地命名空间」的文件名（含老格式裸 md5），用于启动时对账 */
     async listLocalFiles(): Promise<string[]> {
         try {

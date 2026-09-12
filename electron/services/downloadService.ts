@@ -110,6 +110,17 @@ class DownloadService {
         return this.downloadDir;
     }
 
+    /**
+     * 仍在排队 / 下载中的任务 id。
+     * 临时文件以 `<taskId>.part` 命名，缓存清理要跳过这些，
+     * 否则会把正在写的文件删掉，下载直接失败。
+     */
+    getActiveTaskIds(): string[] {
+        return this.tasks
+            .filter((t) => t.status === "pending" || t.status === "running")
+            .map((t) => t.id);
+    }
+
     /** 更改默认下载目录（持久化，后续下载保存到新目录） */
     setDownloadDir(dir: string) {
         this.downloadDir = dir;
