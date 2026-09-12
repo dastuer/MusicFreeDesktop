@@ -1,21 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
-import { ipcInvoke } from "@/core/ipc";
 import {
     getPluginsForAbility,
     tryPluginMethod,
 } from "@/core/pluginUtils";
 import { navigate } from "@/core/router";
-import { TrackPlayerSingleton } from "@/core/trackPlayer";
 
 /**
- * 发现音乐（首页）：
- * 默认音乐（内置曲目，开箱即播）+ 推荐歌单 + 排行榜
+ * 发现音乐（首页）：推荐歌单 + 排行榜
  * 默认音源优先，逐个降级尝试 + 超时控制，失败可重试，显示数据来源
  */
-
-interface IBuiltinTrack extends IMusic.IMusicItem {}
 
 interface ISheetCard {
     id: string;
@@ -34,18 +29,9 @@ export default function HomePage() {
     const [failed, setFailed] = useState(false);
     const [hasSource, setHasSource] = useState(true);
     const [reloadKey, setReloadKey] = useState(0);
-    const [builtinTracks, setBuiltinTracks] = useState<IBuiltinTrack[]>([]);
     const [tagSource, setTagSource] = useState("");
     const [topListSource, setTopListSource] = useState("");
     const activeTagIdRef = useRef<string>("");
-
-    useEffect(() => {
-        ipcInvoke("builtinMusic:list").then((list) => {
-            if (list?.length) {
-                setBuiltinTracks(list);
-            }
-        });
-    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -129,60 +115,6 @@ export default function HomePage() {
 
     return (
         <div>
-            {/* 默认音乐：内置曲目，无需插件即可播放；横滑单行 */}
-            {builtinTracks.length > 0 && (
-                <section className="home-section">
-                    <div className="section-title" style={{ marginTop: 8 }}>
-                        默认音乐
-                        <button
-                            className="btn-ghost"
-                            style={{ padding: "5px 14px" }}
-                            onClick={() =>
-                                TrackPlayerSingleton.playWithReplacePlayList(
-                                    builtinTracks[0],
-                                    builtinTracks,
-                                )
-                            }
-                        >
-                            <Icon name="play" size={13} />
-                            播放全部
-                        </button>
-                    </div>
-                    <div className="hscroll-row">
-                        {builtinTracks.map((track) => {
-                            const playing = TrackPlayerSingleton.isCurrentMusic(track);
-                            return (
-                                <div
-                                    key={track.id}
-                                    className="hscroll-card"
-                                    onClick={() => TrackPlayerSingleton.play(track, true)}
-                                >
-                                    <div
-                                        className="square-cover"
-                                        style={{
-                                            outline: playing
-                                                ? "3px solid var(--primary-color)"
-                                                : undefined,
-                                        }}
-                                    >
-                                        <Cover
-                                            src={track.artwork}
-                                            size="100%"
-                                            borderRadius={8}
-                                            style={{ width: "100%", height: "100%" }}
-                                        />
-                                    </div>
-                                    <div className="media-card-title">{track.title}</div>
-                                    <div className="media-card-subtitle">
-                                        {track.duration}s · 点击播放
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </section>
-            )}
-
             {!hasSource && !loading && (
                 <div className="empty-hint">
                     尚未安装音源插件，请前往「音源插件」安装后体验完整功能
