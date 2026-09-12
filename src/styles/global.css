@@ -840,6 +840,12 @@ img {
     color: var(--text-secondary);
     mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
     -webkit-mask-image: linear-gradient(transparent, black 15%, black 85%, transparent);
+    /* 隐藏滚动条，保留滚动（自动跟随/手动滚动） */
+    scrollbar-width: none;
+}
+
+.music-detail-lyric::-webkit-scrollbar {
+    display: none;
 }
 
 .lyric-line {
