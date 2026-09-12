@@ -18,7 +18,7 @@
     --divider: rgba(0, 0, 0, 0.09);
     --playerbar-bg: rgba(246, 246, 248, 0.88);
     --mask: rgba(0, 0, 0, 0.4);
-    --titlebar-height: 52px;
+    --titlebar-height: 64px;
     --playerbar-height: 72px;
     --sidebar-width: 208px;
 }
@@ -145,7 +145,7 @@ img {
     -webkit-app-region: drag;
     display: flex;
     align-items: center;
-    padding-left: 12px;
+    padding: 10px 0 0 12px;
     flex-shrink: 0;
     gap: 4px;
 }

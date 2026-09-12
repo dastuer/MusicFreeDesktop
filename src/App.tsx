@@ -11,10 +11,8 @@ import DownloadPanelHost from "./components/base/DownloadPanel";
 import Icon from "./components/base/Icon";
 import {
     goBack,
-    goForward,
     navigate,
     useCanGoBack,
-    useCanGoForward,
     useCurrentRoute,
 } from "./core/router";
 import { TrackPlayerSingleton, loadCurrentLyric } from "./core/trackPlayer";
@@ -52,7 +50,6 @@ function MainContent(props: { onOpenDetail: () => void }) {
     const { onOpenDetail } = props;
     const route = useCurrentRoute();
     const canGoBack = useCanGoBack();
-    const canGoForward = useCanGoForward();
     const [keyword, setKeyword] = useState("");
 
     const Page = pageMap[route.path] ?? HomePage;
@@ -69,15 +66,7 @@ function MainContent(props: { onOpenDetail: () => void }) {
                     >
                         <Icon name="back" size={16} />
                     </button>
-                    <button
-                        className="titlebar-nav-btn"
-                        disabled={!canGoForward}
-                        onClick={() => goForward()}
-                        title="前进"
-                    >
-                        <Icon name="forward" size={16} />
-                    </button>
-                    <div style={{ flex: 1 }} />
+                    <div style={{ width: 10 }} />
                     <div className="search-input-wrap">
                         <Icon name="search" size={14} style={{ color: "var(--text-tertiary)" }} />
                         <input
