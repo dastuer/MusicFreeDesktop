@@ -15,11 +15,20 @@ interface ICoverProps {
     fallbackIconSize?: number;
 }
 
+/**
+ * 内联封面尺寸上限。
+ * 音源有时会把整张封面塞成 base64（见过 13 MB 的 PNG）：`<img>` 会为每一行
+ * 解码一张几 MB 的位图，列表一滚就卡死。这种图直接当没有，回退到音符占位。
+ * 正常情况下封面已经由主进程落盘换成 mfs:// 短链，走不到这个分支。
+ */
+const MAX_INLINE_COVER = 64 * 1024;
+
 export default function Cover(props: ICoverProps) {
     const { src, size = 40, borderRadius = 6, className, style } = props;
     const [failed, setFailed] = useState(false);
+    const tooLarge = typeof src === "string" && src.length > MAX_INLINE_COVER;
 
-    if (!src || failed) {
+    if (!src || tooLarge || failed) {
         return (
             <div
                 className={className}

@@ -10,6 +10,7 @@ import he from "he";
 import * as webdav from "webdav";
 import { satisfies } from "compare-versions";
 import configStoreInstance from "./configStore";
+import coverCache, { isOversizedDataUrl } from "./coverCache";
 
 const sha256 = (s: string) => CryptoJs.SHA256(s).toString();
 const appVersion = "1.0.0";
@@ -369,13 +370,14 @@ class PluginHost {
     }
 
     /** 给插件返回的媒体项补上 platform（与移动端 resetMediaItem 行为一致）
-     *  递归处理：getTopLists 返回 [分组数组 → 分组.data → 条目] 的嵌套结构 */
-    private patchResultPlatform(result: any, platform: string, depth = 0) {
+     *  递归处理：getTopLists 返回 [分组数组 → 分组.data → 条目] 的嵌套结构
+     *  `pendingArtwork` 收集需要异步落盘的大体积内联封面（见 callMethod） */
+    private patchResultPlatform(result: any, platform: string, depth = 0, pendingArtwork?: any[]) {
         if (!result || typeof result !== "object" || depth > 3) {
             return;
         }
         if (Array.isArray(result)) {
-            result.forEach((el) => this.patchResultPlatform(el, platform, depth + 1));
+            result.forEach((el) => this.patchResultPlatform(el, platform, depth + 1, pendingArtwork));
             return;
         }
         const patchItem = (item: any) => {
@@ -386,6 +388,16 @@ class PluginHost {
                 // 部分插件用 coverImg 传递封面，统一映射到 artwork
                 if (!item.artwork && item.coverImg) {
                     item.artwork = item.coverImg;
+                }
+                // 实测有些音源把整张封面塞成 base64（migu 返回过 13 MB 的 PNG）。
+                // 原样带下去会灌进 localStorage / store.json / MediaMetadata，
+                // 这里挑出来交给调用方落盘换短链。
+                if (isOversizedDataUrl(item.artwork)) {
+                    if (pendingArtwork) {
+                        pendingArtwork.push(item);
+                    } else {
+                        item.artwork = "";
+                    }
                 }
             }
         };
@@ -442,7 +454,17 @@ class PluginHost {
             throw new Error(`插件不支持 ${method}`);
         }
         const result = await fn.apply(plugin.instance, args);
-        this.patchResultPlatform(result, plugin.name);
+        const pendingArtwork: any[] = [];
+        this.patchResultPlatform(result, plugin.name, 0, pendingArtwork);
+        // 大体积内联封面落盘换短链（只写一次，之后命中同名跳过）
+        if (pendingArtwork.length) {
+            await Promise.all(
+                pendingArtwork.map(async (item) => {
+                    const link = await coverCache.putDataUrl(item.artwork);
+                    item.artwork = link ?? "";
+                }),
+            );
+        }
         return result;
     }
 }

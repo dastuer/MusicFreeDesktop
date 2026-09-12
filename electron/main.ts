@@ -49,6 +49,28 @@ function createWindow() {
         mainWindow?.show();
     });
 
+    // 调试：开发模式下自动打开 DevTools
+    // 用 detach（独立窗口）而非 dock：本应用布局精确到 px，内嵌 DevTools 会挤压窗口宽度导致样式错位
+    const isDev = !!process.env.ELECTRON_START_URL;
+    if (isDev) {
+        mainWindow.webContents.openDevTools({ mode: "detach" });
+    }
+
+    // F12 或 Cmd+Option+I 切换 DevTools（生产构建下同样可用，便于排查打包后的问题）
+    // 必须 preventDefault：否则默认菜单的 Toggle Developer Tools 加速键会再触发一次，变成开了又关
+    mainWindow.webContents.on("before-input-event", (event, input) => {
+        if (input.type !== "keyDown") {
+            return;
+        }
+        const isToggleDevTools =
+            input.key === "F12" ||
+            (input.meta && input.alt && input.key.toLowerCase() === "i");
+        if (isToggleDevTools) {
+            event.preventDefault();
+            mainWindow?.webContents.toggleDevTools();
+        }
+    });
+
     // 外部链接交给系统浏览器
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         shell.openExternal(url);
@@ -73,13 +95,14 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-    configStore.setup(path.join(app.getPath("userData"), "data"));
+    const dataDir = path.join(app.getPath("userData"), "data");
+    configStore.setup(dataDir);
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
     );
-    localMusic.setup(configStore);
-    builtinMusic.setup(path.join(app.getPath("userData"), "data"));
+    localMusic.setup(configStore, dataDir);
+    builtinMusic.setup(dataDir);
     downloadService.setup(
         path.join(app.getPath("userData"), "downloads"),
         configStore,
@@ -89,7 +112,26 @@ app.whenReady().then(() => {
             });
         },
     );
-    registerMediaProtocol();
+    // 封面缓存目录交给协议层读取
+    registerMediaProtocol({ coverDir: localMusic.getCoverDir() });
+
+    // 老数据瘦身：封面 base64 内联在 localMusic.list / musicHistory 里、
+    // 封面原图直接落盘、老格式的裸 md5 文件名，启动时一次性处理掉。
+    // 不做这一步的话，已有的巨型数据照样拖垮界面。
+    // 必须串行：这几个迁移都会读-改-写 localMusic.list，并发跑会互相覆盖。
+    (async () => {
+        const inlineCount = await localMusic.migrateLegacyArtwork();
+        const fileCount = await localMusic.migrateLegacyCoverFiles();
+        const historyCount = await localMusic.migrateHistoryArtwork();
+        if (inlineCount || fileCount || historyCount) {
+            console.log(
+                `[localMusic] 封面瘦身完成：内联转短链 ${inlineCount} 首、` +
+                    `原图转缩略图 ${fileCount} 个、历史 ${historyCount} 条`,
+            );
+        }
+    })().catch(() => {
+        // 迁移失败不影响使用
+    });
 
     createWindow();
 
@@ -98,6 +140,11 @@ app.whenReady().then(() => {
             createWindow();
         }
     });
+});
+
+// 退出前把防抖中的待写数据落盘，避免丢掉最后几百毫秒内的修改
+app.on("before-quit", () => {
+    configStore.flushNow();
 });
 
 app.on("window-all-closed", () => {

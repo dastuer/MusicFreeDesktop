@@ -1,12 +1,15 @@
 import { protocol } from "electron";
 import fs from "fs";
+import path from "path";
 import { Readable } from "stream";
 import axios from "axios";
+import { coverMimeOf, isCoverFileName } from "./coverCache";
 
 /**
  * mfs:// 自定义协议
  *  - mfs://media/<base64url(JSON)>  代理远程音频流（携带插件返回的 Referer/UA 等请求头，支持 Range 拖动进度条）
  *  - mfs://local/<base64url(path)>  本地文件流（支持 Range）
+ *  - mfs://cover/<file>             本地音乐的内嵌封面（扫描时已落盘到 data/covers）
  */
 
 function b64urlDecode(input: string): string {
@@ -17,33 +20,57 @@ function b64urlDecode(input: string): string {
     ).toString("utf-8");
 }
 
-async function handleLocalFile(rawPath: string, request: Request) {
-    const localPath = b64urlDecode(rawPath);
-    if (!fs.existsSync(localPath)) {
+function audioMimeOf(filePath: string): string {
+    if (filePath.endsWith(".flac")) {
+        return "audio/flac";
+    }
+    if (filePath.endsWith(".ogg")) {
+        return "audio/ogg";
+    }
+    if (filePath.endsWith(".wav")) {
+        return "audio/wav";
+    }
+    if (filePath.endsWith(".m4a")) {
+        return "audio/mp4";
+    }
+    return "audio/mpeg";
+}
+
+/**
+ * 通用本地文件响应：支持 Range（拖进度条）。
+ * 全部走异步 fs：老实现用 statSync 在主进程线程上同步取 stat，
+ * 播放时 Chromium 会连发多次 Range 请求，每次都同步读盘，正是卡顿来源之一。
+ */
+async function serveFile(
+    filePath: string,
+    request: Request,
+    mime: string,
+    cacheControl?: string,
+): Promise<Response> {
+    let stat: fs.Stats;
+    try {
+        stat = await fs.promises.stat(filePath);
+    } catch {
         return new Response("not found", { status: 404 });
     }
-    const stat = fs.statSync(localPath);
+    if (!stat.isFile()) {
+        return new Response("not found", { status: 404 });
+    }
     const total = stat.size;
-    const mime = localPath.endsWith(".flac")
-        ? "audio/flac"
-        : localPath.endsWith(".ogg")
-            ? "audio/ogg"
-            : localPath.endsWith(".wav")
-                ? "audio/wav"
-                : localPath.endsWith(".m4a")
-                    ? "audio/mp4"
-                    : "audio/mpeg";
-    const rangeHeader = request.headers.get("range");
     const baseHeaders: Record<string, string> = {
         "Content-Type": mime,
         "Accept-Ranges": "bytes",
     };
+    if (cacheControl) {
+        baseHeaders["Cache-Control"] = cacheControl;
+    }
 
+    const rangeHeader = request.headers.get("range");
     if (rangeHeader) {
         const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
         const start = match?.[1] ? parseInt(match[1], 10) : 0;
         const end = match?.[2] ? Math.min(parseInt(match[2], 10), total - 1) : total - 1;
-        const stream = fs.createReadStream(localPath, { start, end });
+        const stream = fs.createReadStream(filePath, { start, end });
         return new Response(Readable.toWeb(stream) as any, {
             status: 206,
             headers: {
@@ -53,11 +80,39 @@ async function handleLocalFile(rawPath: string, request: Request) {
             },
         });
     }
-    const stream = fs.createReadStream(localPath);
+    const stream = fs.createReadStream(filePath);
     return new Response(Readable.toWeb(stream) as any, {
         status: 200,
         headers: { ...baseHeaders, "Content-Length": String(total) },
     });
+}
+
+async function handleLocalFile(rawPath: string, request: Request) {
+    const localPath = b64urlDecode(rawPath);
+    return serveFile(localPath, request, audioMimeOf(localPath));
+}
+
+/** 封面：文件名是扫描时算好的 md5，内容不变，可以长缓存 */
+async function handleCover(
+    rawFileName: string,
+    coverDir: string,
+    request: Request,
+): Promise<Response> {
+    if (!coverDir) {
+        return new Response("cover dir not ready", { status: 500 });
+    }
+    const fileName = decodeURIComponent(rawFileName);
+    // 只接受 <md5>.<ext> 形式的纯文件名，挡掉 ../ 目录穿越
+    if (!isCoverFileName(fileName)) {
+        return new Response("bad request", { status: 400 });
+    }
+    const filePath = path.join(coverDir, fileName);
+    return serveFile(
+        filePath,
+        request,
+        coverMimeOf(fileName),
+        "public, max-age=31536000, immutable",
+    );
 }
 
 async function handleRemoteMedia(rawPayload: string, request: Request) {
@@ -114,14 +169,18 @@ async function handleRemoteMedia(rawPayload: string, request: Request) {
     }
 }
 
-export function registerMediaProtocol() {
+export function registerMediaProtocol(options: { coverDir?: string } = {}) {
+    const coverDir = options.coverDir ?? "";
     protocol.handle("mfs", async (request) => {
         const url = new URL(request.url);
-        // url.host = media / local, pathname = /<payload>
+        // url.host = media / local / cover, pathname = /<payload>
         const kind = url.host;
         const raw = url.pathname.replace(/^\//, "");
         if (kind === "local") {
             return handleLocalFile(raw, request);
+        }
+        if (kind === "cover") {
+            return handleCover(raw, coverDir, request);
         }
         return handleRemoteMedia(raw, request);
     });

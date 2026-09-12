@@ -24,7 +24,7 @@ const mainNavItems = [
 ] as const;
 
 const subNavItems = [
-    { path: "pluginManage", title: "音源插件", icon: "plugin" },
+    { path: "pluginManage", title: "音源", icon: "plugin" },
     { path: "settings", title: "设置", icon: "settings" },
 ] as const;
 

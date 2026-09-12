@@ -19,7 +19,7 @@
     --playerbar-bg: rgba(246, 246, 248, 0.88);
     --mask: rgba(0, 0, 0, 0.4);
     --titlebar-height: 64px;
-    --playerbar-height: 72px;
+    --playerbar-height: 84px;
     --sidebar-width: 208px;
 }
 
@@ -136,7 +136,7 @@ img {
     backdrop-filter: blur(40px);
     display: flex;
     flex-direction: column;
-    padding: 4px 16px 8px;
+    padding: 8px 16px;
 }
 
 /* ---------- 标题栏（拖拽区） ---------- */
@@ -147,7 +147,7 @@ img {
     align-items: center;
     padding: 10px 0 0 12px;
     flex-shrink: 0;
-    gap: 4px;
+    gap: 6px;
 }
 
 .titlebar-nav-btn {
@@ -311,6 +311,13 @@ img {
 .music-list {
     width: 100%;
     font-size: 13px;
+}
+
+/* 分片渲染的滚动哨兵：不占高度，只用来触发「再渲染一批」 */
+.music-list-sentinel {
+    height: 1px;
+    width: 100%;
+    pointer-events: none;
 }
 
 .music-list-header {
@@ -635,6 +642,7 @@ img {
     color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
     width: 38px;
+    text-align: center;
 }
 
 .playerbar-progress-row .slider {
@@ -645,7 +653,7 @@ img {
     flex: 1;
     display: flex;
     align-items: center;
-    padding-top: 2px;
+    padding-top: 8px;
 }
 
 .playerbar-left {
@@ -812,6 +820,18 @@ img {
     }
 }
 
+/* 右侧抽屉（播放列表面板）的入场动线 */
+@keyframes slide-in-right {
+    from {
+        transform: translateX(24px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
 .music-detail-body {
     flex: 1;
     display: flex;
@@ -953,6 +973,32 @@ img {
     align-items: flex-end;
     justify-content: center;
     animation: fade-in 0.18s ease;
+    /* 遮罩铺满全屏，会盖住顶部 64px 的标题栏拖拽区；
+       不解除拖拽的话点这块区域只会拖动窗口，onClick 永远不触发 */
+    -webkit-app-region: no-drag;
+}
+
+/* 播放列表面板：top:0 起、右上角关闭按钮正落在标题栏拖拽区内，同样需要 no-drag */
+.play-queue-panel {
+    -webkit-app-region: no-drag;
+}
+
+.play-queue-close {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.play-queue-close:hover {
+    background: var(--hover-bg);
+    color: var(--text-color);
 }
 
 @keyframes fade-in {

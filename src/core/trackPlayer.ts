@@ -5,6 +5,7 @@ import {
     buildRemoteMediaUrl,
     getPluginByMedia,
     getSortedPluginsWithAbility,
+    ipcInvoke,
     pluginCall,
 } from "./ipc";
 import { setMusicHistory } from "./musicHistory";
@@ -12,6 +13,13 @@ import { getQuality } from "./appConfig";
 
 export type MusicState = "playing" | "paused" | "stopped";
 export type MusicRepeatMode = "off" | "queue" | "single";
+
+/**
+ * 内联封面尺寸上限。超过就认为它是"整张图塞成 base64"，不该进 localStorage、
+ * 也不该交给 MediaMetadata（Chromium 会直接报 "MediaImage src exceeds maximum URL length"，
+ * 并把这条错误连着几 MB 的 base64 打到控制台）。
+ */
+const MAX_PERSISTED_ARTWORK = 64 * 1024;
 
 export const enum TrackPlayerEvents {
     PlayEnd = "PlayEnd",
@@ -154,9 +162,20 @@ class TrackPlayer extends EventEmitter {
     }
 
     private persistPlayList() {
-        localStorage.setItem("playList", JSON.stringify(this._playList.slice(0, 500)));
+        // 播放列表整体写进 localStorage，每次增删都会重写一遍。
+        // 若其中有条目带着音源塞进来的大体积 base64 封面（见过 13 MB 的 PNG），
+        // 这行就会反复往 leveldb 里灌几十 MB，日志文件被撑大、GC 压力陡增。
+        // 落盘前把这类内联封面丢掉：内存里的列表不受影响，界面照常显示。
+        const slim = (item: IMusic.IMusicItem): IMusic.IMusicItem =>
+            typeof item.artwork === "string" && item.artwork.length > MAX_PERSISTED_ARTWORK
+                ? { ...item, artwork: "" }
+                : item;
+        localStorage.setItem(
+            "playList",
+            JSON.stringify(this._playList.slice(0, 500).map(slim)),
+        );
         if (this._currentMusic) {
-            localStorage.setItem("currentMusic", JSON.stringify(this._currentMusic));
+            localStorage.setItem("currentMusic", JSON.stringify(slim(this._currentMusic)));
         } else {
             localStorage.removeItem("currentMusic");
         }
@@ -302,20 +321,39 @@ class TrackPlayer extends EventEmitter {
         if (this.audio) {
             this.audio.src = resolved.src;
             this.audio.playbackRate = this._rate;
-            this.updateMediaSession(musicItem);
+            await this.updateMediaSession(musicItem);
         }
     }
 
-    private updateMediaSession(musicItem: IMusic.IMusicItem) {
+    private async updateMediaSession(musicItem: IMusic.IMusicItem) {
         // macOS 控制中心 / 触控栏
         if ("mediaSession" in navigator) {
+            let artwork: string | undefined = musicItem.artwork;
+            // 本地音乐的封面在列表里是 mfs://cover 短链，系统媒体面板取不到，
+            // 这里只针对「正在播放的这一首」单独取一次 base64，不影响列表体积
+            if (musicItem.localPath && artwork?.startsWith("mfs://cover/")) {
+                try {
+                    const cover = await ipcInvoke<string | null>(
+                        "localMusic:readCover",
+                        musicItem.localPath,
+                    );
+                    if (cover) {
+                        artwork = cover;
+                    }
+                } catch {
+                    // 取不到就用短链兜底
+                }
+            }
+            // 超长的 data: URL 交给 MediaMetadata 只会被 Chromium 拒绝
+            // （还在控制台打一条几 MB 的错误），不如直接不带封面
+            if (artwork && artwork.length > MAX_PERSISTED_ARTWORK) {
+                artwork = undefined;
+            }
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: musicItem.title,
                 artist: musicItem.artist,
                 album: musicItem.album,
-                artwork: musicItem.artwork
-                    ? [{ src: musicItem.artwork, sizes: "512x512" }]
-                    : [],
+                artwork: artwork ? [{ src: artwork, sizes: "512x512" }] : [],
             });
             navigator.mediaSession.setActionHandler("play", () => this.resume());
             navigator.mediaSession.setActionHandler("pause", () => this.pause());

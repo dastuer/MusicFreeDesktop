@@ -6,3 +6,4 @@ build/icon.iconset
 .idea/
 .DS_Store
 *.log
+.workbuddy/

@@ -28,6 +28,10 @@ import { showToast } from "./Toast";
  * 支持单击播放、双击播放、右键菜单、多选批量下载/收藏
  */
 
+/** 首屏渲染行数 / 每次追加行数 */
+const INITIAL_ROWS = 150;
+const ROWS_PER_STEP = 150;
+
 function formatDuration(seconds?: number) {
     if (!seconds || !Number.isFinite(seconds)) {
         return "-:--";
@@ -81,6 +85,40 @@ export default function MusicList(props: IMusicListProps) {
     const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
     /** 多选模式：默认关闭，进入后才显示选择框 */
     const [selectMode, setSelectMode] = useState(false);
+    /**
+     * 分片渲染：本地音乐动辄上千首，一次性铺满 DOM 会让切页卡住。
+     * 首屏只渲染前 150 行，滚到底部哨兵再追加 150 行。
+     * （不做真正的窗口化，是为了不引入滚动高度/吸顶表头错位的问题）
+     */
+    const [visibleCount, setVisibleCount] = useState(INITIAL_ROWS);
+    const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+
+    // 换了列表就回到首屏行数（按长度判断，避免父组件每次渲染传新数组导致反复重置）
+    useEffect(() => {
+        setVisibleCount(INITIAL_ROWS);
+    }, [musicList.length]);
+
+    // 哨兵进入视口 → 追加一批
+    useEffect(() => {
+        const el = sentinelRef.current;
+        if (!el) {
+            return;
+        }
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) {
+                    setVisibleCount((count) => count + ROWS_PER_STEP);
+                }
+            },
+            // 提前 600px 触发，滚动时感觉不到分批
+            { rootMargin: "600px 0px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [visibleCount, musicList.length]);
+
+    const visibleList =
+        musicList.length > visibleCount ? musicList.slice(0, visibleCount) : musicList;
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -368,7 +406,7 @@ export default function MusicList(props: IMusicListProps) {
                 <div>专辑</div>
                 <div style={{ textAlign: "right" }}>操作 / 时长</div>
             </div>
-            {musicList.map((musicItem, index) => {
+            {visibleList.map((musicItem, index) => {
                 const playing = TrackPlayerSingleton.isCurrentMusic(musicItem);
                 const k = keyOf(musicItem, index);
                 const checked = selectMode && selectedKeys.has(k);
@@ -454,6 +492,9 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 );
             })}
+            {visibleCount < musicList.length && (
+                <div ref={sentinelRef} className="music-list-sentinel" />
+            )}
             {loading && <div className="loading-hint">加载中…</div>}
             {!loading && !isEnd && onLoadMore && (
                 <div
