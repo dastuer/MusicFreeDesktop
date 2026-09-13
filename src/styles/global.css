@@ -1474,3 +1474,79 @@ img {
     border-radius: 8px;
     object-fit: cover;
 }
+
+/* ---------- 设置页：备份与恢复 ---------- */
+.backup-panel {
+    background: var(--page-bg);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 2px;
+}
+
+.backup-summary {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.backup-counts {
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.35;
+    /* 与缓存面板的数字对齐方式一致，避免刷新时左右跳动 */
+    font-variant-numeric: tabular-nums;
+}
+
+.backup-options {
+    display: flex;
+    gap: 18px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--divider);
+}
+
+.backup-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.backup-check input {
+    accent-color: var(--primary-color);
+    cursor: pointer;
+}
+
+.backup-form {
+    background: var(--page-bg);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 2px;
+}
+
+.backup-field {
+    margin-bottom: 12px;
+}
+
+.backup-field-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 6px;
+}
+
+.backup-field-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.backup-note {
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text-tertiary);
+    padding: 10px 16px;
+}

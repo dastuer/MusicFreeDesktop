@@ -8,7 +8,7 @@ import bigInt from "big-integer";
 import qs from "qs";
 import he from "he";
 import * as webdav from "webdav";
-import { satisfies } from "compare-versions";
+import { satisfies, compare } from "compare-versions";
 import configStoreInstance from "./configStore";
 import coverCache, { isOversizedDataUrl } from "./coverCache";
 
@@ -80,6 +80,29 @@ interface PluginMeta {
     enabled?: boolean;
     order: number;
     userVariables: Record<string, string>;
+}
+
+/** 备份文件里的插件条目：只存恢复所需的最小信息 */
+export interface IBackupPlugin {
+    platform: string;
+    srcUrl: string;
+    version: string;
+    enabled: boolean;
+    order: number;
+    userVariables: Record<string, string>;
+    /**
+     * 本地文件安装的插件没有 srcUrl，没法从网络重装，
+     * 退化为把源码内嵌进备份文件（体积可接受，恢复时不依赖网络）。
+     * 注意：userVariables 与源码可能含接口凭据，备份文件需妥善保管。
+     */
+    code?: string;
+}
+
+export interface IPluginResumeResult {
+    installed: number;
+    updated: number;
+    skipped: number;
+    failed: { platform: string; reason: string }[];
 }
 
 const serializableKeys = [
@@ -238,9 +261,7 @@ class PluginHost {
                     console.error(`[pluginHost] read plugin failed: ${file}`, e);
                 }
             }
-            this.plugins.sort(
-                (a, b) => (this.meta[a.hash]?.order ?? 999) - (this.meta[b.hash]?.order ?? 999),
-            );
+            this.resort();
         } catch (e) {
             console.error("[pluginHost] loadAll error", e);
         }
@@ -279,8 +300,238 @@ class PluginHost {
         return this.plugins.map((p) => this.serialize(p));
     }
 
-    private getByHash(hash: string): Plugin | undefined {
+    getByHash(hash: string): Plugin | undefined {
         return this.plugins.find((p) => p.hash === hash);
+    }
+
+    /** 按插件声明的版本号排序用；插件常写 "dev" / 空串，交给 compare 会抛错 */
+    private versionOf(p: Plugin | undefined): string {
+        const v = p?.instance?.version;
+        return typeof v === "string" && v.length ? v : "0.0.0";
+    }
+
+    /** a 是否不低于 b；版本号非法时退化为字符串比较，不抛异常 */
+    private isVersionNotOlder(a: string, b: string): boolean {
+        try {
+            return compare(a, b, ">=");
+        } catch {
+            return a >= b;
+        }
+    }
+
+    private resort() {
+        this.plugins.sort(
+            (a, b) =>
+                (this.meta[a.hash]?.order ?? 999) - (this.meta[b.hash]?.order ?? 999),
+        );
+    }
+
+    /** ---------- 备份 / 恢复 ---------- */
+
+    /** 导出当前插件的可恢复描述 */
+    backupPlugins(): IBackupPlugin[] {
+        return this.plugins.map((p) => {
+            const meta = this.meta[p.hash] ?? { order: 999, userVariables: {} };
+            const srcUrl: string = p.instance?.srcUrl ?? "";
+            const item: IBackupPlugin = {
+                platform: p.name,
+                srcUrl,
+                version: this.versionOf(p),
+                enabled: meta.enabled ?? true,
+                order: meta.order ?? 999,
+                userVariables: meta.userVariables ?? {},
+            };
+            if (!srcUrl && p.path) {
+                try {
+                    item.code = fs.readFileSync(p.path, "utf-8");
+                } catch {
+                    // 读不到源码就只能恢复个名字了，resume 时会记入失败列表
+                }
+            }
+            return item;
+        });
+    }
+
+    /**
+     * 用一段插件源码安装/替换插件。
+     * @param replaceHash 升级时被替换掉的旧插件 hash：新插件落盘后删旧文件，
+     *   并把旧的启用状态、顺序、用户变量迁移到新 hash，否则升级会丢用户配置。
+     */
+    installPluginCode(
+        code: string,
+        options?: { replaceHash?: string },
+    ): {
+        success: boolean;
+        message?: string;
+        pluginName?: string;
+        pluginHash?: string;
+        pluginUrl?: string;
+        duplicated?: boolean;
+    } {
+        const plugin = new Plugin(code, "");
+        if (plugin.state !== "Mounted" || !plugin.hash) {
+            return {
+                success: false,
+                message: `插件无法解析：${plugin.errorReason ?? "CannotParse"}`,
+            };
+        }
+
+        const dest = path.join(this.pluginsDir, `${plugin.hash}.js`);
+        try {
+            fs.writeFileSync(dest, code, "utf-8");
+        } catch (e: any) {
+            return { success: false, message: e?.message ?? String(e) };
+        }
+        plugin.path = dest;
+
+        // 同源码已经装过了：只保证文件在磁盘上，不重复登记
+        const sameIdx = this.plugins.findIndex((p) => p.hash === plugin.hash);
+        if (sameIdx >= 0) {
+            this.plugins[sameIdx].path = dest;
+            return {
+                success: true,
+                pluginName: plugin.name,
+                pluginHash: plugin.hash,
+                duplicated: true,
+            };
+        }
+
+        if (options?.replaceHash && options.replaceHash !== plugin.hash) {
+            const oldIdx = this.plugins.findIndex((p) => p.hash === options.replaceHash);
+            if (oldIdx >= 0) {
+                const old = this.plugins[oldIdx];
+                try {
+                    if (old.path && old.path !== dest && fs.existsSync(old.path)) {
+                        fs.unlinkSync(old.path);
+                    }
+                } catch {
+                    // 旧文件删不掉不影响使用，最多留个孤儿文件
+                }
+                this.plugins.splice(oldIdx, 1);
+                const oldMeta = this.meta[options.replaceHash];
+                if (oldMeta) {
+                    this.meta[plugin.hash] = { ...oldMeta, ...this.meta[plugin.hash] };
+                    delete this.meta[options.replaceHash];
+                }
+            }
+        }
+
+        plugin.setUserVariables(this.meta[plugin.hash]?.userVariables ?? {});
+        this.plugins.push(plugin);
+
+        // 仅在还没有元数据时补默认值：否则会把刚迁移过来的顺序/开关覆盖掉
+        if (!this.meta[plugin.hash]) {
+            this.meta[plugin.hash] = {
+                order: this.plugins.length,
+                userVariables: {},
+                enabled: true,
+            };
+        }
+        this.configStore.set("plugin.meta", this.meta);
+
+        return {
+            success: true,
+            pluginName: plugin.name,
+            pluginHash: plugin.hash,
+            pluginUrl: plugin.instance.srcUrl,
+        };
+    }
+
+    /**
+     * 恢复备份中的插件：
+     * 本地版本已不低于备份版本 -> 只恢复启用状态/顺序/用户变量（不重新下载）；
+     * 否则按 srcUrl 重新安装（本地文件安装的插件用内嵌源码兜底）。
+     */
+    async resumePlugins(list: IBackupPlugin[]): Promise<IPluginResumeResult> {
+        const result: IPluginResumeResult = {
+            installed: 0,
+            updated: 0,
+            skipped: 0,
+            failed: [],
+        };
+        for (const item of list ?? []) {
+            if (!item || typeof item !== "object") {
+                continue;
+            }
+            const srcUrl = typeof item.srcUrl === "string" ? item.srcUrl.trim() : "";
+            const platform = typeof item.platform === "string" ? item.platform : "";
+
+            // 先按 srcUrl 认，再退回按平台名认（迁移自旧备份时 srcUrl 可能缺失）
+            let current = srcUrl
+                ? this.plugins.find((p) => (p.instance?.srcUrl ?? "") === srcUrl)
+                : undefined;
+            if (!current && platform) {
+                current = this.plugins.find((p) => p.name === platform);
+            }
+
+            const needsInstall =
+                !current ||
+                !this.isVersionNotOlder(this.versionOf(current), item.version ?? "0.0.0");
+
+            let target = current;
+            if (needsInstall) {
+                let code: string | undefined;
+                if (srcUrl) {
+                    try {
+                        const res = await axios.get(srcUrl, { timeout: 30000 });
+                        code = res.data?.toString();
+                    } catch (e: any) {
+                        result.failed.push({
+                            platform: platform || srcUrl,
+                            reason: `下载失败：${e?.message ?? String(e)}`,
+                        });
+                        continue;
+                    }
+                } else if (typeof item.code === "string" && item.code.length) {
+                    code = item.code;
+                }
+                if (!code) {
+                    result.failed.push({
+                        platform: platform || "未知插件",
+                        reason: "备份中没有源码，且该插件不是从网络安装的，无法恢复",
+                    });
+                    continue;
+                }
+                const installRes = this.installPluginCode(code, {
+                    replaceHash: current?.hash,
+                });
+                if (!installRes.success || !installRes.pluginHash) {
+                    result.failed.push({
+                        platform: platform || "未知插件",
+                        reason: installRes.message ?? "安装失败",
+                    });
+                    continue;
+                }
+                target = this.getByHash(installRes.pluginHash);
+                if (current) {
+                    result.updated += 1;
+                } else {
+                    result.installed += 1;
+                }
+            } else {
+                result.skipped += 1;
+            }
+
+            if (!target) {
+                continue;
+            }
+            const userVariables =
+                item.userVariables && typeof item.userVariables === "object"
+                    ? item.userVariables
+                    : {};
+            this.saveMeta(target.hash, {
+                enabled: item.enabled ?? true,
+                order:
+                    typeof item.order === "number"
+                        ? item.order
+                        : this.meta[target.hash]?.order ?? 999,
+                userVariables,
+            });
+            target.setUserVariables(userVariables);
+        }
+        this.resort();
+        this.configStore.set("plugin.meta", this.meta);
+        return result;
     }
 
     async installPluginFromLocalFile(pluginPath: string, config?: { notCheckVersion?: boolean }) {

@@ -35,6 +35,17 @@ const allowedChannels = [
     "cache:openDir",
     "mediaCache:getLimit",
     "mediaCache:setLimit",
+    "backup:collect",
+    "backup:apply",
+    "backup:saveFile",
+    "backup:openFile",
+    "backup:fetchUrl",
+    "backup:status",
+    "backup:webdav:get",
+    "backup:webdav:set",
+    "backup:webdav:test",
+    "backup:webdav:upload",
+    "backup:webdav:download",
 ];
 
 contextBridge.exposeInMainWorld("mfp", {

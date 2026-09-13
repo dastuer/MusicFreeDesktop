@@ -68,6 +68,22 @@ const iconPaths: Record<string, React.ReactNode> = {
         </>
     ),
     open: <path d="M14 4h6v6M20 4 11 13M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
+    /** 备份（导出）：托盘 + 向上箭头 */
+    backup: (
+        <>
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M12 3.5v11m0-11L8 7.5m4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+    ),
+    /** 恢复（导入）：托盘 + 向下箭头 */
+    restore: (
+        <>
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M12 14.5v-11m0 11L8 10.5m4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+    ),
+    /** 云端：WebDAV 相关操作 */
+    cloud: <path d="M7 18h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 6.7 8.6A3.7 3.7 0 0 0 7 18z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />,
 };
 
 interface IIconProps {

@@ -3,6 +3,7 @@ import { setTheme, useThemeType } from "@/core/theme";
 import { getQuality, setQuality } from "@/core/appConfig";
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
+import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
 
 /**
@@ -109,6 +110,8 @@ export default function SettingsPage() {
                     </button>
                 </div>
             </div>
+
+            <BackupSection />
 
             <CacheSection />
 

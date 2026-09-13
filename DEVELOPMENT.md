@@ -159,6 +159,11 @@ electron/                        主进程（Node 环境，可读写文件与网
     localMusic.ts                本地文件夹扫描、ID3/FLAC 元数据与内嵌封面
     builtinMusic.ts              内置示例曲目（Node 合成 WAV + SVG 封面）
     downloadService.ts           下载队列（并发 2）、进度事件、任务持久化
+    cacheManager.ts              缓存占用统计与按类清理
+    mediaCache.ts                播放缓存（LRU，上限可配）
+    mediaDownloader.ts           上游 → .part → 播放器的两端解耦下载器
+    coverCache.ts                封面落盘与短链（mfs://cover/），含残留清理
+    backupService.ts             备份与恢复：组装/校验/应用 + 本地文件 + WebDAV
 
 src/                             渲染进程（浏览器环境，无 Node）
   main.tsx                       createRoot 入口
@@ -173,6 +178,10 @@ src/                             渲染进程（浏览器环境，无 Node）
     musicSheet.ts                用户歌单 / 我喜欢（主进程持久化）
     musicHistory.ts              播放历史（主进程持久化）
     downloadManager.ts           下载的渲染侧状态与动作
+    cache.ts                     缓存占用/清理/播放缓存上限的设置页封装
+    collections.ts               列表去重（uniqueById）等纯函数
+    mediaSource.ts               聚合页音源偏好与切换能力判定
+    backup.ts                    备份与恢复的渲染侧封装 + 偏好白名单
   components/
     layout/                      Sidebar / PlayerBar / MusicDetailOverlay / PlayQueuePanel
     base/                        Icon / Cover / Slider / MusicList / MediaHeader /
@@ -272,10 +281,13 @@ sequenceDiagram
 
 | 存储 | 位置 | 存放内容 | 访问方式 |
 | --- | --- | --- | --- |
-| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲、循环模式、音量、主题、默认音质、`defaultPluginHash` | `appConfig.ts` 或直接 `localStorage` |
-| `configStore` | `~/Library/Application Support/MusicFreeDesktop/data/store.json` | 插件元信息 `plugin.meta`、用户歌单 `userSheets`、播放历史 `musicHistory`、本地音乐列表 `localMusic.list`、下载任务 `download.tasks` / `download.dir` | `ipcInvoke("config:get"/"config:set")` |
+| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>` | `appConfig.ts` 或直接 `localStorage` |
+| `configStore` | `~/Library/Application Support/musicfree-desktop/data/store.json` | 插件元信息 `plugin.meta`、用户歌单 `userSheets`、播放历史 `musicHistory`、本地音乐列表 `localMusic.list`、下载任务 `download.tasks` / `download.dir`、备份设置 `backup.*` | `ipcInvoke("config:get"/"config:set")` |
 
-判断标准很简单：**"用户资产"（歌单、插件、下载记录）放主进程；"会话状态"（音量、当前播放位置、主题）放 localStorage**。用户资产放主进程是为了将来能导出/迁移/被下载服务复用。
+> 目录名是小写的 `musicfree-desktop`：Electron 取 `app.getPath("userData")` 时用的是 package.json 顶层的 `name`，
+> 而 `productName: MusicFreeDesktop` 写在 `build` 段里，只有打包产物才叫 `MusicFreeDesktop.app`。
+
+判断标准很简单：**"用户资产"（歌单、插件、下载记录）放主进程；"会话状态"（音量、当前播放位置、主题）放 localStorage**。用户资产放主进程是为了将来能导出/迁移/被下载服务复用——`backupService.ts` 正是这套分层的直接受益者。
 
 插件本体文件则存在 `userData/plugins/<sha256(code)>.js`，文件名即 hash，天然去重。
 
@@ -524,9 +536,9 @@ document.documentElement.dataset.theme = type;
 
 - 递归遍历（跳过 `.` 开头的目录），识别 8 种扩展名
 - `music-metadata` 的 `parseFile` 读标题/歌手/专辑/时长/内嵌封面
-- 内嵌封面转成 data URL 挂在 `musicItem.artwork`，同时存一份到 `$coverData`
-- **持久化时会剥掉 `$coverData`**（base64 封面太大，会把 store.json 撑爆），播放时再按需读取
+- **封面不内联**：扫描时把内嵌封面压成缩略图落到 `data/covers/`，`musicItem.artwork` 只存 `mfs://cover/<md5>.<ext>` 短链（原因见 `5.9` 与 `coverCache.ts` 顶部注释）
 - 解析失败不报错，用文件名占位
+- 封面缓存被清空后，用 `rebuildCovers()` 按 `localMusic.list` 重新抽取（设置页「存储与缓存」里的「重建」按钮）
 
 **`builtinMusic.ts`**：
 
@@ -549,6 +561,56 @@ const result = await tryPluginMethod(plugins, "getTopLists"); // 依次尝试，
 - 返回值带 `pluginName`，UI 上会标注"数据来源：XXX"——这是刻意的透明度设计，用户能知道当前数据来自哪个音源
 
 新增"非绑定音源"的聚合功能时，请复用这套模式，不要自己写 for 循环重试。
+
+### 5.9 备份与恢复（`electron/services/backupService.ts` + `src/core/backup.ts`）
+
+功能对齐 MusicFree 移动端：恢复模式三选一、本地文件备份/恢复、从 URL 恢复、WebDAV 备份/恢复。
+
+**职责边界**（这是本节最重要的一点）：
+
+| 环节 | 放在哪 | 原因 |
+| --- | --- | --- |
+| 歌单 / 播放历史 / 本地音乐索引 / 应用配置 | 主进程 | 都在 `store.json`，渲染进程看不见 |
+| 插件（`srcUrl` / 版本 / 启用状态 / 顺序 / 用户变量） | 主进程 | `pluginHost` 独占插件文件与 `plugin.meta` |
+| 界面偏好（主题、音量、播放列表、默认音源、`pageSource.*`） | 渲染进程 | 只在 localStorage，主进程读不到 |
+| 本地文件读写、URL 拉取、WebDAV | 主进程 | 渲染进程是 `file://` 源，直连会被 CORS 挡；且密码不必离开主进程 |
+
+**备份文件结构**（可读 JSON，便于人工检查与跨端搬运）：
+
+```jsonc
+{
+  "format": "musicfree-desktop", "version": 1, "appVersion": "1.0.0",
+  "createdAt": 1690000000000,
+  "musicSheets": [{ "id", "title", "createAt", "musicList": [...] }],
+  "plugins": [{ "platform", "srcUrl", "version", "enabled", "order", "userVariables", "code"? }],
+  "musicHistory": [...], "localMusic": [...],
+  "appConfig": { "download.dir": "...", "mediaCache.limit": 2147483648 },
+  "preferences": { "theme": "dark", "volume": "0.5", "pageSource.home": "..." }
+}
+```
+
+**恢复模式语义**（`ResumeMode`，键名与移动端一致）：
+
+| 值 | 行为 |
+| --- | --- |
+| `append` | 同 id 歌单把备份里的歌补进去（按 `platform+id` 去重），不删本机已有的 |
+| `overwrite-default` | 只有「我喜欢的音乐」（固定 id `my-likes`）被整体替换，其余按追加处理 |
+| `overwrite` | 丢弃本机全部歌单与历史，完全使用备份内容 |
+
+**几个刻意的设计**：
+
+- **插件源码按需内嵌**：有 `srcUrl` 的插件只存地址，恢复时重新下载；**从本地文件安装的插件没有 `srcUrl`**，退化为把源码内嵌进备份 JSON，否则这类插件在恢复时会丢失。
+- **升级走 hash 迁移**：`pluginHost.installPluginCode(code, { replaceHash })` 在装上新版本后删旧文件，并把旧的 `plugin.meta`（启用状态 / 顺序 / 用户变量）迁到新 hash——否则"恢复"会把用户的音源配置清掉。
+- **版本不低于备份就跳过下载**：用 `compare-versions`，插件版本号常写 `dev` 或空串，比较失败时退化为字符串比较，不抛异常。
+- **不信任备份文件**：`parsePayload` 逐字段校验，坏 JSON / 无法识别的结构直接拒绝且**不写任何数据**；备份常从别处拷来，拿坏数据覆盖 `store.json` 会让人丢光数据。
+- **密码不进备份文件**：`backup.webdav` 只在 `configStore` 里，`preferences` 白名单也刻意排除了 `backup.*`。
+- **恢复前弹原生确认框**：`dialog.showMessageBox` 写明当前模式会做什么、备份里有多少内容，`defaultId` 是「取消」。
+- **`DEFAULT_SHEET_ID = "my-likes"` 在主进程重复声明了一份**：主进程不能 import 渲染进程模块（缺 `@/` 别名、会拖进 React），改 `src/core/musicSheet.ts` 的 `LIKES_SHEET_ID` 时必须同步这里。
+- 恢复后会 `invalidatePluginCache()` + 自增 `likesVersionAtom` 刷新界面；主题与音量立即生效，播放列表等偏好需重启。
+
+**新增一类需要备份的用户数据时**：在 `backupService.collect()` 与 `apply()` 里各加一段，并在渲染进程的 `PREF_KEYS` / `PREF_PREFIXES`（localStorage）或主进程的 `appConfig`（configStore）里登记，否则这份数据不会被备份到。
+
+> 兼容性：读取时会接受移动端 MusicFree 的备份文件，其中的插件按 `srcUrl` 正常恢复；但移动端歌单条目通常不带 `musicList`，这种情况只恢复歌单名称，并在结果里给出提示。
 
 ---
 
@@ -615,7 +677,7 @@ const iconPaths: Record<string, React.ReactNode> = {
 
 约定：`viewBox="0 0 24 24"`，线性图标用 `fill="none" + stroke="currentColor"`，实心图标用 `fill="currentColor"`。使用：`<Icon name="myIcon" size={18} />`。
 
-现有图标名：`home` `search` `toplist` `localMusic` `history` `plugin` `settings` `play` `pause` `prev` `next` `volume` `volumeMute` `repeatOff` `repeatQueue` `repeatSingle` `playQueue` `heart` `heartFilled` `check` `trash` `plus` `close` `back` `forward` `more` `chevronDown` `musicNote` `download` `open`
+现有图标名：`home` `search` `toplist` `localMusic` `history` `plugin` `settings` `play` `pause` `prev` `next` `volume` `volumeMute` `repeatOff` `repeatQueue` `repeatSingle` `playQueue` `heart` `heartFilled` `check` `trash` `plus` `close` `back` `forward` `more` `chevronDown` `musicNote` `download` `open` `backup` `restore` `cloud`
 
 ### 6.4 在页面里调用插件方法
 

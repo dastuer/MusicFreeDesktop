@@ -12,6 +12,7 @@ import cacheManager, { CacheKey } from "./services/cacheManager";
 import mediaCache, {
     DEFAULT_MEDIA_CACHE_LIMIT,
 } from "./services/mediaCache";
+import backupService, { ResumeMode } from "./services/backupService";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -413,3 +414,42 @@ ipcMain.handle("app:getInfo", () => ({
     platform: process.platform,
     isMac: process.platform === "darwin",
 }));
+
+/** ---------- 备份与恢复 ---------- */
+
+// 组装本机备份数据（渲染进程再补上自己的 localStorage 偏好）
+ipcMain.handle("backup:collect", (_e, options?: any) => backupService.collect(options));
+
+// 应用备份数据；返回 summary.preferences 由渲染进程写入 localStorage
+ipcMain.handle(
+    "backup:apply",
+    async (_e, payload: any, mode: ResumeMode, options?: { confirm?: boolean }) => {
+        try {
+            // 默认先弹原生确认框：恢复会修改用户数据，不该点一下就执行
+            if (options?.confirm !== false) {
+                const ok = await backupService.confirmApply(payload, mode ?? "append");
+                if (!ok) {
+                    return { success: false, canceled: true };
+                }
+            }
+            return { success: true, data: await backupService.apply(payload, mode) };
+        } catch (e: any) {
+            return { success: false, message: e?.message ?? String(e) };
+        }
+    },
+);
+
+ipcMain.handle("backup:saveFile", (_e, content: string) =>
+    backupService.saveToFile(content));
+ipcMain.handle("backup:openFile", () => backupService.readFromFile());
+ipcMain.handle("backup:fetchUrl", (_e, url: string) =>
+    backupService.fetchFromUrl(url));
+ipcMain.handle("backup:status", () => backupService.getStatus());
+
+ipcMain.handle("backup:webdav:get", () => backupService.getWebdavConfig());
+ipcMain.handle("backup:webdav:set", (_e, config: any) =>
+    backupService.setWebdavConfig(config));
+ipcMain.handle("backup:webdav:test", () => backupService.testWebdav());
+ipcMain.handle("backup:webdav:upload", (_e, content: string) =>
+    backupService.uploadToWebdav(content));
+ipcMain.handle("backup:webdav:download", () => backupService.downloadFromWebdav());
