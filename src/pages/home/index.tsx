@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import SourceSwitcher from "@/components/base/SourceSwitcher";
+import { uniqueById } from "@/core/collections";
 import { SerializedPlugin } from "@/core/ipc";
 import {
     ISourceCapability,
@@ -104,7 +105,8 @@ export default function HomePage() {
                 setTagSource(tagResult.pluginName);
                 const data = tagResult.data?.data ?? [];
                 const pinned = tagResult.data?.pinned ?? [];
-                const merged = [...pinned, ...(data[0]?.data ?? [])].slice(0, 12);
+                // pinned 与首个分组常有重叠（见 uniqueById 注释），必须去重后再用
+                const merged = uniqueById([...pinned, ...(data[0]?.data ?? [])]).slice(0, 12);
                 setTags(merged);
                 setActiveTag(merged.length ? merged[0] : null);
                 if (!merged.length) {
@@ -168,7 +170,9 @@ export default function HomePage() {
             if (result) {
                 setTagSource(result.pluginName);
             }
-            setSheets((result?.data?.data ?? []).slice(0, 18));
+            setSheets(
+                uniqueById((result?.data?.data ?? []) as ISheetCard[]).slice(0, 18),
+            );
         })();
         return () => {
             cancelled = true;
@@ -327,7 +331,8 @@ export default function HomePage() {
                 topLists.map((group, gi) => (
                         <section
                             className="home-section"
-                            key={group.title || group.data?.[0]?.id || gi}
+                            /* 分组标题可能重复，补上序号保证同级 key 唯一 */
+                            key={`${group.title || group.data?.[0]?.id || "toplist"}-${gi}`}
                         >
                             <div className="section-title">
                                 排行榜{group.title ? ` · ${group.title}` : ""}
@@ -338,7 +343,9 @@ export default function HomePage() {
                                 )}
                             </div>
                             <div className="card-grid">
-                                {group.data.slice(0, 8).map((item: any) => (
+                                {uniqueById(group.data)
+                                    .slice(0, 8)
+                                    .map((item: any) => (
                                     <div
                                         key={item.id}
                                         className="media-card"

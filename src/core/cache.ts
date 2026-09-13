@@ -1,6 +1,19 @@
+import { atom, getDefaultStore } from "jotai";
 import { ipcInvoke } from "./ipc";
 
 /** 设置页「存储与缓存」：读取缓存占用、按类别清除 */
+
+/**
+ * 封面版本号：重建封面后自增。
+ * 封面组件会把它一起参与"src 变化"的判断，否则已经加载失败过的封面
+ * 不会重新去取文件——用户点了「重建」，列表和播放栏却还是音符占位图。
+ */
+export const coverVersionAtom = atom(0);
+
+function bumpCoverVersion() {
+    const store = getDefaultStore();
+    store.set(coverVersionAtom, store.get(coverVersionAtom) + 1);
+}
 
 export type CacheKey = "media" | "cover" | "http" | "temp" | "storage";
 
@@ -65,12 +78,21 @@ export function clearCache(keys: CacheKey[]): Promise<ClearCacheResult> {
 }
 
 /** 重新生成本地音乐封面（封面缓存被清空后用来恢复），返回处理的条目数 */
-export function rebuildLocalCovers(onlyMissing = true): Promise<{
+export async function rebuildLocalCovers(onlyMissing = true): Promise<{
     success: boolean;
     message?: string;
     data?: { checked: number; updated: number; missingFile: number };
 }> {
-    return ipcInvoke("localMusic:rebuildCovers", onlyMissing);
+    const res = await ipcInvoke<{
+        success: boolean;
+        message?: string;
+        data?: { checked: number; updated: number; missingFile: number };
+    }>("localMusic:rebuildCovers", onlyMissing);
+    // 重建成功后让已挂载的封面组件重新取图（否则它们还停在失败占位图上）
+    if (res?.success && (res.data?.updated ?? 0) > 0) {
+        bumpCoverVersion();
+    }
+    return res;
 }
 
 export function openCoverCacheDir(): Promise<string> {

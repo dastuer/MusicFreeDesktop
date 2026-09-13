@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import SourceSwitcher from "@/components/base/SourceSwitcher";
+import { uniqueById } from "@/core/collections";
 import { SerializedPlugin } from "@/core/ipc";
 import {
     AUTO_SOURCE,
@@ -191,10 +192,14 @@ export default function TopListPage() {
                 </div>
             )}
 
-            {groups.map((group, gi) => (
+            {groups.map((group, gi) => {
+                // 同一分组里出现重复榜单时只渲染一次（否则 React 会报重复 key）
+                const items = uniqueById(group.data);
+                return (
                 <section
                     className="home-section"
-                    key={group.title || gi}
+                    /* 分组标题可能重复，补上序号保证同级 key 唯一 */
+                    key={`${group.title || "toplist"}-${gi}`}
                 >
                     <div className="section-title" style={{ fontSize: 17 }}>
                         {group.title || "榜单"}
@@ -205,11 +210,11 @@ export default function TopListPage() {
                                 color: "var(--text-tertiary)",
                             }}
                         >
-                            {group.data.length} 个榜单
+                            {items.length} 个榜单
                         </span>
                     </div>
                     <div className="card-grid">
-                        {group.data.map((item: any, idx: number) => (
+                        {items.map((item: any, idx: number) => (
                             <div
                                 key={item.id}
                                 className="media-card"
@@ -257,7 +262,8 @@ export default function TopListPage() {
                         ))}
                     </div>
                 </section>
-            ))}
+                );
+            })}
         </div>
     );
 }
