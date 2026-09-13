@@ -1,14 +1,11 @@
-import { SerializedPlugin, getSortedPluginsWithAbility, pluginCall } from "./ipc";
+import { SerializedPlugin, pluginCall } from "./ipc";
 
 /**
  * 插件方法尝试工具：
  *  - 插件列表已按「默认音源优先」排序（见 ipc.getPlugins）
  *  - 依次尝试，任一成功即返回（附带来源插件名），整体限时
+ *  - 发现页 / 排行榜页选定音源后只会传入单个插件，此时不会回落到其他音源
  */
-
-export async function getPluginsForAbility(ability: string): Promise<SerializedPlugin[]> {
-    return getSortedPluginsWithAbility(ability);
-}
 
 export async function tryPluginMethod<T = any>(
     plugins: SerializedPlugin[],

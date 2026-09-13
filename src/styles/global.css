@@ -586,6 +586,59 @@ img {
     margin-top: 4px;
 }
 
+/* 页面头部 + 右侧操作区（音源切换器等） */
+.page-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+/* ---------- 音源切换 ---------- */
+.source-switcher {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--hover-bg);
+    border-radius: 7px;
+    padding: 4px 8px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.source-switcher-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.source-switcher-select {
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-color);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    max-width: 240px;
+    padding: 0;
+}
+
+/* 分区标题右侧的「数据来源：xxx」 */
+.section-source {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+/* 音源不支持 / 该音源加载失败的说明块 */
+.source-note {
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--hover-bg);
+    border-radius: 8px;
+    padding: 16px;
+}
+
 /* 榜单卡片角标（更新周期） */
 .toplist-badge {
     position: absolute;
