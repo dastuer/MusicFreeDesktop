@@ -11,7 +11,7 @@ import {
 import { setMusicHistory } from "./musicHistory";
 import { getQuality } from "./appConfig";
 
-export type MusicState = "playing" | "paused" | "stopped";
+export type MusicState = "playing" | "paused" | "stopped" | "loading";
 export type MusicRepeatMode = "off" | "queue" | "single";
 
 /**
@@ -26,6 +26,56 @@ export const enum TrackPlayerEvents {
     CurrentMusicChanged = "CurrentMusicChanged",
     ProgressChanged = "ProgressChanged",
     StateChanged = "StateChanged",
+    /** 音源解析 / 音频加载失败（payload 见 IPlayFailurePayload） */
+    PlayFailed = "PlayFailed",
+}
+
+/** 播放失败事件的载荷 */
+export interface IPlayFailurePayload {
+    musicItem: IMusic.IMusicItem;
+    /** 失败原因（已转成可读短句） */
+    reason: string;
+    /** 是否会自动跳到下一首 */
+    willSkip: boolean;
+}
+
+/**
+ * 单次 getMediaSource 的最长等待。
+ * 换歌时旧歌已经被停掉，等待期是静音的，所以不能让一个卡死的音源拖满 pluginCall 的 30s。
+ */
+const MEDIA_SOURCE_TIMEOUT = 10000;
+
+/** 连续 N 首都播不出来就停下，不再自动往后跳（否则坏音源会把整个歌单空转一圈） */
+const MAX_AUTO_SKIP = 3;
+
+/** MediaError 转成人话（见 HTMLMediaElement.error） */
+function describeMediaError(err?: MediaError | null) {
+    switch (err?.code) {
+        case 1:
+            return "音频加载被中断";
+        case 2:
+            return "音频流网络中断";
+        case 3:
+            return "音频解码失败";
+        case 4:
+            return "音源返回的音频无法播放（链接可能已失效）";
+        default:
+            return "音频加载失败";
+    }
+}
+
+/** play() 抛出的异常转成人话 */
+function describePlayError(e: any) {
+    if (e?.name === "NotSupportedError") {
+        return "音源返回的音频无法播放（链接可能已失效）";
+    }
+    if (e?.name === "NotAllowedError") {
+        return "浏览器未允许自动播放";
+    }
+    if (e?.name === "AbortError") {
+        return "播放被新的请求中断";
+    }
+    return e?.message ?? String(e ?? "未知原因");
 }
 
 /** ---------- jotai atoms ---------- */
@@ -54,6 +104,14 @@ class TrackPlayer extends EventEmitter {
     private _currentMusic: IMusic.IMusicItem | null = null;
     private _rate = 1;
     private pendingPlayId = "";
+    /** 换歌时正在解析音源：期间播放器静音、状态为 loading */
+    private isLoading = false;
+    /** 因错误自动跳过的累计次数，真正播出声后归零 */
+    private autoSkipCount = 0;
+    /** 标记紧跟着的这次 play() 是错误自动跳引发的（此时不重置 autoSkipCount） */
+    private autoSkipping = false;
+    /** play() 调用序号，用于让过期（被后续请求取代）的解析结果失效 */
+    private playSeq = 0;
     /** 播放停滞自救用的定时器与次数（见 onAudioStall） */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
     private stallNudges = 0;
@@ -70,7 +128,7 @@ class TrackPlayer extends EventEmitter {
         audio.addEventListener("loadedmetadata", this.onProgress);
         audio.addEventListener("pause", this.onAudioPause);
         audio.addEventListener("play", this.onAudioPlay);
-        audio.addEventListener("playing", this.clearStallWatch);
+        audio.addEventListener("playing", this.onAudioPlaying);
         audio.addEventListener("error", this.onAudioError);
         // waiting / stalled：音源侧断流时浏览器会一直等下去，进度不再前进
         audio.addEventListener("waiting", this.onAudioStall);
@@ -157,6 +215,10 @@ class TrackPlayer extends EventEmitter {
 
     private onAudioPause = () => {
         this.clearStallWatch();
+        // 换歌过程中的 pause 是加载流程的一部分，不能当成"用户按了暂停"
+        if (this.isLoading) {
+            return;
+        }
         if (this._currentMusic) {
             setAtom(musicStateAtom, "paused");
         }
@@ -166,24 +228,114 @@ class TrackPlayer extends EventEmitter {
         setAtom(musicStateAtom, "playing");
     };
 
+    private onAudioPlaying = () => {
+        // 真正出声了：撤掉停滞自救的定时器，并清零"连续失败自动跳过"的计数
+        this.clearStallWatch();
+        this.isLoading = false;
+        this.autoSkipCount = 0;
+        setAtom(musicStateAtom, "playing");
+    };
+
     private onAudioError = async () => {
         const err = this.audio?.error;
         console.warn(
             `[trackPlayer] media error code=${err?.code} message=${err?.message} srcLen=${this.audio?.src?.length ?? 0} srcPrefix=${this.audio?.src?.slice(0, 40) ?? "-"}`,
         );
-        // 兜底：音源解析失败时尝试下一首
-        if (this._currentMusic && this.audio?.src) {
-            await this.skipToNext();
+        // 没有 src 说明这是上一首被换掉时留下的错误，不该算到当前这首头上
+        if (!this._currentMusic || !this.audio?.src) {
+            return;
         }
+        await this.handlePlayFailure(this._currentMusic, describeMediaError(err));
     };
+
+    /**
+     * 断掉当前音源并静音。
+     *
+     * 换歌、以及播放失败时都必须走这一步：只改 jotai 状态是没用的，
+     * `<audio>` 元素会继续把已经缓冲的上一首播完——这就是「切歌后还在播上一首」的根因。
+     */
+    private detachAudio() {
+        this.clearStallWatch();
+        const audio = this.audio;
+        if (!audio) {
+            return;
+        }
+        audio.pause();
+        audio.removeAttribute("src");
+        try {
+            // 只 removeAttribute 时，已缓冲的数据在部分情况下仍会继续出声，load() 让元素真正放弃旧资源
+            audio.load();
+        } catch {
+            // ignore
+        }
+    }
+
+    /** 进入"解析音源中"：立刻静音旧歌，状态置为 loading */
+    private beginLoading() {
+        this.isLoading = true;
+        this.detachAudio();
+        if (this._currentMusic) {
+            setAtom(musicStateAtom, "loading");
+        }
+    }
+
+    /** 取消在途的加载（用户按暂停，或被一次新的换歌请求取代） */
+    private cancelLoading() {
+        this.pendingPlayId = "";
+        this.isLoading = false;
+        this.detachAudio();
+        setAtom(musicStateAtom, this._currentMusic ? "paused" : "stopped");
+    }
+
+    /** 播放失败：先真正停下来，再看要不要自动往后跳一首 */
+    private async handlePlayFailure(musicItem: IMusic.IMusicItem, rawReason: string) {
+        const reason = rawReason || "未知原因";
+        this.isLoading = false;
+        this.detachAudio();
+
+        const willSkip = this.autoSkipCount < MAX_AUTO_SKIP && this._playList.length > 1;
+        console.warn(
+            `[trackPlayer] 播放失败：${musicItem.title}（${reason}）${
+                willSkip ? `，自动尝试下一首（第 ${this.autoSkipCount + 1} 次）` : "，停止播放"
+            }`,
+        );
+        this.emit(TrackPlayerEvents.PlayFailed, {
+            musicItem,
+            reason,
+            willSkip,
+        } as IPlayFailurePayload);
+
+        if (!willSkip) {
+            setAtom(musicStateAtom, this._currentMusic ? "paused" : "stopped");
+            return;
+        }
+        this.autoSkipCount += 1;
+        this.autoSkipping = true;
+        try {
+            await this.skipToNext();
+        } finally {
+            this.autoSkipping = false;
+        }
+    }
 
     private onEnded = async () => {
         if (!this._currentMusic) {
             return;
         }
         if (this._repeatMode === "single") {
-            this.audio!.currentTime = 0;
-            this.audio!.play();
+            const audio = this.audio;
+            if (!audio) {
+                return;
+            }
+            if (!audio.src) {
+                // 单曲循环但音源已失效（失败后 src 被清掉）：重新走一次解析
+                await this.play(this._currentMusic, true);
+                return;
+            }
+            audio.currentTime = 0;
+            audio.play().catch((e) =>
+                console.warn("[trackPlayer] repeat-single failed", e?.name ?? e),
+            );
             return;
         }
         // 列表末尾
@@ -310,14 +462,15 @@ class TrackPlayer extends EventEmitter {
     async clearPlayList() {
         this._playList = [];
         this._currentMusic = null;
+        // 任何在途的加载都要作废，否则清空后它还会把解析结果挂上来
+        this.pendingPlayId = "";
+        this.isLoading = false;
+        this.autoSkipCount = 0;
         setAtom(playListAtom, []);
         setAtom(currentMusicAtom, null);
         setAtom(musicStateAtom, "stopped");
         setAtom(progressAtom, { position: 0, duration: 0 });
-        this.audio?.pause();
-        if (this.audio) {
-            this.audio.removeAttribute("src");
-        }
+        this.detachAudio();
         this.persistPlayList();
     }
 
@@ -334,12 +487,22 @@ class TrackPlayer extends EventEmitter {
         if (plugin?.supportedMethods.includes("getMediaSource")) {
             for (const quality of [getQuality(), "standard"]) {
                 try {
-                    const source = (await pluginCall(
-                        plugin.hash,
-                        "getMediaSource",
-                        musicItem,
-                        quality,
-                    )) as IPlugin.IMediaSourceResult | null;
+                    // 等待期间旧歌已经被停掉（静音中），所以这里给单次调用加个更紧的超时，
+                    // 免得一个卡死的音源让播放器一直静音等满 30s（甚至两个音质 60s）
+                    const source = (await Promise.race([
+                        pluginCall(
+                            plugin.hash,
+                            "getMediaSource",
+                            musicItem,
+                            quality,
+                        ) as Promise<IPlugin.IMediaSourceResult | null>,
+                        new Promise<never>((_, reject) =>
+                            setTimeout(
+                                () => reject(new Error("音源响应超时")),
+                                MEDIA_SOURCE_TIMEOUT,
+                            ),
+                        ),
+                    ])) as IPlugin.IMediaSourceResult | null;
                     if (source?.url) {
                         return {
                             src: buildRemoteMediaUrl({
@@ -377,18 +540,6 @@ class TrackPlayer extends EventEmitter {
             };
         }
         return null;
-    }
-
-    private async setMediaSrc(musicItem: IMusic.IMusicItem) {
-        const resolved = await this.resolveMediaUrl(musicItem);
-        if (!resolved) {
-            throw new Error("无法获取播放链接");
-        }
-        if (this.audio) {
-            this.audio.src = resolved.src;
-            this.audio.playbackRate = this._rate;
-            await this.updateMediaSession(musicItem);
-        }
     }
 
     private async updateMediaSession(musicItem: IMusic.IMusicItem) {
@@ -435,13 +586,19 @@ class TrackPlayer extends EventEmitter {
             return;
         }
         const target = musicItem ?? this._currentMusic!;
-        const playId = `${target.platform}-${target.id}-${Date.now()}`;
+        // playId 带自增序号：同一毫秒内的连续调用也能区分
+        const playId = `${target.platform}-${target.id}-${Date.now()}-${++this.playSeq}`;
         this.pendingPlayId = playId;
 
         const isNew = !this.isCurrentMusic(target);
+        const willLoad = isNew || !!forcePlay;
+
+        if (!this.autoSkipping) {
+            // 用户主动发起的播放：把"连续失败"的计数清零
+            this.autoSkipCount = 0;
+        }
+
         if (isNew) {
-            // 换歌：停滞自救的次数与定时器都归零
-            this.clearStallWatch();
             this.stallNudges = 0;
             if (!this.isInPlayList(target)) {
                 this.add(target);
@@ -454,30 +611,78 @@ class TrackPlayer extends EventEmitter {
             setAtom(progressAtom, { position: 0, duration: target.duration ?? 0 });
         }
 
+        if (willLoad) {
+            // 关键：解析音源可能耗时很久，这一步就把上一首停掉。
+            // 否则「点下一首 → 旧歌继续响到新歌就绪」，或者解析失败后旧歌永远响下去。
+            this.beginLoading();
+        }
+
         try {
-            if (isNew || forcePlay) {
-                await this.setMediaSrc(target);
+            const resolved = await this.resolveMediaUrl(target);
+            if (this.pendingPlayId !== playId) {
+                // 已经被后面的播放请求取代（连点下一首、快速点列表），丢弃这次结果
+                return;
             }
-            await this.audio!.play();
+            if (!resolved) {
+                throw new Error("音源没有返回可播放的链接");
+            }
+            const audio = this.audio;
+            if (!audio) {
+                return;
+            }
+            audio.src = resolved.src;
+            audio.playbackRate = this._rate;
+            await this.updateMediaSession(target);
+            if (this.pendingPlayId !== playId) {
+                return;
+            }
+            this.isLoading = false;
+            await audio.play();
             if (this.pendingPlayId === playId) {
                 setAtom(musicStateAtom, "playing");
             }
-        } catch (e) {
-            console.warn("[trackPlayer] play failed", e);
-            setAtom(musicStateAtom, "paused");
+        } catch (e: any) {
+            if (this.pendingPlayId !== playId) {
+                // 失败来自一次已被取代的请求，不该弹提示、也不该自动跳歌
+                return;
+            }
+            await this.handlePlayFailure(target, describePlayError(e));
         }
     }
 
     private resume() {
-        this.audio?.play();
+        const audio = this.audio;
+        if (!audio) {
+            return;
+        }
+        if (!audio.src) {
+            // 失败后 / 恢复的会话没有音源：不能直接 play()，要走完整的解析流程
+            if (this._currentMusic) {
+                this.play(this._currentMusic, true);
+            }
+            return;
+        }
+        audio.play().catch((e) => {
+            console.warn("[trackPlayer] resume failed", e?.name ?? e);
+        });
     }
 
     async pause() {
+        if (this.isLoading) {
+            // 加载途中按暂停 = 取消这次加载，否则解析完成后它还会自己响起来
+            this.cancelLoading();
+            return;
+        }
         this.audio?.pause();
         setAtom(musicStateAtom, "paused");
     }
 
     async togglePlay() {
+        if (this.isLoading) {
+            // 正在换歌/加载：再点一次即取消这次加载
+            this.cancelLoading();
+            return;
+        }
         if (!this._currentMusic) {
             if (this._playList.length) {
                 await this.play(this._playList[0]);

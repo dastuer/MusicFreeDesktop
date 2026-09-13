@@ -58,6 +58,7 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     };
 
     const playing = musicState === "playing";
+    const loading = musicState === "loading";
 
     return (
         <div className="app-playerbar">
@@ -111,9 +112,13 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     <button
                         className="playerbar-play-btn"
                         onClick={() => TrackPlayerSingleton.togglePlay()}
-                        title={playing ? "暂停" : "播放"}
+                        title={loading ? "取消加载" : playing ? "暂停" : "播放"}
                     >
-                        <Icon name={playing ? "pause" : "play"} size={16} />
+                        {loading ? (
+                            <span className="playerbar-spinner" />
+                        ) : (
+                            <Icon name={playing ? "pause" : "play"} size={16} />
+                        )}
                     </button>
                     <button
                         className="playerbar-control-btn"

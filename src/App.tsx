@@ -4,7 +4,7 @@ import PlayerBar from "./components/layout/PlayerBar";
 import MusicDetailOverlay from "./components/layout/MusicDetailOverlay";
 import PlayQueuePanelHost from "./components/layout/PlayQueuePanel";
 import ContextMenuHost from "./components/base/ContextMenu";
-import ToastHost from "./components/base/Toast";
+import ToastHost, { showToast } from "./components/base/Toast";
 import AddToSheetPanelHost from "./components/base/AddToSheetPanel";
 import PromptDialogHost from "./components/base/PromptDialog";
 import DownloadPanelHost from "./components/base/DownloadPanel";
@@ -15,7 +15,12 @@ import {
     useCanGoBack,
     useCurrentRoute,
 } from "./core/router";
-import { TrackPlayerSingleton, loadCurrentLyric } from "./core/trackPlayer";
+import {
+    IPlayFailurePayload,
+    TrackPlayerEvents,
+    TrackPlayerSingleton,
+    loadCurrentLyric,
+} from "./core/trackPlayer";
 import { useThemeSetup } from "./core/theme";
 
 import HomePage from "./pages/home";
@@ -97,6 +102,22 @@ export default function App() {
 
     useEffect(() => {
         TrackPlayerSingleton.setup();
+    }, []);
+
+    // 换歌失败时把原因说出来：失败后播放器会真正停下来，不再静默地把上一首继续放下去
+    useEffect(() => {
+        const onPlayFailed = (payload: IPlayFailurePayload) => {
+            const title = payload.musicItem?.title ?? "当前歌曲";
+            showToast(
+                payload.willSkip
+                    ? `「${title}」无法播放：${payload.reason}，已跳到下一首`
+                    : `「${title}」无法播放：${payload.reason}`,
+            );
+        };
+        TrackPlayerSingleton.on(TrackPlayerEvents.PlayFailed, onPlayFailed);
+        return () => {
+            TrackPlayerSingleton.off(TrackPlayerEvents.PlayFailed, onPlayFailed);
+        };
     }, []);
 
     const openMusicDetail = () => {

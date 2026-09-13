@@ -790,6 +790,22 @@ img {
     transform: scale(1.06);
 }
 
+/* 换歌/解析音源期间：播放键位置显示转圈，此时旧歌已经被停掉 */
+.playerbar-spinner {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 2px solid var(--text-tertiary);
+    border-top-color: transparent;
+    animation: playerbar-spin 0.7s linear infinite;
+}
+
+@keyframes playerbar-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 /* 右侧按钮组：下载 / 喜欢 / 收藏到歌单 / 循环 / 音量 / 播放列表。
    多一个按钮后 280px 会挤掉音量条，放宽到 300px 与左侧对称。 */
 .playerbar-right {
