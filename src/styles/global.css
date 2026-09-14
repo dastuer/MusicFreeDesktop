@@ -525,11 +525,19 @@ img {
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 18px;
     margin-bottom: 6px;
+    /*
+     * 网格项默认 align-self:stretch 会被拉到整行高度，子元素里的 height:100%
+     * 就会按「行高」解析，把封面撑出卡片、标题顶到下一行的封面上。
+     * 统一按内容高度排布，行高不再反向影响卡片内部。
+     */
+    align-items: start;
 }
 
 .media-card {
     cursor: pointer;
     transition: transform 0.18s ease;
+    /* 标题是 nowrap，网格项的 min-width:auto 会让长标题把列撑宽、压到邻列 */
+    min-width: 0;
 }
 
 .media-card:hover {
@@ -680,6 +688,198 @@ img {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* ---------- 歌手卡片（圆形头像） ---------- */
+.artist-grid {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+}
+
+.artist-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+/*
+ * 与 .square-cover 同理：先给容器一个确定的正方形高度，
+ * 内部 Cover 的 width/height:100% 才有正确的参照，头像才会是正圆而不是椭圆。
+ */
+.artist-avatar {
+    width: 100%;
+    aspect-ratio: 1;
+    flex-shrink: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--hover-bg);
+}
+
+.media-card:hover .artist-avatar {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.artist-name {
+    width: 100%;
+    text-align: center;
+}
+
+/* 空态提示横跨整行，否则只能挤在第一个网格里 */
+.card-grid > .empty-hint {
+    grid-column: 1 / -1;
+}
+
+/* ---------- 音乐列表分页器 ---------- */
+.music-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 14px 2px 2px;
+    margin-top: 10px;
+    border-top: 1px solid var(--divider);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.music-pager-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.music-pager-count {
+    font-variant-numeric: tabular-nums;
+}
+
+/* 「共 N 首」与「每页」之间的小圆点 */
+.music-pager-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-placeholder);
+    flex-shrink: 0;
+}
+
+.music-pager-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: var(--text-tertiary);
+}
+
+.music-pager-select-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.music-pager-select {
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--divider);
+    outline: none;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    padding: 3px 20px 3px 8px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 0.15s ease;
+    text-align: center;
+}
+
+.music-pager-select:hover {
+    border-color: var(--text-placeholder);
+}
+
+/* 下拉箭头 */
+.music-pager-caret {
+    position: absolute;
+    right: 10px;
+    width: 5px;
+    height: 5px;
+    bottom: 7px;
+    border-right: 1.5px solid var(--text-tertiary);
+    border-bottom: 1.5px solid var(--text-tertiary);
+    transform: translateY(-2px) rotate(45deg);
+    pointer-events: none;
+}
+
+.music-pager-loading {
+    color: var(--text-tertiary);
+}
+
+.music-pager-nav {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.pager-btn {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition:
+        background 0.15s ease,
+        color 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.pager-btn:hover:not(:disabled):not(.active) {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.pager-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+/* 上一页 / 下一页：带描边，和页码按钮区分开 */
+.pager-btn.pager-step {
+    padding: 0 10px;
+    border-color: var(--divider);
+}
+
+.pager-btn.pager-step:hover:not(:disabled) {
+    border-color: var(--text-placeholder);
+}
+
+/* 当前页 */
+.pager-btn.pager-num.active,
+.pager-btn.pager-num.active:hover {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+    font-weight: 500;
+    cursor: default;
+}
+
+.pager-gap {
+    min-width: 22px;
+    text-align: center;
+    color: var(--text-placeholder);
+    font-size: 12px;
+    user-select: none;
+    cursor: default;
 }
 
 /* ---------- 播放条 ---------- */

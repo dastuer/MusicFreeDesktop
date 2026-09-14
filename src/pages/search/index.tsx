@@ -1,17 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import MusicList from "@/components/base/MusicList";
 import Cover from "@/components/base/Cover";
-import {
-    getSortedPluginsWithAbility,
-    getSortedSearchablePlugins,
-    pluginCall,
-    SerializedPlugin,
-} from "@/core/ipc";
+import { getSortedSearchablePlugins, pluginCall, SerializedPlugin } from "@/core/ipc";
+import { uniqueById } from "@/core/collections";
 import { navigate } from "@/core/router";
-import { TrackPlayerSingleton } from "@/core/trackPlayer";
+import { usePagedMusicList } from "@/hooks/usePagedMusicList";
 
 /**
  * 搜索页：音乐/歌单/专辑/歌手 四个 tab，可切换音源插件
+ *
+ * - 单曲：走 usePagedMusicList，按「每页 N 条」展示（默认 40，可切换），
+ *   翻到还没拉到的页时自动继续向音源要下一页；
+ * - 歌单/专辑/歌手：音源一次返回一屏卡片，不分页。
  */
 
 const searchTabs: { key: string; label: string }[] = [
@@ -20,6 +20,10 @@ const searchTabs: { key: string; label: string }[] = [
     { key: "album", label: "专辑" },
     { key: "artist", label: "歌手" },
 ];
+
+/** 每页条数偏好按列表分开记忆（与歌单详情各存一份） */
+const SEARCH_PAGE_SIZE_KEY = "pagedList.pageSize.searchMusic";
+const SEARCH_DEFAULT_PAGE_SIZE = 40;
 
 interface ISearchPageProps {
     query?: string;
@@ -30,14 +34,14 @@ interface ISearchPageProps {
 export default function SearchPage(props: ISearchPageProps) {
     const { query: initialQuery } = props;
     const [query, setQuery] = useState(initialQuery ?? "");
+    /** 已生效的搜索词：单曲分页按它重置，卡片网格按它判断空态 */
     const [searchedQuery, setSearchedQuery] = useState("");
     const [type, setType] = useState<string>(props.initialType ?? "music");
     const [plugin, setPlugin] = useState<SerializedPlugin | null>(null);
     const [plugins, setPlugins] = useState<SerializedPlugin[]>([]);
+    /** 歌单/专辑/歌手 的卡片结果 */
     const [results, setResults] = useState<any[]>([]);
-    const [page, setPage] = useState(1);
-    const [isEnd, setIsEnd] = useState(true);
-    const [loading, setLoading] = useState(false);
+    const [cardLoading, setCardLoading] = useState(false);
 
     useEffect(() => {
         getSortedSearchablePlugins().then((list: SerializedPlugin[]) => {
@@ -50,26 +54,52 @@ export default function SearchPage(props: ISearchPageProps) {
         });
     }, []);
 
-    const doSearch = async (q: string, searchType: string, searchPage: number, append: boolean) => {
-        if (!q.trim() || !plugin) {
-            return;
-        }
-        setLoading(true);
-        try {
-            const result = await pluginCall(plugin.hash, "search", q, searchPage, searchType);
-            const data = result?.data ?? [];
-            setResults((prev) => (append ? [...prev, ...data] : data));
-            setIsEnd(result?.isEnd ?? true);
-            setPage(searchPage);
-            setSearchedQuery(q);
-        } catch (e: any) {
-            if (!append) {
-                setResults([]);
+    const doCardSearch = useCallback(
+        async (q: string, searchType: string) => {
+            if (!q.trim() || !plugin) {
+                return;
             }
-            console.warn("[search]", e?.message);
-        }
-        setLoading(false);
-    };
+            setCardLoading(true);
+            try {
+                const result = await pluginCall(plugin.hash, "search", q, 1, searchType);
+                setResults(result?.data ?? []);
+            } catch (e: any) {
+                setResults([]);
+                console.warn("[search]", e?.message);
+            }
+            setCardLoading(false);
+        },
+        [plugin],
+    );
+
+    /** 单曲分页的数据源：音源的 page 是页码，每页条数由展示层决定 */
+    const fetchMusicPage = useCallback(
+        async (page: number) => {
+            // 只在「单曲」tab 发请求：其它 tab 下 hook 会重置，但不需要联网
+            if (type !== "music" || !searchedQuery.trim() || !plugin) {
+                return { items: [] as IMusic.IMusicItem[], isEnd: true };
+            }
+            const result = await pluginCall(
+                plugin.hash,
+                "search",
+                searchedQuery,
+                page,
+                "music",
+            );
+            return {
+                items: (result?.data ?? []) as IMusic.IMusicItem[],
+                isEnd: result?.isEnd ?? true,
+            };
+        },
+        [type, searchedQuery, plugin],
+    );
+
+    const musicList = usePagedMusicList<IMusic.IMusicItem>({
+        fetchPage: fetchMusicPage,
+        defaultPageSize: SEARCH_DEFAULT_PAGE_SIZE,
+        storageKey: SEARCH_PAGE_SIZE_KEY,
+        resetKey: `${searchedQuery}|${type}|${plugin?.hash ?? ""}|${props.refresh ?? 0}`,
+    });
 
     // 触发搜索：（关键词, 类型, 插件, refresh）任一变化即重新搜索
     const lastSearchRef = useRef("");
@@ -85,30 +115,53 @@ export default function SearchPage(props: ISearchPageProps) {
         lastSearchRef.current = sig;
         setQuery(q);
         setResults([]);
-        setIsEnd(true);
-        doSearch(q, type, 1, false);
-    }, [initialQuery, type, plugin?.hash, props.refresh]);
+        // 单曲列表由 usePagedMusicList 按 searchedQuery / type 重置，这里不用手动拉
+        setSearchedQuery(q);
+        if (type !== "music") {
+            doCardSearch(q, type);
+        }
+    }, [initialQuery, type, plugin?.hash, props.refresh, doCardSearch]);
 
     const renderResults = () => {
-        if (loading && !results.length) {
-            return <div className="loading-hint">搜索中…</div>;
+        if (!searchedQuery) {
+            return null;
         }
         if (type === "music") {
             return (
                 <MusicList
-                    musicList={results as IMusic.IMusicItem[]}
-                    isEnd={isEnd}
-                    loading={loading}
-                    onLoadMore={() => doSearch(searchedQuery, type, page + 1, true)}
+                    musicList={musicList.items}
+                    loading={musicList.loading}
+                    pagination={{
+                        currentPage: musicList.currentPage,
+                        totalPages: musicList.totalPages,
+                        pageSize: musicList.pageSize,
+                        pageSizeOptions: musicList.pageSizeOptions,
+                        hasMore: musicList.hasMore,
+                        stalled: musicList.stalled,
+                        loadingMore: musicList.loadingMore,
+                        onPageChange: musicList.goToPage,
+                        onPageSizeChange: musicList.changePageSize,
+                    }}
                 />
             );
         }
+
+        if (cardLoading && !results.length) {
+            return <div className="loading-hint">搜索中…</div>;
+        }
+
+        // 音源返回的卡片列表常带重复条目，先去重，顺带把 React key 变得稳定
+        const cards = uniqueById(results);
+        // 卡片 key：同一批结果里 id 可能缺失或重复，补上序号兜底
+        const cardKey = (item: any, index: number) =>
+            `${item.platform ?? ""}-${item.id ?? "x"}-${index}`;
+
         if (type === "sheet" || type === "album") {
             return (
                 <div className="card-grid">
-                    {results.map((item: any) => (
+                    {cards.map((item: any, index: number) => (
                         <div
-                            key={item.id}
+                            key={cardKey(item, index)}
                             className="media-card"
                             onClick={() =>
                                 item.platform !== undefined &&
@@ -120,11 +173,24 @@ export default function SearchPage(props: ISearchPageProps) {
                                 )
                             }
                         >
-                            <Cover src={item.artwork} size="100%" borderRadius={8} />
+                            {/*
+                             * 封面必须放在有确定高度的容器里。
+                             * `Cover` 的 size="100%" 会同时写上 width/height:100%，而网格项默认被拉伸到
+                             * 整行高度，height:100% 于是按「行高」解析 -> 封面被压成非正方的矩形，
+                             * 标题再往下排就溢出卡片、盖到下一行的封面上。
+                             */}
+                            <div className="square-cover">
+                                <Cover
+                                    src={item.artwork}
+                                    size="100%"
+                                    borderRadius={8}
+                                    style={{ width: "100%", height: "100%" }}
+                                />
+                            </div>
                             <div className="media-card-title">{item.title}</div>
                         </div>
                     ))}
-                    {!results.length && !loading && searchedQuery && (
+                    {!results.length && !cardLoading && (
                         <div className="empty-hint">没有找到相关内容</div>
                     )}
                 </div>
@@ -132,26 +198,26 @@ export default function SearchPage(props: ISearchPageProps) {
         }
         // artist
         return (
-            <div className="card-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))" }}>
-                {results.map((item: any) => (
+            <div className="card-grid artist-grid">
+                {cards.map((item: any, index: number) => (
                     <div
-                        key={item.id}
-                        className="media-card"
-                        style={{ textAlign: "center" }}
+                        key={cardKey(item, index)}
+                        className="media-card artist-card"
                         onClick={() => navigate("artistDetail", { artistItem: item })}
                     >
-                        <Cover
-                            src={item.avatar}
-                            size="100%"
-                            borderRadius="50%"
-                            style={{ aspectRatio: "1" }}
-                        />
-                        <div className="media-card-title" style={{ textAlign: "center" }}>
-                            {item.name}
+                        {/* 圆形头像同样需要确定的正方形高度，否则会被行高拉成椭圆 */}
+                        <div className="artist-avatar">
+                            <Cover
+                                src={item.avatar}
+                                size="100%"
+                                borderRadius="50%"
+                                style={{ width: "100%", height: "100%" }}
+                            />
                         </div>
+                        <div className="media-card-title artist-name">{item.name}</div>
                     </div>
                 ))}
-                {!results.length && !loading && searchedQuery && (
+                {!results.length && !cardLoading && (
                     <div className="empty-hint">没有找到相关内容</div>
                 )}
             </div>
@@ -171,10 +237,6 @@ export default function SearchPage(props: ISearchPageProps) {
                             const p = plugins.find((it) => it.hash === e.target.value);
                             setPlugin(p ?? null);
                             setResults([]);
-                            setIsEnd(true);
-                            if (searchedQuery) {
-                                setSearchedQuery("");
-                            }
                         }}
                     >
                         {plugins.map((p) => (
@@ -194,10 +256,6 @@ export default function SearchPage(props: ISearchPageProps) {
                         onClick={() => {
                             setType(tab.key);
                             setResults([]);
-                            setIsEnd(true);
-                            if (searchedQuery) {
-                                doSearch(searchedQuery, tab.key, 1, false);
-                            }
                         }}
                     >
                         {tab.label}

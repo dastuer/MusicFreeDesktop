@@ -15,12 +15,20 @@ import { showDownloadPanel } from "@/components/base/DownloadPanel";
 import { showPrompt } from "@/components/base/PromptDialog";
 import { showToast } from "@/components/base/Toast";
 import { navigate } from "@/core/router";
+import { usePagedMusicList } from "@/hooks/usePagedMusicList";
 
 /**
  * 歌单详情页：
- *  - 插件歌单（params.sheetItem）：getMusicSheetInfo 分页加载
+ *  - 插件歌单（params.sheetItem）：getMusicSheetInfo 按音源页码加载
  *  - 本地歌单 / 我喜欢的音乐（params.userSheetId）：主进程持久化，支持管理操作
+ *
+ * 列表按「每页 N 条」展示（默认 40，可在底部切换）。音源的 page 是页码不是条数，
+ * 凑不满一页时 usePagedMusicList 会自动继续拉下一页，对用户表现为普通的页码分页。
  */
+
+/** 每页条数偏好按列表分开记忆（与搜索页各存一份） */
+const SHEET_PAGE_SIZE_KEY = "pagedList.pageSize.sheetDetail";
+const SHEET_DEFAULT_PAGE_SIZE = 40;
 
 interface ISheetDetailPageProps {
     sheetItem?: IMusic.IMusicSheetItem;
@@ -31,109 +39,132 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
     const { sheetItem, userSheetId } = props;
     const [title, setTitle] = useState(sheetItem?.title ?? "歌单");
     const [artwork, setArtwork] = useState(sheetItem?.artwork ?? "");
-    const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
     const [description, setDescription] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [page, setPage] = useState(1);
-    const [isEnd, setIsEnd] = useState(true);
     const [pluginName, setPluginName] = useState("");
+    /**
+     * 音源声明的总曲目数（`sheetItem.worksNum`）。
+     * 插件协议的**搜索**返回只有 `{isEnd, data}`，拿不到总数；但歌单详情的
+     * `sheetItem` 带 `worksNum`（实测值：115），所以歌单能一进来就显示真实总数和总页数。
+     * 有些插件不填这个字段，那时退回显示「已加载 N 首」。
+     */
+    const [worksNum, setWorksNum] = useState<number | undefined>(undefined);
 
     const isUserSheet = !!userSheetId;
     const isLikesSheet = userSheetId === LIKES_SHEET_ID;
 
-    const loadUserSheet = useCallback(async () => {
-        if (!userSheetId) {
+    /** 本地歌单的头部信息（标题 / 封面 / 描述） */
+    const applyUserSheet = useCallback((sheet: any) => {
+        if (!sheet) {
             return;
         }
-        const sheet = await getSheetById(userSheetId);
-        if (sheet) {
-            setTitle(sheet.title);
-            setMusicList(sheet.musicList);
-            // 歌单封面取第一首歌的封面
-            setArtwork(sheet.musicList[0]?.artwork ?? "");
-            setDescription(
-                sheet.id === LIKES_SHEET_ID
-                    ? "红心喜欢的歌曲都会收藏在这里"
-                    : `创建于 ${new Date(sheet.createAt).toLocaleDateString("zh-CN")}`,
-            );
-        }
-    }, [userSheetId]);
+        setTitle(sheet.title);
+        // 歌单封面取第一首歌的封面
+        setArtwork(sheet.musicList?.[0]?.artwork ?? "");
+        // 本地歌单没有音源声明的总数，本来就一次性全量加载
+        setWorksNum(undefined);
+        setDescription(
+            sheet.id === LIKES_SHEET_ID
+                ? "红心喜欢的歌曲都会收藏在这里"
+                : `创建于 ${new Date(sheet.createAt).toLocaleDateString("zh-CN")}`,
+        );
+    }, []);
 
-    useEffect(() => {
-        (async () => {
+    const fetchPage = useCallback(
+        async (page: number) => {
+            // 本地歌单是一次性全量数据，只有第 1 页
             if (userSheetId) {
-                setIsEnd(true);
-                await loadUserSheet();
-                return;
-            }
-            if (!sheetItem) {
-                return;
-            }
-            setLoading(true);
-            const plugin = await getPluginByMedia(sheetItem);
-            if (plugin?.supportedMethods.includes("getMusicSheetInfo")) {
-                setPluginName(plugin.name);
-                try {
-                    const result = await pluginCall(
-                        plugin.hash,
-                        "getMusicSheetInfo",
-                        sheetItem,
-                        1,
-                    );
-                    setTitle(result?.sheetItem?.title ?? sheetItem.title);
-                    setArtwork(result?.sheetItem?.artwork ?? sheetItem.artwork);
-                    setDescription(result?.sheetItem?.description ?? "");
-                    setMusicList((result?.musicList ?? []) as IMusic.IMusicItem[]);
-                    setIsEnd(result?.isEnd ?? true);
-                    setPage(1);
-                } catch (e: any) {
-                    showToast(`加载歌单失败：${e?.message ?? e}`);
+                const sheet = await getSheetById(userSheetId);
+                if (page === 1) {
+                    applyUserSheet(sheet);
                 }
+                return {
+                    items: (sheet?.musicList ?? []) as IMusic.IMusicItem[],
+                    isEnd: true,
+                };
             }
-            setLoading(false);
-        })();
-    }, [sheetItem?.id, userSheetId]);
 
-    // 用户歌单：定时刷新（在别处喜欢/收藏的歌能自动出现）
-    useEffect(() => {
-        if (!userSheetId) {
-            return;
-        }
-        const timer = setInterval(loadUserSheet, 3000);
-        return () => clearInterval(timer);
-    }, [userSheetId, loadUserSheet]);
+            if (!sheetItem) {
+                return { items: [] as IMusic.IMusicItem[], isEnd: true };
+            }
 
-    const loadMore = async () => {
-        if (!sheetItem || loading) {
-            return;
-        }
-        setLoading(true);
-        const plugin = await getPluginByMedia(sheetItem);
-        if (plugin) {
+            const plugin = await getPluginByMedia(sheetItem);
+            if (!plugin?.supportedMethods.includes("getMusicSheetInfo")) {
+                return { items: [] as IMusic.IMusicItem[], isEnd: true };
+            }
+            setPluginName(plugin.name);
+
             try {
                 const result = await pluginCall(
                     plugin.hash,
                     "getMusicSheetInfo",
                     sheetItem,
-                    page + 1,
+                    page,
                 );
-                setMusicList((prev) => [
-                    ...prev,
-                    ...((result?.musicList ?? []) as IMusic.IMusicItem[]),
-                ]);
-                setIsEnd(result?.isEnd ?? true);
-                setPage((p) => p + 1);
-            } catch {
-                setIsEnd(true);
+                if (page === 1) {
+                    setTitle(result?.sheetItem?.title ?? sheetItem.title);
+                    setArtwork(result?.sheetItem?.artwork ?? sheetItem.artwork);
+                    setDescription(result?.sheetItem?.description ?? "");
+                    const declared = Number(result?.sheetItem?.worksNum);
+                    setWorksNum(Number.isFinite(declared) && declared > 0 ? declared : undefined);
+                }
+                return {
+                    items: (result?.musicList ?? []) as IMusic.IMusicItem[],
+                    isEnd: result?.isEnd ?? true,
+                };
+            } catch (e: any) {
+                // 抛出去即可：分页层会保留「未到底」，用户可以再点「下一页」重试
+                showToast(`加载歌单失败：${e?.message ?? e}`);
+                throw e;
             }
+        },
+        [applyUserSheet, sheetItem, userSheetId],
+    );
+
+    const list = usePagedMusicList<IMusic.IMusicItem>({
+        fetchPage,
+        defaultPageSize: SHEET_DEFAULT_PAGE_SIZE,
+        storageKey: SHEET_PAGE_SIZE_KEY,
+        resetKey: `${sheetItem?.id ?? ""}|${userSheetId ?? ""}`,
+        expectedTotal: worksNum,
+    });
+    const { replaceAll } = list;
+
+    // 用户歌单：定时刷新（在别处喜欢/收藏的歌能自动出现）。
+    // 用 replaceAll 就地替换，避免把用户从第 N 页踢回第 1 页。
+    useEffect(() => {
+        if (!userSheetId) {
+            return;
         }
-        setLoading(false);
-    };
+        const timer = setInterval(async () => {
+            const sheet = await getSheetById(userSheetId);
+            if (!sheet) {
+                return;
+            }
+            applyUserSheet(sheet);
+            replaceAll(sheet.musicList);
+        }, 3000);
+        return () => clearInterval(timer);
+    }, [userSheetId, applyUserSheet, replaceAll]);
 
     const handleRemove = async (musicItem: IMusic.IMusicItem) => {
         await removeMusicFromSheet(userSheetId!, musicItem);
         showToast("已从歌单移除");
-        await loadUserSheet();
+        const sheet = await getSheetById(userSheetId!);
+        if (sheet) {
+            applyUserSheet(sheet);
+            replaceAll(sheet.musicList);
+        }
+    };
+
+    const refreshUserSheet = async () => {
+        if (!userSheetId) {
+            return;
+        }
+        const sheet = await getSheetById(userSheetId);
+        if (sheet) {
+            applyUserSheet(sheet);
+            replaceAll(sheet.musicList);
+        }
     };
 
     const handleRename = () => {
@@ -161,17 +192,24 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 artwork={artwork}
                 title={title}
                 description={description}
-                musicList={musicList}
+                musicList={list.items}
                 meta={[
                     pluginName ? `来源：${pluginName}` : "",
-                    musicList.length ? `共 ${musicList.length} 首` : "",
+                    // 有音源声明的总数就用它；否则只在确实是最后一页时才敢写「共」
+                    worksNum
+                        ? `共 ${worksNum} 首`
+                        : list.items.length
+                          ? list.isEnd
+                              ? `共 ${list.items.length} 首`
+                              : `已加载 ${list.items.length} 首`
+                          : "",
                 ].filter(Boolean)}
                 extraActions={
                     <>
-                        {musicList.length > 0 && (
+                        {list.items.length > 0 && (
                             <button
                                 className="btn-ghost"
-                                onClick={() => showDownloadPanel(musicList)}
+                                onClick={() => showDownloadPanel(list.items)}
                             >
                                 <Icon name="download" size={14} />
                                 下载全部
@@ -193,12 +231,22 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 }
             />
             <MusicList
-                musicList={musicList}
-                loading={loading}
-                isEnd={isEnd}
-                onLoadMore={loadMore}
+                musicList={list.items}
+                loading={list.loading}
                 onRemove={isUserSheet ? handleRemove : undefined}
-                onMusicChanged={isUserSheet ? loadUserSheet : undefined}
+                onMusicChanged={isUserSheet ? refreshUserSheet : undefined}
+                pagination={{
+                    currentPage: list.currentPage,
+                    totalPages: list.totalPages,
+                    pageSize: list.pageSize,
+                    pageSizeOptions: list.pageSizeOptions,
+                    hasMore: list.hasMore,
+                    stalled: list.stalled,
+                    loadingMore: list.loadingMore,
+                    expectedTotal: worksNum,
+                    onPageChange: list.goToPage,
+                    onPageSizeChange: list.changePageSize,
+                }}
             />
         </div>
     );

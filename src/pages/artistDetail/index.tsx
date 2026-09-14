@@ -124,13 +124,21 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                 />
             ) : (
                 <div className="card-grid">
-                    {albums.map((album) => (
+                    {albums.map((album, index) => (
                         <div
-                            key={album.id}
+                            key={`${(album as any).platform ?? ""}-${album.id ?? "x"}-${index}`}
                             className="media-card"
                             onClick={() => navigate("albumDetail", { albumItem: album })}
                         >
-                            <Cover src={album.artwork} size="100%" borderRadius={8} />
+                            {/* 封面需要有确定高度的容器，否则 size="100%" 的 height 会按网格行高解析 */}
+                            <div className="square-cover">
+                                <Cover
+                                    src={album.artwork}
+                                    size="100%"
+                                    borderRadius={8}
+                                    style={{ width: "100%", height: "100%" }}
+                                />
+                            </div>
                             <div className="media-card-title">{album.title}</div>
                             {album.date && (
                                 <div className="media-card-subtitle">{album.date}</div>

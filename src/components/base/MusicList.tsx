@@ -45,6 +45,40 @@ function musicKey(musicItem: IMusic.IMusicItem) {
     return `${musicItem.platform}-${musicItem.id}`;
 }
 
+/** 分页器里的一项：页码 / 中间省略 / 末尾还有更多 */
+type PageItem = number | "gap" | "more";
+
+/**
+ * 页码列表：页数不多就全列出来，多则只给「首页 + 当前页附近 + 末页」。
+ * `hasMore` 表示音源还有更多页（总数未知时用），末尾补一个省略号。
+ */
+function buildPageItems(current: number, total: number, hasMore: boolean): PageItem[] {
+    const items: PageItem[] = [];
+    if (total <= 7) {
+        for (let p = 1; p <= total; p++) {
+            items.push(p);
+        }
+    } else {
+        items.push(1);
+        const from = Math.max(2, current - 1);
+        const to = Math.min(total - 1, current + 1);
+        if (from > 2) {
+            items.push("gap");
+        }
+        for (let p = from; p <= to; p++) {
+            items.push(p);
+        }
+        if (to < total - 1) {
+            items.push("gap");
+        }
+        items.push(total);
+    }
+    if (hasMore) {
+        items.push("more");
+    }
+    return items;
+}
+
 interface IMusicListProps {
     musicList: IMusic.IMusicItem[];
     /** 是否显示封面列（网格行样式） */
@@ -62,6 +96,31 @@ interface IMusicListProps {
     onRemove?: (musicItem: IMusic.IMusicItem) => void;
     /** 喜欢/移除等操作后的回调（页面刷新用） */
     onMusicChanged?: () => void;
+    /**
+     * 传入即启用「每页 N 条」分页模式：只渲染当前页，底部换成页码分页器。
+     * 不传时保持老行为（首屏 150 行的分片渲染 + 手动「加载更多」）。
+     */
+    pagination?: IMusicListPagination;
+}
+
+export interface IMusicListPagination {
+    currentPage: number;
+    totalPages: number;
+    pageSize: number;
+    pageSizeOptions: number[];
+    /** 音源还有更多，下一页可能还要联网拉 */
+    hasMore: boolean;
+    /** 只是拉不到新数据而停下（不是音源说没有），此时不能宣称「共 N 首」 */
+    stalled?: boolean;
+    loadingMore: boolean;
+    /**
+     * 音源声明的总条数（歌单侧是 `sheetItem.worksNum`）。
+     * 插件协议里搜索返回**没有**总数字段，此时传 undefined：
+     * 页数显示成 `1 / 2+`（+ 表示后面还有），条数显示成「已加载 N 首」而不是假的「共 N 首」。
+     */
+    expectedTotal?: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (size: number) => void;
 }
 
 export default function MusicList(props: IMusicListProps) {
@@ -75,6 +134,7 @@ export default function MusicList(props: IMusicListProps) {
         localMode = false,
         onRemove,
         onMusicChanged,
+        pagination,
     } = props;
     const currentMusic = useCurrentMusic();
     const likesVersion = useAtomValue(likesVersionAtom);
@@ -119,6 +179,16 @@ export default function MusicList(props: IMusicListProps) {
 
     const visibleList =
         musicList.length > visibleCount ? musicList.slice(0, visibleCount) : musicList;
+
+    /**
+     * 分页模式：只把当前页交给渲染，序号仍按全量列表连续编号。
+     * 此时不走 visibleCount 分片（一页最多 200 行，不需要再切）。
+     */
+    const pageStart = pagination ? (pagination.currentPage - 1) * pagination.pageSize : 0;
+    const rowList = pagination
+        ? musicList.slice(pageStart, pageStart + pagination.pageSize)
+        : visibleList;
+    const rowOffset = pagination ? pageStart : 0;
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -177,11 +247,29 @@ export default function MusicList(props: IMusicListProps) {
         });
     };
 
+    /**
+     * 「全选」的作用范围：分页模式下只作用于当前页。
+     * 否则在第 1 页点全选会连带把后面几十页没看见的歌一起选中，批量下载/删除容易出事。
+     * 手选不受影响——已选集合是跨页保留的。
+     */
+    const selectableList = pagination ? rowList : musicList;
     const allSelected =
-        musicList.length > 0 && musicList.every((it) => selectedKeys.has(musicKey(it)));
+        selectableList.length > 0 &&
+        selectableList.every((it) => selectedKeys.has(musicKey(it)));
 
     const toggleSelectAll = () => {
-        setSelectedKeys(allSelected ? new Set() : new Set(musicList.map(musicKey)));
+        setSelectedKeys((prev) => {
+            const next = new Set(prev);
+            selectableList.forEach((it) => {
+                const k = musicKey(it);
+                if (allSelected) {
+                    next.delete(k);
+                } else {
+                    next.add(k);
+                }
+            });
+            return next;
+        });
     };
 
     const selectedItems = useMemo(
@@ -394,7 +482,15 @@ export default function MusicList(props: IMusicListProps) {
                 {selectable && selectMode && (
                     <div
                         className={`music-row-check header-check${allSelected ? " checked" : ""}`}
-                        title={allSelected ? "取消全选" : "全选"}
+                        title={
+                            pagination
+                                ? allSelected
+                                    ? "取消全选本页"
+                                    : "全选本页"
+                                : allSelected
+                                  ? "取消全选"
+                                  : "全选"
+                        }
                         onClick={toggleSelectAll}
                     >
                         {allSelected && <Icon name="check" size={11} />}
@@ -406,14 +502,15 @@ export default function MusicList(props: IMusicListProps) {
                 <div>专辑</div>
                 <div style={{ textAlign: "right" }}>操作 / 时长</div>
             </div>
-            {visibleList.map((musicItem, index) => {
+            {rowList.map((musicItem, index) => {
                 const playing = TrackPlayerSingleton.isCurrentMusic(musicItem);
-                const k = keyOf(musicItem, index);
+                const rowIndex = rowOffset + index;
+                const k = keyOf(musicItem, rowIndex);
                 const checked = selectMode && selectedKeys.has(k);
                 const liked = likedKeys.has(k);
                 return (
                     <div
-                        key={`${k}-${index}`}
+                        key={`${k}-${rowIndex}`}
                         className={`music-row${playing ? " playing" : ""}`}
                         onDoubleClick={() => TrackPlayerSingleton.play(musicItem, true)}
                         onClick={() => TrackPlayerSingleton.play(musicItem)}
@@ -434,7 +531,7 @@ export default function MusicList(props: IMusicListProps) {
                             {playing ? (
                                 <Icon name="musicNote" size={14} style={{ color: "var(--primary-color)" }} />
                             ) : (
-                                index + 1
+                                rowIndex + 1
                             )}
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -492,17 +589,118 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 );
             })}
-            {visibleCount < musicList.length && (
+            {!pagination && visibleCount < musicList.length && (
                 <div ref={sentinelRef} className="music-list-sentinel" />
             )}
-            {loading && <div className="loading-hint">加载中…</div>}
-            {!loading && !isEnd && onLoadMore && (
+            {!pagination && loading && <div className="loading-hint">加载中…</div>}
+            {!pagination && !loading && !isEnd && onLoadMore && (
                 <div
                     className="loading-hint"
                     style={{ cursor: "pointer" }}
                     onClick={onLoadMore}
                 >
                     加载更多
+                </div>
+            )}
+            {pagination && musicList.length > 0 && (
+                <div className="music-pager">
+                    <div className="music-pager-info">
+                        <span className="music-pager-count">
+                            {pagination.expectedTotal && pagination.expectedTotal > 0
+                                ? `共 ${pagination.expectedTotal} 首`
+                                : pagination.hasMore || pagination.stalled
+                                  ? // 还有更多、或只是拉不动了：手上这些不一定是全部
+                                    `已加载 ${musicList.length} 首`
+                                  : `共 ${musicList.length} 首`}
+                        </span>
+                        <span className="music-pager-dot" />
+                        <label className="music-pager-size">
+                            <span>每页</span>
+                            {/* appearance:none 之后原生箭头会消失，自己补一个 */}
+                            <span className="music-pager-select-wrap">
+                                <select
+                                    className="music-pager-select"
+                                    value={pagination.pageSize}
+                                    onChange={(e) =>
+                                        pagination.onPageSizeChange(Number(e.target.value))
+                                    }
+                                >
+                                    {pagination.pageSizeOptions.map((n) => (
+                                        <option key={n} value={n} style={{ color: "#333" }}>
+                                            {n}
+                                        </option>
+                                    ))}
+                                </select>
+                                <span className="music-pager-caret" aria-hidden />
+                            </span>
+                            <span>条</span>
+                        </label>
+                        {pagination.loadingMore && (
+                            <span className="music-pager-loading">加载中…</span>
+                        )}
+                    </div>
+                    <div className="music-pager-nav">
+                        <button
+                            className="pager-btn pager-step"
+                            disabled={pagination.currentPage <= 1 || pagination.loadingMore}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                pagination.onPageChange(pagination.currentPage - 1);
+                            }}
+                        >
+                            <Icon name="back" size={12} />
+                            上一页
+                        </button>
+                        {buildPageItems(
+                            pagination.currentPage,
+                            pagination.totalPages,
+                            pagination.hasMore &&
+                                (!pagination.expectedTotal || pagination.expectedTotal <= 0),
+                        ).map((item, i) =>
+                            item === "gap" ? (
+                                <span className="pager-gap" key={`gap-${i}`}>
+                                    …
+                                </span>
+                            ) : item === "more" ? (
+                                <span
+                                    className="pager-gap"
+                                    key="more"
+                                    title="还有更多，点「下一页」继续加载"
+                                >
+                                    …
+                                </span>
+                            ) : (
+                                <button
+                                    key={item}
+                                    className={`pager-btn pager-num${
+                                        item === pagination.currentPage ? " active" : ""
+                                    }`}
+                                    disabled={pagination.loadingMore}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        pagination.onPageChange(item);
+                                    }}
+                                >
+                                    {item}
+                                </button>
+                            ),
+                        )}
+                        <button
+                            className="pager-btn pager-step"
+                            disabled={
+                                pagination.loadingMore ||
+                                (pagination.currentPage >= pagination.totalPages &&
+                                    !pagination.hasMore)
+                            }
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                pagination.onPageChange(pagination.currentPage + 1);
+                            }}
+                        >
+                            下一页
+                            <Icon name="forward" size={12} />
+                        </button>
+                    </div>
                 </div>
             )}
             {!loading && !musicList.length && (
@@ -514,7 +712,13 @@ export default function MusicList(props: IMusicListProps) {
                         已选 {selectedKeys.size} 首
                     </span>
                     <button className="btn-ghost" onClick={toggleSelectAll}>
-                        {allSelected ? "取消全选" : "全选"}
+                        {allSelected
+                            ? pagination
+                                ? "取消全选本页"
+                                : "取消全选"
+                            : pagination
+                              ? "全选本页"
+                              : "全选"}
                     </button>
                     {localMode ? (
                         <button className="btn-ghost danger" onClick={() => deleteLocalMusic(selectedItems)}>
