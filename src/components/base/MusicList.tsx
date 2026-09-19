@@ -304,6 +304,17 @@ export default function MusicList(props: IMusicListProps) {
         onMusicChanged?.();
     };
 
+    /** 多选批量追加到当前播放列表（TrackPlayer.add 支持数组，内部按 platform+id 去重） */
+    const addSelectedToPlayList = () => {
+        if (!selectedItems.length) {
+            showToast("请先选择歌曲");
+            return;
+        }
+        TrackPlayerSingleton.add(selectedItems);
+        showToast(`已添加 ${selectedItems.length} 首歌曲到播放列表`);
+        clearSelection();
+    };
+
     const openInFinder = (musicItem: IMusic.IMusicItem) => {
         if (!musicItem.localPath) {
             showToast("该歌曲没有本地文件");
@@ -738,6 +749,10 @@ export default function MusicList(props: IMusicListProps) {
                     <button className="btn-ghost" onClick={() => likeSelected(false)}>
                         <Icon name="heart" size={14} />
                         取消收藏
+                    </button>
+                    <button className="btn-ghost" onClick={addSelectedToPlayList}>
+                        <Icon name="plus" size={14} />
+                        添加到播放列表
                     </button>
                     <button className="btn-ghost" onClick={clearSelection}>
                         <Icon name="close" size={13} />

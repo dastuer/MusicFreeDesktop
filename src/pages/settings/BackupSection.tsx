@@ -27,8 +27,8 @@ import {
  * 交互参考 MusicFree 移动端：恢复模式 + 本地备份/恢复 + URL 恢复 + WebDAV。
  * 桌面端差异：
  * - 本地备份/恢复走系统保存、打开对话框，不再需要自己找文件夹；
- * - 备份内容除歌单、音源外，还包含播放历史、本地音乐索引与界面偏好，
- *   但**不含** WebDAV 密码和下载任务；
+ * - 备份内容为歌单、音源、本地音乐索引与界面偏好，
+ *   但**不含**最近播放、WebDAV 密码和下载任务；
  * - 每个恢复动作都先弹原生确认框，写明当前恢复模式会做什么。
  */
 
@@ -46,7 +46,6 @@ function formatTime(ts: number | null): string {
 export default function BackupSection() {
     const [status, setStatus] = useState<IBackupStatus | null>(null);
     const [mode, setMode] = useState<ResumeMode>(getResumeMode());
-    const [includeHistory, setIncludeHistory] = useState(true);
     const [includeLocalMusic, setIncludeLocalMusic] = useState(true);
     const [busy, setBusy] = useState<string | null>(null);
 
@@ -97,7 +96,7 @@ export default function BackupSection() {
         }
     };
 
-    const collectOptions = { includeHistory, includeLocalMusic };
+    const collectOptions = { includeLocalMusic };
 
     const backupToLocal = () =>
         run("backup-local", async () => {
@@ -194,8 +193,7 @@ export default function BackupSection() {
                         </div>
                         <div className="cache-calc-hint">
                             {counts
-                                ? `${counts.songs} 首歌曲 · 历史 ${counts.history} 条 · ` +
-                                  `本地音乐 ${counts.localMusic} 首`
+                                ? `${counts.songs} 首歌曲 · 本地音乐 ${counts.localMusic} 首`
                                 : ""}
                         </div>
                         <div className="cache-calc-hint">
@@ -228,14 +226,6 @@ export default function BackupSection() {
                 </div>
 
                 <div className="backup-options">
-                    <label className="backup-check">
-                        <input
-                            type="checkbox"
-                            checked={includeHistory}
-                            onChange={(e) => setIncludeHistory(e.target.checked)}
-                        />
-                        包含播放历史
-                    </label>
                     <label className="backup-check">
                         <input
                             type="checkbox"
@@ -423,10 +413,10 @@ export default function BackupSection() {
 
             <div className="backup-note">
                 备份内容：歌单（含「我喜欢的音乐」）、音源插件及其用户变量、界面偏好
-                {includeHistory ? "、播放历史" : ""}
                 {includeLocalMusic ? "、本地音乐索引" : ""}。
                 <br />
-                不含：下载任务、已缓存的音频与封面、WebDAV 密码。本地音乐的音频文件不在备份内，
+                不含：最近播放（历史不参与备份，恢复也不会改动本机历史）、下载任务、
+                已缓存的音频与封面、WebDAV 密码。本地音乐的音频文件不在备份内，
                 恢复后如果文件换了位置需要重新扫描。
             </div>
         </div>

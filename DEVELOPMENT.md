@@ -100,12 +100,13 @@ if (process.env.ELECTRON_START_URL) {
 
 `package.json` 的 `build` 字段已配置 electron-builder：
 
-- 产物目录 `release/`
-- 只打 macOS arm64 的 dmg
-- `mac.identity: null` → **跳过代码签名**，本机自用可跑，分发给他人会被 Gatekeeper 拦截
+- 产物目录 `release/`（Windows 另见下面的 `release-win/`）
+- macOS：打 arm64 的 dmg；Windows：打 x64 的 nsis 安装包
+- `mac.identity: null` → **跳过代码签名**，本机自用可跑，分发给他人会被 Gatekeeper 拦截（Windows 侧同理，未配证书）
 
 ```bash
-npm run dist      # 产出 release/MusicFreeDesktop-1.0.0-arm64.dmg
+npm run dist      # macOS：产出 release/MusicFreeDesktop-1.0.0-arm64.dmg
+npm run dist:win  # Windows：产出 release-win/MusicFreeDesktop-Setup-1.0.0.exe
 ```
 
 ### 重装自测（构建 → 覆盖安装 → 启动）
@@ -143,6 +144,32 @@ npm run dist 2>&1 | grep -ciE " error" && rm -rf /Applications/xxx.app && cp -R 
 | 漏判报错 | 模式 `" error"` **带前导空格**，行首的 `ERROR: ...` 不匹配 | 真实报错被漏掉 |
 
 正确做法是看命令自己的退出码（`set -o pipefail` 后用管道整体退出码，或 `PIPESTATUS[0]`），要留日志用 `tee` 而不是把日志丢给 `grep`。
+
+### Windows 打包与安装（NSIS）
+
+`npm run reinstall` 是 macOS 专用（`osascript` + `/Applications` + `ditto`），Windows 上走 NSIS：
+
+```powershell
+$env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm run dist:win     # 产出 release-win\MusicFreeDesktop-Setup-1.0.0.exe
+```
+
+双击安装包即可完成安装（**免管理员**），装到 `%LOCALAPPDATA%\Programs\MusicFreeDesktop`，并自动创建桌面与开始菜单快捷方式；卸载走同目录的 `Uninstall MusicFreeDesktop.exe`，`deleteAppDataOnUninstall: false` 保证卸载不删用户数据。
+
+`nsis` 配置的几个选择：
+
+| 配置 | 值 | 原因 |
+| --- | --- | --- |
+| `perMachine` | `false` | 装到用户目录，不需要 UAC；本项目的开发会话也没有管理员权限，装到 `Program Files` 无法覆盖 |
+| `oneClick` | `false` + `allowToChangeInstallationDirectory` | 给一个可选安装路径的向导，比静默安装更好排查 |
+| `shortcutName` | `MusicFree` | 与窗口标题一致，不用包名 `MusicFreeDesktop` |
+| `artifactName` | `MusicFreeDesktop-Setup-${version}.exe` | 与 mac 的 dmg 命名风格一致 |
+
+> **为什么 Windows 产物在 `release-win/` 而不是 `release/`**：`release` 目录里曾出现 `app.asar` 被进程长期占用，`electron-builder` 删旧产物时报 `EBUSY: unlink`（连目录改名都是"访问被拒绝"）。既然 `build.files` 是白名单，输出目录换到哪都不影响内容，就单独给了 Windows 一个目录。`release/` 仍是 macOS 的产物目录。
+>
+> 另外两条踩过的坑：**打包时不要同时去读产物目录里的 `app.asar`**（哈希、扫描都会把文件占住，直接让打包 EBUSY 失败）；`electron-builder` 的短参 `-c.directories.output=xxx` 会被当配置文件路径解析，必须写全 `--config.directories.output=xxx`。
+
+> 本机另有一份历史遗留的 `C:\Program Files\MusicFreeDesktop`（早期手工复制的安装，当时的开发会话没有管理员权限写不进去）。它与 NSIS 装的那份**共用** `%APPDATA%\musicfree-desktop\store.json`，**不要同时运行**；需要更新它时用 `.workbuddy\update-program-files.ps1`（自提权）。
 
 ---
 
@@ -570,10 +597,11 @@ const result = await tryPluginMethod(plugins, "getTopLists"); // 依次尝试，
 
 | 环节 | 放在哪 | 原因 |
 | --- | --- | --- |
-| 歌单 / 播放历史 / 本地音乐索引 / 应用配置 | 主进程 | 都在 `store.json`，渲染进程看不见 |
+| 歌单 / 本地音乐索引 / 应用配置 | 主进程 | 都在 `store.json`，渲染进程看不见 |
 | 插件（`srcUrl` / 版本 / 启用状态 / 顺序 / 用户变量） | 主进程 | `pluginHost` 独占插件文件与 `plugin.meta` |
 | 界面偏好（主题、音量、播放列表、默认音源、`pageSource.*`） | 渲染进程 | 只在 localStorage，主进程读不到 |
 | 本地文件读写、URL 拉取、WebDAV | 主进程 | 渲染进程是 `file://` 源，直连会被 CORS 挡；且密码不必离开主进程 |
+| 最近播放 `musicHistory` | **不参与** | 单机使用痕迹，跨设备同步无意义 |
 
 **备份文件结构**（可读 JSON，便于人工检查与跨端搬运）：
 
@@ -583,7 +611,7 @@ const result = await tryPluginMethod(plugins, "getTopLists"); // 依次尝试，
   "createdAt": 1690000000000,
   "musicSheets": [{ "id", "title", "createAt", "musicList": [...] }],
   "plugins": [{ "platform", "srcUrl", "version", "enabled", "order", "userVariables", "code"? }],
-  "musicHistory": [...], "localMusic": [...],
+  "localMusic": [...],
   "appConfig": { "download.dir": "...", "mediaCache.limit": 2147483648 },
   "preferences": { "theme": "dark", "volume": "0.5", "pageSource.home": "..." }
 }
@@ -595,7 +623,7 @@ const result = await tryPluginMethod(plugins, "getTopLists"); // 依次尝试，
 | --- | --- |
 | `append` | 同 id 歌单把备份里的歌补进去（按 `platform+id` 去重），不删本机已有的 |
 | `overwrite-default` | 只有「我喜欢的音乐」（固定 id `my-likes`）被整体替换，其余按追加处理 |
-| `overwrite` | 丢弃本机全部歌单与历史，完全使用备份内容 |
+| `overwrite` | 丢弃本机全部歌单，完全使用备份内容（**不动**本机历史） |
 
 **几个刻意的设计**：
 
@@ -604,6 +632,8 @@ const result = await tryPluginMethod(plugins, "getTopLists"); // 依次尝试，
 - **版本不低于备份就跳过下载**：用 `compare-versions`，插件版本号常写 `dev` 或空串，比较失败时退化为字符串比较，不抛异常。
 - **不信任备份文件**：`parsePayload` 逐字段校验，坏 JSON / 无法识别的结构直接拒绝且**不写任何数据**；备份常从别处拷来，拿坏数据覆盖 `store.json` 会让人丢光数据。
 - **密码不进备份文件**：`backup.webdav` 只在 `configStore` 里，`preferences` 白名单也刻意排除了 `backup.*`。
+- **最近播放不进备份、也不被恢复**：`collect()` 不写 `musicHistory`，`apply()` 里也没有写回它的分支——连 `overwrite` 模式都不清空本机历史。老备份文件里的 `musicHistory` 只是被忽略（`parsePayload` 的 `known` 列表仍保留这个键，否则老文件会被判为「无法识别」直接拒收）。
+- **跨设备恢复时忽略本机不存在的本地音乐**：`filterAvailableLocal()` 在歌单合并与本地音乐合并**之前**过滤掉 `localPath` 在本机不存在的条目（`fs.existsSync` 判定），避免恢复出一堆点不开的死条目；`songsAdded` 统计因此不含被丢弃的条目，被忽略的条数通过 `IResumeSummary.warnings` 告知用户。
 - **恢复前弹原生确认框**：`dialog.showMessageBox` 写明当前模式会做什么、备份里有多少内容，`defaultId` 是「取消」。
 - **`DEFAULT_SHEET_ID = "my-likes"` 在主进程重复声明了一份**：主进程不能 import 渲染进程模块（缺 `@/` 别名、会拖进 React），改 `src/core/musicSheet.ts` 的 `LIKES_SHEET_ID` 时必须同步这里。
 - 恢复后会 `invalidatePluginCache()` + 自增 `likesVersionAtom` 刷新界面；主题与音量立即生效，播放列表等偏好需重启。

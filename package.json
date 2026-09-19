@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "MusicFree macOS 桌面版 - 参考网易云桌面端交互重构",
+  "author": "huah",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
@@ -17,6 +18,7 @@
     "start": "electron .",
     "dist": "npm run build && electron-builder",
     "dist:dir": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win --config.directories.output=release-win",
     "reinstall": "bash scripts/reinstall.sh",
     "reinstall:dmg": "bash scripts/reinstall.sh --with-dmg"
   },
@@ -42,6 +44,26 @@
           "arch": ["arm64"]
         }
       ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MusicFree",
+      "artifactName": "MusicFreeDesktop-Setup-${version}.exe",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
     }
   },
   "devDependencies": {

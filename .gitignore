@@ -2,6 +2,8 @@ node_modules/
 dist-electron/
 dist-renderer/
 release/
+release-win/
+release2/
 build/icon.iconset
 .idea/
 .DS_Store

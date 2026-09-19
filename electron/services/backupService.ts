@@ -10,8 +10,10 @@ import pluginHost, { IBackupPlugin, IPluginResumeResult } from "./pluginHost";
  * 备份与恢复（主进程侧）
  *
  * 设计要点：
- * - **数据只由主进程组装**：歌单、播放历史、本地音乐索引、插件元信息都在 store.json /
+ * - **数据只由主进程组装**：歌单、本地音乐索引、插件元信息都在 store.json /
  *   plugins 目录里，渲染进程看不到。渲染进程只补上自己的 localStorage 偏好。
+ * - **最近播放（musicHistory）不参与备份与恢复**：那是单机使用痕迹（且旧端备份里常带着
+ *   庞大的历史列表），跨设备同步没有意义。恢复时也不会清空/覆盖本机的历史。
  * - **WebDAV 与 URL 都在主进程发起**：渲染进程处于 `file://` 源下，跨域请求会被 CORS 拦掉；
  *   主进程的 axios 没有这个限制，也让密码不必经过 IPC 之外的地方。
  * - **备份文件是可读 JSON**，恢复时逐字段校验，不信任文件内容：
@@ -58,6 +60,10 @@ export interface IBackupPayload {
     createdAt?: number;
     musicSheets?: any[];
     plugins?: any[];
+    /**
+     * 旧备份文件里可能存在的历史字段。
+     * 现在既不写入也不再恢复，仅保留类型让老备份仍能通过校验（parsePayload 的 known 列表）。
+     */
     musicHistory?: any[];
     localMusic?: any[];
     appConfig?: Record<string, any>;
@@ -77,7 +83,6 @@ export interface ISheetResumeStats {
 export interface IResumeSummary {
     sheets: ISheetResumeStats;
     plugins: IPluginResumeResult;
-    history: number;
     localMusic: number;
     appConfig: number;
     preferences: Record<string, any> | null;
@@ -130,6 +135,28 @@ function isMediaItem(item: any): boolean {
 
 function mediaKey(item: any): string {
     return `${item.platform}-${item.id}`;
+}
+
+/**
+ * 跨设备恢复时，备份里的本地音乐条目带着源设备的文件路径，本机大概率不存在。
+ * 这类条目播放必然失败，直接忽略，不进入当前设备的歌单 / 本地音乐列表。
+ * 只处理带 localPath 的条目，在线音乐（无 localPath）不受影响。
+ */
+function filterAvailableLocal(items: any[]): { list: any[]; skipped: number } {
+    const list: any[] = [];
+    let skipped = 0;
+    for (const item of items) {
+        if (
+            typeof item?.localPath === "string" &&
+            item.localPath &&
+            !fs.existsSync(item.localPath)
+        ) {
+            skipped += 1;
+            continue;
+        }
+        list.push(item);
+    }
+    return { list, skipped };
 }
 
 /** ---------- 校验 / 归一化 ---------- */
@@ -276,7 +303,7 @@ function mergeSheets(
     return { sheets: result, stats };
 }
 
-/** 历史/本地音乐列表：按 platform+id 去重合并，按 append 语义补在已有条目之后 */
+/** 本地音乐列表：按 platform+id 去重合并，按 append 语义补在已有条目之后 */
 function mergeItemList(existing: any[], incoming: any[]): { list: any[]; added: number } {
     const list = existing.filter(isMediaItem).map((it) => ({ ...it }));
     const seen = new Set(list.map(mediaKey));
@@ -299,7 +326,7 @@ function mergeItemList(existing: any[], incoming: any[]): { list: any[]; added: 
 
 class BackupService {
     /** 组装备份数据（不含 preferences，那一部分由渲染进程补齐） */
-    collect(options?: { includeHistory?: boolean; includeLocalMusic?: boolean }): IBackupPayload {
+    collect(options?: { includeLocalMusic?: boolean }): IBackupPayload {
         const sheets = configStore.get("userSheets", []);
         const payload: IBackupPayload = {
             format: BACKUP_FORMAT,
@@ -321,10 +348,7 @@ class BackupService {
         }
         payload.appConfig = appConfig;
 
-        if (options?.includeHistory !== false) {
-            const history = configStore.get("musicHistory", []);
-            payload.musicHistory = Array.isArray(history) ? history : [];
-        }
+        // 刻意不写入 musicHistory：最近播放属于单机痕迹，见文件头说明
         if (options?.includeLocalMusic !== false) {
             const localList = configStore.get("localMusic.list", []);
             payload.localMusic = Array.isArray(localList) ? localList : [];
@@ -340,7 +364,6 @@ class BackupService {
         const summary: IResumeSummary = {
             sheets: { ...EMPTY_SHEET_STATS },
             plugins: { ...EMPTY_PLUGIN_RESULT, failed: [] },
-            history: 0,
             localMusic: 0,
             appConfig: 0,
             preferences: null,
@@ -355,7 +378,15 @@ class BackupService {
 
         /** 歌单 */
         const { sheets: incoming, nameOnly } = normalizeSheets(payload.musicSheets);
+        /** 本机不存在音乐文件的本地音乐条目数（歌单 + 本地音乐列表合计） */
+        let localSkipped = 0;
         if (incoming.length) {
+            // 先过滤再合并，保证 songsAdded 统计不包含被忽略的条目
+            for (const sheet of incoming) {
+                const { list, skipped } = filterAvailableLocal(sheet.musicList);
+                sheet.musicList = list;
+                localSkipped += skipped;
+            }
             const existing = configStore.get("userSheets", []);
             const { sheets, stats } = mergeSheets(
                 Array.isArray(existing) ? existing : [],
@@ -382,30 +413,17 @@ class BackupService {
             }
         }
 
-        /** 播放历史 */
-        if (Array.isArray(payload.musicHistory)) {
-            const incomingHistory = payload.musicHistory.filter(isMediaItem);
-            if (mode === "overwrite") {
-                const sorted = [...incomingHistory].sort(
-                    (a, b) => (b.playAt ?? 0) - (a.playAt ?? 0),
-                );
-                configStore.set("musicHistory", sorted.slice(0, 300));
-                summary.history = sorted.length;
-            } else {
-                const existing = configStore.get("musicHistory", []);
-                const { list, added } = mergeItemList(
-                    Array.isArray(existing) ? existing : [],
-                    incomingHistory,
-                );
-                list.sort((a, b) => (b.playAt ?? 0) - (a.playAt ?? 0));
-                configStore.set("musicHistory", list.slice(0, 300));
-                summary.history = added;
-            }
-        }
+        /**
+         * 最近播放：不恢复。
+         * 备份里的 musicHistory（老文件）直接忽略，本机历史保持原样——
+         * 即使是 overwrite 模式也不清空，避免恢复一次歌单就把使用痕迹抹掉。
+         */
 
         /** 本地音乐索引：只恢复列表，文件本身得靠用户自己放回原路径 */
         if (Array.isArray(payload.localMusic)) {
-            const incomingLocal = payload.localMusic.filter(isMediaItem);
+            const available = filterAvailableLocal(payload.localMusic.filter(isMediaItem));
+            const incomingLocal = available.list;
+            localSkipped += available.skipped;
             if (mode === "overwrite") {
                 configStore.set("localMusic.list", incomingLocal);
                 summary.localMusic = incomingLocal.length;
@@ -441,6 +459,12 @@ class BackupService {
 
         if (payload.preferences && typeof payload.preferences === "object") {
             summary.preferences = payload.preferences;
+        }
+
+        if (localSkipped > 0) {
+            warnings.push(
+                `已忽略 ${localSkipped} 首本机不存在音乐文件的本地音乐（不显示在当前设备的歌单中）`,
+            );
         }
 
         return summary;
@@ -631,7 +655,7 @@ class BackupService {
 
         const effect =
             mode === "overwrite"
-                ? "本机现有的歌单与播放历史会被清空，完全替换为备份内容。"
+                ? "本机现有的歌单会被清空，完全替换为备份内容。"
                 : mode === "overwrite-default"
                   ? "「我喜欢的音乐」会被整体替换，其余歌单只补入备份中缺少的歌曲。"
                   : "备份中的歌曲会补进同 id 的歌单，本机已有的内容不会被删除。";
@@ -653,7 +677,6 @@ class BackupService {
     getStatus() {
         const lastAt = configStore.get("backup.lastAt");
         const sheets = configStore.get("userSheets", []);
-        const history = configStore.get("musicHistory", []);
         const localList = configStore.get("localMusic.list", []);
         const sheetList = Array.isArray(sheets) ? sheets : [];
 
@@ -670,7 +693,6 @@ class BackupService {
                     0,
                 ),
                 plugins: pluginHost.getSerializedPlugins().length,
-                history: Array.isArray(history) ? history.length : 0,
                 localMusic: Array.isArray(localList) ? localList.length : 0,
             },
         };

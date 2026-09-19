@@ -8,13 +8,15 @@ import { TrackPlayerSingleton } from "./trackPlayer";
  * 备份与恢复（渲染进程侧）
  *
  * 分工：
- * - 歌单 / 播放历史 / 本地音乐索引 / 插件元信息 都在主进程的 store.json 与 plugins 目录里，
+ * - 歌单 / 本地音乐索引 / 插件元信息 都在主进程的 store.json 与 plugins 目录里，
  *   由主进程组装与写回（见 `electron/services/backupService.ts`）。
  * - 播放列表、音量、主题、默认音源这类会话偏好存在 localStorage，只有渲染进程能看到，
  *   所以录备份时由渲染进程补上、恢复时由渲染进程写回。
  * - WebDAV 与 URL 拉取也走主进程：渲染进程是 `file://` 源，直连会被 CORS 拦掉。
  *
  * 安全约定：WebDAV 密码只存在主进程配置里，**不写进备份文件**。
+ * 范围约定：最近播放（musicHistory）不参与备份与恢复，备份文件里不再有 musicHistory 字段，
+ * 恢复时也不会碰本机历史（老备份里的该字段会被忽略）。
  */
 
 /** 恢复模式，语义与 MusicFree 移动端一致 */
@@ -34,7 +36,7 @@ export const RESUME_MODE_OPTIONS: { value: ResumeMode; label: string; desc: stri
     {
         value: "overwrite",
         label: "完整覆盖",
-        desc: "丢弃本机全部歌单与历史，完全使用备份内容（不可撤销）",
+        desc: "丢弃本机全部歌单，完全使用备份内容（不可撤销，最近播放不受影响）",
     },
 ];
 
@@ -65,6 +67,7 @@ export interface IBackupPayload {
     createdAt?: number;
     musicSheets?: any[];
     plugins?: any[];
+    /** 老备份文件里的历史字段，只读兼容用，主进程不会恢复它 */
     musicHistory?: any[];
     localMusic?: any[];
     appConfig?: Record<string, any>;
@@ -89,7 +92,6 @@ export interface IPluginResumeResult {
 export interface IResumeSummary {
     sheets: ISheetResumeStats;
     plugins: IPluginResumeResult;
-    history: number;
     localMusic: number;
     appConfig: number;
     preferences: Record<string, string> | null;
@@ -107,7 +109,6 @@ export interface IBackupCounts {
     sheets: number;
     songs: number;
     plugins: number;
-    history: number;
     localMusic: number;
 }
 
@@ -130,7 +131,6 @@ export interface IBackupResult {
 }
 
 export interface ICollectOptions {
-    includeHistory: boolean;
     includeLocalMusic: boolean;
 }
 
@@ -227,7 +227,7 @@ export function getBackupStatus(): Promise<IBackupStatus> {
 
 /** 组装备份数据：主进程主体 + 渲染进程偏好 */
 export async function collectBackup(
-    options: ICollectOptions = { includeHistory: true, includeLocalMusic: true },
+    options: ICollectOptions = { includeLocalMusic: true },
 ): Promise<IBackupPayload> {
     const payload = await ipcInvoke<IBackupPayload>("backup:collect", options);
     return { ...payload, preferences: collectPreferences() };
@@ -335,7 +335,7 @@ export function testWebdav(): Promise<{ success: boolean; message?: string }> {
 /** 把恢复摘要压成一行提示，供 toast 使用 */
 export function describeResumeSummary(summary: IResumeSummary): string {
     const parts: string[] = [];
-    const { sheets, plugins, history, localMusic } = summary;
+    const { sheets, plugins, localMusic } = summary;
 
     if (sheets.created || sheets.merged || sheets.replaced) {
         const bits: string[] = [];
@@ -365,11 +365,14 @@ export function describeResumeSummary(summary: IResumeSummary): string {
         parts.push(`音源 ${bits.join(" / ")}`);
     }
 
-    if (history) {
-        parts.push(`历史 +${history}`);
-    }
     if (localMusic) {
         parts.push(`本地音乐 +${localMusic}`);
+    }
+
+    // 主进程侧的提示（如「已忽略 N 首本机不存在音乐文件的本地音乐」）一并列出
+    const warnings = Array.isArray(summary.warnings) ? summary.warnings : [];
+    if (warnings.length) {
+        return `恢复完成：${parts.join("；")}。${warnings.join("；")}`;
     }
 
     if (!parts.length) {

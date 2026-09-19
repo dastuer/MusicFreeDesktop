@@ -13,6 +13,8 @@ npm run build        # 生产构建（dist-renderer + dist-electron）
 npm start            # 运行生产构建
 ```
 
+打包安装（Windows）：`npm run dist:win` 产出 `release-win\MusicFreeDesktop-Setup-1.0.0.exe`，双击即可安装（免管理员，装在用户目录，自动建桌面与开始菜单快捷方式）。macOS 侧见 `npm run reinstall`。
+
 ## 桌面端兼容性设计
 
 | 要求 | 实现 |

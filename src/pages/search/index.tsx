@@ -271,6 +271,7 @@ export default function SearchPage(props: ISearchPageProps) {
                 </div>
             )}
             {renderResults()}
+            
         </div>
     );
 }
