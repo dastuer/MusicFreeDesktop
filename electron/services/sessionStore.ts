@@ -9,7 +9,7 @@ import path from "path";
  *
  * ## 为什么要在 localStorage 之外再存一份
  *
- * 渲染进程侧本来就把这些写进 localStorage 了，但 localStorage 有三个绕不过去的坑：
+ * 渲染进程侧本来就把播放列表写进 localStorage 了，但 localStorage 有两个绕不过去的坑：
  *
  * 1. **它按 origin 隔离，而 dev 与打包版不是同一个 origin**：dev 实例是
  *    `http://localhost:5173`，打包版是 `file://`，两者却共用同一份 userData
@@ -17,16 +17,16 @@ import path from "path";
  *    盘上那份进度「就是不在」——看着像功能时灵时不灵。
  * 2. **写入是异步提交的**（Chromium 侧有自己的 commit 时机），进程被强杀 / 崩溃 / 系统
  *    直接杀掉时，最后那次写可能没落盘。
- * 3. 主进程**没法在退出前读回**渲染进程的内存状态，只能靠渲染进程自己及时写。
  *
+ * 播放进度的规则更干脆：**只在退出前记一次**（见 `src/core/playProgress.ts`）。
  * 所以退出时由主进程主动要一次（`session:flush` → 渲染进程回写 → `session:saved`），
- * 写进这个与 origin 无关的小文件。会话文件是**兜底**，localStorage 仍是首帧来源：
- * 启动时两份都读，谁的 `updatedAt` 新就用谁（见 `TrackPlayer.setup()`）。
+ * 写进这个与 origin 无关的小文件；启动时渲染进程再通过 `session:getSync` 同步取回，
+ * 第一帧就能把进度条摆到上次的位置。
  *
  * ## 为什么不塞进 configStore 的 store.json
  *
  * 那个文件里装着本地音乐索引、歌单、播放历史（已 170 KB 量级且会继续长），
- * 播放中每 15 秒同步重写一遍整份大文件就会卡住主进程、音频跟着抖——
+ * 每次保存都同步重写一遍整份大文件会卡住主进程、音频跟着抖——
  * 正是 `configStore.ts` 注释里警告的那条路。这里只写几百字节到几 KB。
  */
 
@@ -84,7 +84,7 @@ class SessionStore {
 
     /**
      * 合并式写入并**立即同步落盘**。
-     * 调用频率由渲染进程控制（播放中 15s 一次，暂停 / 切歌 / 退出时立刻），
+     * 调用频率很低（播放进度只在退出前写一次，播放队列在队列变化时写），
      * 内容只有几百字节，同步写不会成为负担；换来的是「写下去就一定在盘上」。
      */
     save(partial: Partial<ISessionSnapshot>) {

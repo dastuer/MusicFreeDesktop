@@ -139,7 +139,7 @@ export default function SettingsPage() {
 
                 <ToggleRow
                     label="记忆播放进度"
-                    desc="记住当前歌曲听到的位置（切歌后不再保留）。重启后进度条停在这个位置，按播放接着听"
+                    desc="退出应用时记住当前歌曲听到的位置。下次启动进度条停在这个位置，按播放接着听（不会自动出声）"
                     value={rememberProgress}
                     onChange={(next) => {
                         setRememberProgressEnabled(next);
@@ -158,7 +158,7 @@ export default function SettingsPage() {
                                     ? `《${remembered.title || "当前歌曲"}》· 听到 ${formatTime(
                                           remembered.position,
                                       )}`
-                                    : "暂无记录，播放一首歌就会记住"}
+                                    : "暂无记录，退出应用时会自动记一次"}
                             </div>
                         </div>
                         <button

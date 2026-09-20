@@ -73,8 +73,8 @@ function createWindow() {
     });
 
     // 关窗（红点 / ⌘W）在 macOS 上等于退出应用，所以这里也要把「上次播放会话」要回来。
-    // 不这样做的后果见会话文件里的说明：渲染进程仍会写 localStorage，但那是异步提交，
-    // 进程被强杀 / 系统直接收走时最后一段进度会丢。
+    // 这是**唯一**的落盘时机：播放进度只在退出前记一次（见 src/core/playProgress.ts），
+    // 主进程手里没有「上一版进度」可兜底。
     mainWindow.on("close", (event) => {
         if (!needsSessionFlush()) {
             return;
@@ -192,8 +192,8 @@ app.on("before-quit", (event) => {
     if (!needsSessionFlush()) {
         return;
     }
-    // 挂起这次退出，先把渲染进程内存里的播放进度要回来：主进程手里那份最多落后 15 秒，
-    // 而「退出时到底听到哪儿」只有渲染进程自己知道。
+    // 挂起这次退出，先把渲染进程内存里的播放进度要回来：「退出时到底听到哪儿」
+    // 只有渲染进程自己知道，而这是唯一一次落盘机会。
     event.preventDefault();
     requestSessionFlush().finally(() => app.quit());
 });

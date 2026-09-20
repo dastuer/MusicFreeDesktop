@@ -310,24 +310,24 @@ sequenceDiagram
 
 | 存储 | 位置 | 存放内容 | 访问方式 |
 | --- | --- | --- | --- |
-| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲、播放进度记忆 `playProgress`（及 `rememberProgress` 开关）、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>`、`searchHistory` | `appConfig.ts` 或直接 `localStorage` |
+| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲（会话文件缺失时的兜底）、`rememberProgress` 开关、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>`、`searchHistory` | `appConfig.ts` 或直接 `localStorage` |
 | `configStore` | `~/Library/Application Support/musicfree-desktop/data/store.json` | 插件元信息 `plugin.meta`、用户歌单 `userSheets`、播放历史 `musicHistory`、本地音乐列表 `localMusic.list`、下载任务 `download.tasks` / `download.dir`、备份设置 `backup.*` | `ipcInvoke("config:get"/"config:set")` |
-| `sessionStore` | `~/Library/Application Support/musicfree-desktop/data/session.json` | **上次播放会话的兜底**：当前歌曲（完整条目）+ 听到哪儿 + 播放队列 | `ipcInvoke("session:save")`；启动时 preload 用 `sendSync` 同步取 |
+| `sessionStore` | `~/Library/Application Support/musicfree-desktop/data/session.json` | **上次播放会话的唯一来源**：当前歌曲（完整条目）+ 听到哪儿 + 播放队列 | `ipcInvoke("session:save")`；启动时 preload 用 `sendSync` 同步取 |
 
 > 目录名是小写的 `musicfree-desktop`：Electron 取 `app.getPath("userData")` 时用的是 package.json 顶层的 `name`，
 > 而 `productName: MusicFreeDesktop` 写在 `build` 段里，只有打包产物才叫 `MusicFreeDesktop.app`。
 
 判断标准很简单：**"用户资产"（歌单、插件、下载记录）放主进程；"会话状态"（音量、播放进度、主题）放 localStorage**。用户资产放主进程是为了将来能导出/迁移/被下载服务复用——`backupService.ts` 正是这套分层的直接受益者。
 
-播放进度（`src/core/playProgress.ts`）是这条界线的一个典型样本，值得单独说明：它**每次 timeupdate 都在变**，若走 `config:set` 就要求主进程反复把整个 `store.json`（内含歌单、本地音乐索引、播放历史）`JSON.stringify` 一遍再写盘——正是 `configStore.ts` 注释里警告的「播放时同步写大文件 → 主进程卡住 → 音频抖」。放 localStorage 还有两个附带好处：`TrackPlayer.setup()` 能**同步**读到它（重启后进度条第一帧就在正确位置，不必等 IPC 往返），并且天然落进 `backup.ts` 的偏好白名单。
-
-但 **localStorage 单独扛不住「重启后回到上次播放」**，所以又加了 `sessionStore`（`data/session.json`）+ 退出前的握手，三个理由：
+「上次听到哪儿」（`src/core/playProgress.ts`）是这条界线里最特殊的一个：**它只在退出应用前写一次**，写入频率低到不值得放进 localStorage，于是直接交给主进程的 `sessionStore`，三个理由：
 
 1. **localStorage 按 origin 隔离，而 dev 实例和打包版不是同一个 origin**：dev 是 `http://localhost:5173`，打包版是 `file://`（`loadFile`），两者却共用同一份 userData。开发时在 dev 里听歌、再用打包版打开，盘上那份进度「就是不在」——表现成「重启后经常恢复不了」。`session.json` 与 origin 无关。
 2. localStorage 的写入是**异步提交**的（Chromium 侧有自己的 commit 时机），进程被强杀 / 崩溃 / 系统收走时最后那次写可能没落盘；而 `session:save` 由主进程**同步**写文件（tmp + rename）。
-3. 主进程在退出前没法读渲染进程的内存，所以退出流程反转过来：主进程 `before-quit` / 窗口 `close` → `preventDefault` → 发 `session:flush` → 渲染进程回写（`session:save`）→ 回执 `session:saved` → 主进程继续退（400ms 超时兜底，实测整次退出仍在 ~400ms 内完成）。
+3. 主进程在退出前没法读渲染进程的内存，所以退出流程反转过来：主进程 `before-quit` / 窗口 `close` → `preventDefault` → 发 `session:flush` → 渲染进程现场取进度并回写（`session:save`）→ 回执 `session:saved` → 主进程继续退（400ms 超时兜底，实测整次退出仍在 ~400ms 内完成）。
 
-启动时两份都读，**谁的 `updatedAt` 新用谁**（`TrackPlayer.restoreSession()`）；localStorage 那份同步可得，负责首帧，会话文件是兜底。
+反过来，启动时 preload 用 `sendSync` 同步取回快照，`TrackPlayer.setup()` 第一帧就能把进度条摆到上次的位置，等价拿到了 localStorage 的「同步可读」这个好处。
+
+代价是明摆着的：**崩溃 / 强制杀死进程时这次播放的进度不会被记住**。这是「只在退出前保存」这个需求本身的取舍，不是实现上的遗漏——别再试图用「播放中定期补写」把它找补回来。
 
 插件本体文件则存在 `userData/plugins/<sha256(code)>.js`，文件名即 hash，天然去重。
 
@@ -507,21 +507,20 @@ if (this.pendingPlayId === playId) { setAtom(musicStateAtom, "playing"); }
 
 #### 上次播放的歌曲与进度（`src/core/playProgress.ts` + `electron/services/sessionStore.ts`）
 
-**只记当前正在听的那一首**听到哪儿（`{platform, id, title, position, duration, updatedAt}` 一条记录，存在 localStorage 的 `playProgress` 里；同一个快照另写一份到主进程的 `data/session.json`）。**重启不自动播放**：`restoreSession()` 只把播放栏和进度条摆回去，用户按播放时再从那里接着听。切歌即把记录整体切到新歌（位置 0）—— 需求只是「重启回到上次的位置」，按歌留存会让随手点开一首老歌也从半截开始放。
+**只记退出时在听的那一首**听到哪儿，且**只在退出前记一次**（一条 `{music, position, duration, updatedAt}`，写进主进程的 `data/session.json`）。**重启不自动播放**：`restoreSession()` 只把播放栏和进度条摆回去，用户按播放时再从那里接着听。
 
 | 位置 | 职责 |
 | --- | --- |
-| `playProgress.ts` | 单条记录 + 落盘节流（15s）。节流**由 `timeupdate` 上的墙钟判断驱动，不用定时器**：窗口在后台时 Chromium 会把定时器节流到 ~60 秒一次（真实数据里确实是每 60 秒才落一次盘），媒体事件不受影响。`getSavedProgress()` 只在记录的 `platform:id` 与目标歌曲一致时才返回，并做有效性判断：位置 < 5s 不记、距结尾 < 5s 视为已听完（**读的时候判，不再写时删记录**，否则「播完 → 下一首播满 5 秒」这段窗口里盘上是空的） |
-| `TrackPlayer` 的音频事件 | `onProgress` 每个 timeupdate 记一次（只改内存 + 墙钟到点就落盘）；`onAudioPause` / `seekTo` / `onEnded` / 切歌 / 清空列表 一律立即落盘 |
-| `TrackPlayer.restoreSession()` / `play()` | 启动时把 localStorage 与 `session.json` 两份**按 `updatedAt` 取新的**，写进 `currentMusicAtom` / `progressAtom` / `playListAtom`（首帧就是记忆位置，不是 00:00）；`play()` 先读 `getSavedProgress(target)` 拿到续播位置，`isNew` 时 `markSessionSong()` 把记录切到新歌，解析出音源后立刻 `applyStartPosition()` 把 `<audio>` 摆到记忆位置再 `play()` |
+| `playProgress.ts` | 单条记录 + **唯一一个写入时机**（退出前的 `flushProgress()`）。位置由播放器现场提供（`bindProgressPersistence(collector)` → `TrackPlayer.collectSessionProgress()`），有音源就取 `<audio>.currentTime`（拖动 / 倍速 / 暂停都算得准），没音源（重启后还没播、正在换歌）就用 `progressAtom` 上摆着的那个。`getRestoredSession()` 读回时做有效性判断：位置 < 5s 不续、距结尾 < 5s 视为已听完 |
+| `TrackPlayer` 的音频事件 | **一个都不落盘**。`timeupdate` / `pause` / `seekTo` / `onEnded` / 切歌 都不写；换歌也不需要「把记录切到新歌」——退出时读的是当时的 `_currentMusic` |
+| `TrackPlayer.restoreSession()` / `play()` | 启动时 `getRestoredSession()` 拿到「上次那首歌 + 位置」，写进 `currentMusicAtom` / `progressAtom`（首帧就是记忆位置，不是 00:00），并把位置存进 `pendingStartPosition`；`play()` 用它做 `applyStartPosition()`，**挂上音源后即清零**（失败重试仍能用，暂停再播不会重复跳回去） |
 | `sessionStore` + preload | 启动时 `sendSync` 同步取快照（几百字节，主进程随取随回）；退出时由主进程反向索要，见 §4.3 |
 
 - **启动绝不自动出声**：曾经实现过「启动续播」（靠一个 `lastMusicState` 闸门 + `autoResumeOnLaunch` 开关），已按要求移除。重启后「有位置但不出声」是刻意行为，别再顺手加回去。
 - **退出时的握手顺序**：主进程先 `preventDefault` 挂起退出，渲染进程**必须等 `session:save` 的 Promise resolve 之后**才回执 `session:saved` —— 早回执等于最后一段进度没写进文件。
-- **`play()` 里「先读后切」的顺序不能反**：`const resumePosition = getSavedProgress(target)` 必须在 `markSessionSong()` 之前 —— 重启后用户按播放走的正是这条路（`togglePlay()` → `play(current, true)`），顺序反了会把刚要用的记录覆盖成 0。
-- **`forgetProgress(item)` 带 key 校验**：只在记录确实属于该歌曲时才丢，避免误删刚切过去那首刚写下的进度；不传参数则无条件丢。**切歌不要用它** —— 那时要的是 `markSessionSong()`（把记录切到新歌）。
-- **设置项**（设置页「播放」组）：`rememberProgress` 关掉后只还原歌曲、不还原位置，也不写记录；另有一行显示「已记忆的播放进度」并可清除（清除会同步清掉会话文件里的歌曲/进度，但**不动队列**）。
-- **`session.json` 是兜底不是首帧来源**，坏了丢了只会丢「回到上次播放」这一个功能，`setup()` 里一律 try/catch 并降级。
+- **播放器没起来 / 当前没有歌时什么都不写**：那种「没有进度」是假象（比如页面刚加载完就被关掉），写 null 会把上次退出时记的好记录清掉。要作废记录只有 `clearAllProgress()`（设置页「清除」/ 清空播放列表）。
+- **设置项**（设置页「播放」组）：`rememberProgress` 关掉后既不记也不续（仍还原歌曲，位置归 0）；另有一行显示「已记忆的播放进度」并可清除（清除会清掉会话文件里的歌曲/进度，但**不动队列**）。
+- **`session.json` 坏了丢了只会丢「回到上次播放」这一个功能**，`setup()` 里一律 try/catch 并降级。
 
 #### 歌词
 
@@ -769,7 +768,7 @@ const result = await tryPluginMethod(plugins, "getRecommendSheetTags");
 | 数据类型 | 放哪 | 做法 |
 | --- | --- | --- |
 | 会话状态（可丢弃） | localStorage | 用 `appConfig.ts` 的 `getConfig` / `setConfig` |
-| 会话状态但**退出时必须准** | localStorage + `data/session.json` | 主进程侧在 `services/` 里建一个像 `sessionStore.ts` 这样的小文件存储，退出时走 `session:flush` 握手（见 §4.3） |
+| 会话状态但**退出时必须准** | `data/session.json` | 主进程侧在 `services/` 里建一个像 `sessionStore.ts` 这样的小文件存储，退出时走 `session:flush` 握手（见 §4.3）；只在退出前写一次，别在运行时反复写 |
 | 用户资产（需长期保留） | 主进程 configStore | `ipcInvoke("config:get"/"config:set", key, value)`，并在 `core/` 里包一层模块（参考 `musicSheet.ts`） |
 
 读取历史数据时**一定要给默认值**：`await ipcInvoke("config:get", "myKey", [])`，因为老版本的用户 store.json 里没有这个 key。
