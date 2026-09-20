@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol, ipcMain, dialog, shell } from "electron";
+import { app, BrowserWindow, protocol, ipcMain, dialog, shell, Menu } from "electron";
 import path from "path";
 import fs from "fs";
 import { Readable } from "stream";
@@ -13,6 +13,11 @@ import mediaCache, {
     DEFAULT_MEDIA_CACHE_LIMIT,
 } from "./services/mediaCache";
 import backupService, { ResumeMode } from "./services/backupService";
+
+const isMac = process.platform === "darwin";
+const isWin = process.platform === "win32";
+/** 与前端 --titlebar-height 对齐：Windows 的 caption 按钮要压在标题栏拖拽区上 */
+const TITLEBAR_HEIGHT = 64;
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -35,12 +40,24 @@ function createWindow() {
         minWidth: 960,
         minHeight: 640,
         show: false,
-        // 桌面端外观：隐藏标题栏，保留 macOS 红绿灯，可拖拽区域由前端提供
-        titleBarStyle: "hiddenInset",
-        trafficLightPosition: { x: 14, y: 18 },
-        vibrancy: "sidebar",
-        visualEffectState: "followWindow",
-        backgroundColor: "#00000000",
+        // 桌面端外观：隐藏标题栏，红绿灯（macOS）/ caption 按钮（Windows）由系统绘制，可拖拽区域由前端提供
+        ...(isMac
+            ? {
+                  titleBarStyle: "hiddenInset" as const,
+                  trafficLightPosition: { x: 14, y: 18 },
+                  vibrancy: "sidebar" as const,
+                  visualEffectState: "followWindow" as const,
+                  backgroundColor: "#00000000",
+              }
+            : {
+                  titleBarStyle: "hidden" as const,
+                  titleBarOverlay: {
+                      color: "#ffffff",
+                      symbolColor: "#333333",
+                      height: TITLEBAR_HEIGHT,
+                  },
+                  backgroundColor: "#ffffff",
+              }),
         webPreferences: {
             preload: path.join(__dirname, "preload.js"),
             contextIsolation: true,
@@ -100,6 +117,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    if (!isMac) {
+        // 隐藏标题栏后默认菜单会以菜单栏形式挤进来；快捷键由前端自行处理
+        Menu.setApplicationMenu(null);
+    }
     const dataDir = path.join(app.getPath("userData"), "data");
     configStore.setup(dataDir);
     pluginHost.setup(
@@ -412,8 +433,20 @@ ipcMain.handle("app:getInfo", () => ({
     version: app.getVersion(),
     userDataPath: app.getPath("userData"),
     platform: process.platform,
-    isMac: process.platform === "darwin",
+    isMac,
 }));
+
+// Windows 的 caption 按钮直接叠在标题栏上：底色不跟主题走会在右上角留一块白
+ipcMain.handle(
+    "window:setCaptionOverlay",
+    (_e, colors: { color?: string; symbolColor?: string }) => {
+        if (!isWin || !mainWindow) {
+            return false;
+        }
+        mainWindow.setTitleBarOverlay({ ...colors, height: TITLEBAR_HEIGHT });
+        return true;
+    },
+);
 
 /** ---------- 备份与恢复 ---------- */
 

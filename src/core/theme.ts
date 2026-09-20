@@ -61,6 +61,11 @@ function applyTheme(type: ThemeType) {
         document.documentElement.style.setProperty(themeVars[key], theme[key]);
     });
     document.documentElement.dataset.theme = type;
+    // Windows 的标题栏按钮由系统绘制并叠在标题栏上，底色不跟主题走会在右上角留一块白
+    window.mfp?.invoke("window:setCaptionOverlay", {
+        color: theme.pageBackground,
+        symbolColor: theme.text,
+    });
 }
 
 export function useThemeSetup() {
