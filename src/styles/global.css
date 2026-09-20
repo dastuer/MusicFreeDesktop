@@ -234,6 +234,12 @@ img {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 0 24px 24px;
+    /*
+     * 切页时这个容器会按 key 整体重建（见 App.tsx），新旧页面之间没有过渡帧，
+     * 是一帧硬切。加一层很短的淡入，让切换看起来是「换过去」而不是「闪一下」。
+     * 时长刻意压到 0.12s：再长切页就显得拖沓了。
+     */
+    animation: fade-in 0.12s ease-out;
 }
 
 .section-title {
