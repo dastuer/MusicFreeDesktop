@@ -183,6 +183,7 @@ electron/                        主进程（Node 环境，可读写文件与网
     pluginHost.ts                插件宿主：Function 沙箱 + 依赖白名单 + 平台注入
     mediaProtocol.ts             mfs:// 协议：远程音频流代理 / 本地文件流
     configStore.ts               userData/data/store.json 键值持久化
+    sessionStore.ts              上次播放会话（当前歌曲/进度/队列）→ userData/data/session.json
     localMusic.ts                本地文件夹扫描、ID3/FLAC 元数据与内嵌封面
     builtinMusic.ts              内置示例曲目（Node 合成 WAV + SVG 封面）
     downloadService.ts           下载队列（并发 2）、进度事件、任务持久化
@@ -202,6 +203,7 @@ src/                             渲染进程（浏览器环境，无 Node）
     router.ts                    栈式路由
     theme.ts                     主题（CSS 变量 + data-theme）
     appConfig.ts                 localStorage 配置（音质等）
+    searchHistory.ts             搜索历史（localStorage，最多 30 条）
     musicSheet.ts                用户歌单 / 我喜欢（主进程持久化）
     musicHistory.ts              播放历史（主进程持久化）
     downloadManager.ts           下载的渲染侧状态与动作
@@ -213,9 +215,9 @@ src/                             渲染进程（浏览器环境，无 Node）
     layout/                      Sidebar / PlayerBar / MusicDetailOverlay / PlayQueuePanel
     base/                        Icon / Cover / Slider / MusicList / MediaHeader /
                                  ContextMenu / Toast / PromptDialog /
-                                 AddToSheetPanel / DownloadPanel
+                                 AddToSheetPanel / DownloadPanel / SearchHistoryPanel
   pages/                         12 个页面，每个是独立目录 + index.tsx
-  styles/global.css              1232 行设计系统（按功能分区，见文件内注释）
+  styles/global.css              1932 行设计系统（按功能分区，见文件内注释）
   types/core.d.ts                与移动端对齐的命名空间类型（IMusic/IAlbum/...）
   types/global.d.ts              window.mfp 类型声明
 
@@ -308,13 +310,24 @@ sequenceDiagram
 
 | 存储 | 位置 | 存放内容 | 访问方式 |
 | --- | --- | --- | --- |
-| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>` | `appConfig.ts` 或直接 `localStorage` |
+| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲、播放进度记忆 `playProgress`（及 `rememberProgress` 开关）、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>`、`searchHistory` | `appConfig.ts` 或直接 `localStorage` |
 | `configStore` | `~/Library/Application Support/musicfree-desktop/data/store.json` | 插件元信息 `plugin.meta`、用户歌单 `userSheets`、播放历史 `musicHistory`、本地音乐列表 `localMusic.list`、下载任务 `download.tasks` / `download.dir`、备份设置 `backup.*` | `ipcInvoke("config:get"/"config:set")` |
+| `sessionStore` | `~/Library/Application Support/musicfree-desktop/data/session.json` | **上次播放会话的兜底**：当前歌曲（完整条目）+ 听到哪儿 + 播放队列 | `ipcInvoke("session:save")`；启动时 preload 用 `sendSync` 同步取 |
 
 > 目录名是小写的 `musicfree-desktop`：Electron 取 `app.getPath("userData")` 时用的是 package.json 顶层的 `name`，
 > 而 `productName: MusicFreeDesktop` 写在 `build` 段里，只有打包产物才叫 `MusicFreeDesktop.app`。
 
-判断标准很简单：**"用户资产"（歌单、插件、下载记录）放主进程；"会话状态"（音量、当前播放位置、主题）放 localStorage**。用户资产放主进程是为了将来能导出/迁移/被下载服务复用——`backupService.ts` 正是这套分层的直接受益者。
+判断标准很简单：**"用户资产"（歌单、插件、下载记录）放主进程；"会话状态"（音量、播放进度、主题）放 localStorage**。用户资产放主进程是为了将来能导出/迁移/被下载服务复用——`backupService.ts` 正是这套分层的直接受益者。
+
+播放进度（`src/core/playProgress.ts`）是这条界线的一个典型样本，值得单独说明：它**每次 timeupdate 都在变**，若走 `config:set` 就要求主进程反复把整个 `store.json`（内含歌单、本地音乐索引、播放历史）`JSON.stringify` 一遍再写盘——正是 `configStore.ts` 注释里警告的「播放时同步写大文件 → 主进程卡住 → 音频抖」。放 localStorage 还有两个附带好处：`TrackPlayer.setup()` 能**同步**读到它（重启后进度条第一帧就在正确位置，不必等 IPC 往返），并且天然落进 `backup.ts` 的偏好白名单。
+
+但 **localStorage 单独扛不住「重启后回到上次播放」**，所以又加了 `sessionStore`（`data/session.json`）+ 退出前的握手，三个理由：
+
+1. **localStorage 按 origin 隔离，而 dev 实例和打包版不是同一个 origin**：dev 是 `http://localhost:5173`，打包版是 `file://`（`loadFile`），两者却共用同一份 userData。开发时在 dev 里听歌、再用打包版打开，盘上那份进度「就是不在」——表现成「重启后经常恢复不了」。`session.json` 与 origin 无关。
+2. localStorage 的写入是**异步提交**的（Chromium 侧有自己的 commit 时机），进程被强杀 / 崩溃 / 系统收走时最后那次写可能没落盘；而 `session:save` 由主进程**同步**写文件（tmp + rename）。
+3. 主进程在退出前没法读渲染进程的内存，所以退出流程反转过来：主进程 `before-quit` / 窗口 `close` → `preventDefault` → 发 `session:flush` → 渲染进程回写（`session:save`）→ 回执 `session:saved` → 主进程继续退（400ms 超时兜底，实测整次退出仍在 ~400ms 内完成）。
+
+启动时两份都读，**谁的 `updatedAt` 新用谁**（`TrackPlayer.restoreSession()`）；localStorage 那份同步可得，负责首帧，会话文件是兜底。
 
 插件本体文件则存在 `userData/plugins/<sha256(code)>.js`，文件名即 hash，天然去重。
 
@@ -443,7 +456,7 @@ protocol.registerSchemesAsPrivileged([{
 1. **绝不透传 `content-encoding`**。axios 会自动解压响应体，若把上游的 `Content-Encoding: gzip` 一起透传给 `<audio>`，播放器会拿到已解压的字节去二次解压，直接播放失败。
 2. **默认补一个 Chrome UA**。很多音源平台对空 UA 或非浏览器 UA 会返回 403；插件没给 `userAgent` 时兜底。
 
-### 5.3 播放核心（`src/core/trackPlayer.ts`，552 行）
+### 5.3 播放核心（`src/core/trackPlayer.ts`）
 
 `TrackPlayer` 是单例（`TrackPlayerSingleton`），继承 `eventemitter3`，内部持有唯一的 `HTMLAudioElement`。
 
@@ -491,6 +504,24 @@ if (this.pendingPlayId === playId) { setAtom(musicStateAtom, "playing"); }
 ```
 
 用户快速连点下一首时，旧请求回来不会把状态错误地覆盖成 `playing`。
+
+#### 上次播放的歌曲与进度（`src/core/playProgress.ts` + `electron/services/sessionStore.ts`）
+
+**只记当前正在听的那一首**听到哪儿（`{platform, id, title, position, duration, updatedAt}` 一条记录，存在 localStorage 的 `playProgress` 里；同一个快照另写一份到主进程的 `data/session.json`）。**重启不自动播放**：`restoreSession()` 只把播放栏和进度条摆回去，用户按播放时再从那里接着听。切歌即把记录整体切到新歌（位置 0）—— 需求只是「重启回到上次的位置」，按歌留存会让随手点开一首老歌也从半截开始放。
+
+| 位置 | 职责 |
+| --- | --- |
+| `playProgress.ts` | 单条记录 + 落盘节流（15s）。节流**由 `timeupdate` 上的墙钟判断驱动，不用定时器**：窗口在后台时 Chromium 会把定时器节流到 ~60 秒一次（真实数据里确实是每 60 秒才落一次盘），媒体事件不受影响。`getSavedProgress()` 只在记录的 `platform:id` 与目标歌曲一致时才返回，并做有效性判断：位置 < 5s 不记、距结尾 < 5s 视为已听完（**读的时候判，不再写时删记录**，否则「播完 → 下一首播满 5 秒」这段窗口里盘上是空的） |
+| `TrackPlayer` 的音频事件 | `onProgress` 每个 timeupdate 记一次（只改内存 + 墙钟到点就落盘）；`onAudioPause` / `seekTo` / `onEnded` / 切歌 / 清空列表 一律立即落盘 |
+| `TrackPlayer.restoreSession()` / `play()` | 启动时把 localStorage 与 `session.json` 两份**按 `updatedAt` 取新的**，写进 `currentMusicAtom` / `progressAtom` / `playListAtom`（首帧就是记忆位置，不是 00:00）；`play()` 先读 `getSavedProgress(target)` 拿到续播位置，`isNew` 时 `markSessionSong()` 把记录切到新歌，解析出音源后立刻 `applyStartPosition()` 把 `<audio>` 摆到记忆位置再 `play()` |
+| `sessionStore` + preload | 启动时 `sendSync` 同步取快照（几百字节，主进程随取随回）；退出时由主进程反向索要，见 §4.3 |
+
+- **启动绝不自动出声**：曾经实现过「启动续播」（靠一个 `lastMusicState` 闸门 + `autoResumeOnLaunch` 开关），已按要求移除。重启后「有位置但不出声」是刻意行为，别再顺手加回去。
+- **退出时的握手顺序**：主进程先 `preventDefault` 挂起退出，渲染进程**必须等 `session:save` 的 Promise resolve 之后**才回执 `session:saved` —— 早回执等于最后一段进度没写进文件。
+- **`play()` 里「先读后切」的顺序不能反**：`const resumePosition = getSavedProgress(target)` 必须在 `markSessionSong()` 之前 —— 重启后用户按播放走的正是这条路（`togglePlay()` → `play(current, true)`），顺序反了会把刚要用的记录覆盖成 0。
+- **`forgetProgress(item)` 带 key 校验**：只在记录确实属于该歌曲时才丢，避免误删刚切过去那首刚写下的进度；不传参数则无条件丢。**切歌不要用它** —— 那时要的是 `markSessionSong()`（把记录切到新歌）。
+- **设置项**（设置页「播放」组）：`rememberProgress` 关掉后只还原歌曲、不还原位置，也不写记录；另有一行显示「已记忆的播放进度」并可清除（清除会同步清掉会话文件里的歌曲/进度，但**不动队列**）。
+- **`session.json` 是兜底不是首帧来源**，坏了丢了只会丢「回到上次播放」这一个功能，`setup()` 里一律 try/catch 并降级。
 
 #### 歌词
 
@@ -692,6 +723,12 @@ export async function doThing(arg: string) {
 
 **返回值的约定**：涉及可能失败的操作，统一返回 `{ success: boolean, data?, message? }`，前端判断 `success` 后抛 Error 或用 Toast 提示（参考 `plugin:call`、`localMusic:scan` 的写法）。
 
+**两种不走 `invoke` 的例外**（都出现在「上次播放会话」这条链上，参考实现见 `sessionStore.ts` + `preload.ts`）：
+
+- `ipcRenderer.sendSync("session:getSync")`：启动时**同步**取会话快照。只在 preload 顶层做一次、数据只有几百字节，换来的是「第一帧就能把进度条摆对位置」。异步取的话进度条会先闪一下 00:00。
+- 主进程 → 渲染进程的反向请求 `session:flush` + 回执 `session:saved`：退出前主进程要等渲染进程把最新进度写下来，所以必须能双向通信。
+  注意 `sendSync` 会**一直等**，主进程那边务必在 `whenReady` 之前就把 handler 挂上（本项目是模块顶层的 `ipcMain.on`）。
+
 **需要主进程主动推送给渲染进程时**，用 `webContents.send`，并在 preload 里单独暴露一个 `onXxx` 订阅函数（参考 `download:event` + `onDownloadEvent`）。
 
 ### 6.3 新增一个图标
@@ -732,6 +769,7 @@ const result = await tryPluginMethod(plugins, "getRecommendSheetTags");
 | 数据类型 | 放哪 | 做法 |
 | --- | --- | --- |
 | 会话状态（可丢弃） | localStorage | 用 `appConfig.ts` 的 `getConfig` / `setConfig` |
+| 会话状态但**退出时必须准** | localStorage + `data/session.json` | 主进程侧在 `services/` 里建一个像 `sessionStore.ts` 这样的小文件存储，退出时走 `session:flush` 握手（见 §4.3） |
 | 用户资产（需长期保留） | 主进程 configStore | `ipcInvoke("config:get"/"config:set", key, value)`，并在 `core/` 里包一层模块（参考 `musicSheet.ts`） |
 
 读取历史数据时**一定要给默认值**：`await ipcInvoke("config:get", "myKey", [])`，因为老版本的用户 store.json 里没有这个 key。
@@ -844,7 +882,10 @@ data = JSON.parse(JSON.stringify(result ?? null, (_k, v) =>
 
 ### 值得注意的实现细节
 
+- **搜索历史面板（`components/base/SearchHistoryPanel.tsx`）有几处刻意写法**：① 面板挂载才读一次历史，因为「写历史」只发生在面板关闭时（回车、点历史都会关），所以没有引入 jotai atom 做全局同步；② 关闭靠 `document` 上的 `mousedown` 判断点击是否落在搜索框 + 面板之外，**不能用 input 的 blur** —— 点历史条目时输入框必然先失焦，用 blur 会在跳转前把面板拆掉；③ 默认折叠两行靠 `max-height: 78px` 裁切（= 6px 内边距 + 2 行 × (32px chip + 8px gap)），改 chip 高度或 gap 必须同步这个数；行数用 chip 的 `offsetTop` 去重来数，而不是比较 `scrollHeight`（折叠时 `overflow: hidden` 只裁剪绘制，布局位置不变，两种状态量出来的行数一致，否则会误判成「不需要折叠」）；④ 没有历史时也照样出面版、只换成「暂无搜索历史」并藏起垃圾桶，否则「点搜索框没反应」看着像坏了；⑤ 面板 `left: calc(-1 * (32px + 6px))` 是为了对齐标题栏里 32px 宽的后退按钮（间距 6px），改按钮尺寸或 `.titlebar-drag` 的 gap 要一起改；⑥ 因为左边缘固定在距窗口左 220px 处，宽度上限才是 `max-width: calc(100vw - 240px)`（不是随便写的 240）。
+- **拖拽区里的 `mousedown` 传不到渲染进程**（搜索历史面板踩到的最大的坑）：`.titlebar-drag` 是 `-webkit-app-region: drag` 区，`app-region` **会被子元素继承**，所以落在其上的按下事件被窗口拖动吃掉，`document` 上的监听永远收不到 —— 表现就是「点搜索框右侧的标题栏空白处，浮层关不掉」。做法是把那块空白抽成 `.titlebar-spacer`，在浮层展开时（`.panel-open`）临时改成 `no-drag`，收起后撤掉。注意判据用 `getComputedStyle(el).webkitAppRegion === "no-drag"`：**继承来的 drag 计算值是 `none`**，别写 `=== "drag"` 去断言。
 - **毛玻璃效果实际未生效**：`global.css` 里 `--sidebar-bg` 是半透明 `rgba(246,246,248,0.82)`（配合 `vibrancy: "sidebar"` 出毛玻璃），但 `theme.ts` 的 `applyTheme` 会在挂载时用内联样式把 `--sidebar-bg` 覆盖为**不透明**的 `#f5f5f7`。`--playerbar-bg` 同理。若要恢复毛玻璃，需把 `theme.ts` 里这两个值改回半透明。
+- **摆播放位置必须在 `src` 赋值后立刻做**（`trackPlayer.applyStartPosition`）：此时 `<audio>` 还是 `readyState = HAVE_NOTHING`，规范要求把 `currentTime` 记成「默认起播位置」，元数据一到浏览器就**按这个偏移发起 Range 请求**；若等 `loadedmetadata` 之后再摆，浏览器会先把 0 到目标位置的数据下完才开始播——续播反而比从头播更慢。`mfs://media` 对 `bytes=N-` 的请求走 `plainProxy` 直接透传上游 Range（只有 `bytes=0-` 才进缓存），所以这种「跳着取」是受支持的。
 - `_require` 会给共享的模块对象打上 `pkg.default = pkg`，属于对第三方模块对象的副作用写入（为了让打包后的包兼容 `import x from` 语法）。新增白名单依赖时留意这一点。
 - `TrackPlayer.onEnded` 里 `repeatMode === "off"` 走到列表末尾会 `emit(PlayEnd)` 并置为 `stopped`，注释写作"列表循环模式下回到第一首"，与实际分支不符——改这块时以代码为准。
 

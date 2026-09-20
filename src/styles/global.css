@@ -173,6 +173,20 @@ img {
     cursor: default;
 }
 
+/*
+ * 标题栏空白区（搜索框右侧到底部播放条那一侧）。它本身是拖拽区 —— 继承 .titlebar-drag 的
+ * -webkit-app-region: drag。但拖拽区里的 mousedown 会被窗口拖动吞掉，渲染进程收不到，
+ * 于是「点空白处收起搜索历史面板」永远不触发。面板展开时把这块临时改成 no-drag。
+ */
+.titlebar-spacer {
+    /* 容器是 align-items: center，空的 flex 项高度为 0，不拉伸就没法覆盖整个标题栏高度 */
+    align-self: stretch;
+}
+
+.titlebar-spacer.panel-open {
+    -webkit-app-region: no-drag;
+}
+
 /* ---------- 侧边栏 ---------- */
 .sidebar-nav {
     padding: 4px 12px;
@@ -1228,6 +1242,8 @@ img {
     padding: 0 12px;
     width: 240px;
     -webkit-app-region: no-drag;
+    /* 搜索历史面板的定位锚点 */
+    position: relative;
 }
 
 .search-input-wrap input {
@@ -1238,6 +1254,164 @@ img {
     font-size: 13px;
     color: var(--text-color);
     width: 100%;
+}
+
+/* ---------- 搜索历史面板（搜索框下拉） ---------- */
+.search-history-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    /* 左边缘对齐标题栏里的「后退」按钮：按钮宽 32 + 标题栏 gap 6，往回退这么多即可 */
+    left: calc(-1 * (32px + 6px));
+    /* 面板比 240px 的输入框宽得多，但窗口很窄时不能顶出边界 */
+    width: 460px;
+    max-width: calc(100vw - 240px);
+    z-index: 250;
+    background: var(--page-bg);
+    border: 1px solid var(--divider);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    padding: 14px 16px 18px;
+    animation: fade-in 0.14s ease;
+    /* 面板落在标题栏拖拽区下方，必须显式解除拖拽，否则整块区域点不动 */
+    -webkit-app-region: no-drag;
+}
+
+/* 深色下 --page-bg 和页面底色同值，面板会糊在内容里，抬一档底色把它托起来 */
+html[data-theme="dark"] .search-history-panel {
+    background: #242424;
+}
+
+.search-history-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.search-history-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+/* 没有任何历史时的占位文案。左内边距对齐 chip 容器（那里有 6px padding） */
+.search-history-empty {
+    padding: 10px 6px 4px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
+.search-history-clear {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.search-history-clear:hover {
+    background: var(--hover-bg);
+    color: var(--primary-color);
+}
+
+/*
+ * 折叠用外层 overflow: hidden，内层不裁剪。
+ * 内层留 6px padding，否则第一行 chip 右上角（top: -5px）的删除按钮会被裁掉半个。
+ * 折叠高度 = 6 + 两行(32*2 + 间隙 8) = 78px，正好切在第三行上方，第三行的删除按钮也不会露头。
+ */
+.search-history-clip {
+    overflow: hidden;
+}
+
+.search-history-clip.collapsed {
+    max-height: 78px;
+}
+
+.search-history-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px;
+}
+
+/* 右下角「展开/收起」按钮占位：让 chip 别铺到按钮底下 */
+.search-history-chips.has-toggle {
+    padding-right: 40px;
+}
+
+.search-history-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    max-width: 200px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 16px;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.search-history-chip:hover {
+    background: var(--active-bg);
+}
+
+/* 关键词过长时省略，避免单个 chip 撑满一行 */
+.search-history-chip-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.search-history-chip-remove {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--text-tertiary);
+    color: var(--page-bg);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+/* 悬浮 chip 才浮出删除按钮；按钮本身是 chip 的后代，移上去不会因失焦而消失 */
+.search-history-chip:hover .search-history-chip-remove {
+    opacity: 1;
+}
+
+.search-history-toggle {
+    position: absolute;
+    right: 16px;
+    /* 与折叠时第二行的 chip 垂直居中对齐（18 padding + 6 内边距 + 16） */
+    bottom: 28px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--hover-bg);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.search-history-toggle:hover {
+    background: var(--active-bg);
+    color: var(--text-color);
 }
 
 /* ---------- 弹层 / 菜单 ---------- */
@@ -1417,6 +1591,16 @@ img {
 
 .settings-item:hover {
     background: var(--hover-bg);
+}
+
+/* 「已记忆的播放进度」右侧的清除按钮：没有记录时禁用（全局 .btn-ghost 没定义禁用态） */
+.settings-item .progress-clear-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.settings-item .progress-clear-btn:disabled:hover {
+    background: transparent;
 }
 
 .settings-item-label {

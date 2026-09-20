@@ -1,8 +1,8 @@
 import React from "react";
 import Cover from "./Cover";
 import Icon from "./Icon";
+import { showAddToSheetPanel } from "./AddToSheetPanel";
 import { TrackPlayerSingleton } from "@/core/trackPlayer";
-import { showToast } from "./Toast";
 
 /**
  * 详情页公共头部：封面 + 标题 + 元信息 + 操作按钮
@@ -15,8 +15,30 @@ export default function MediaHeader(props: {
     description?: string;
     musicList: IMusic.IMusicItem[];
     extraActions?: React.ReactNode;
+    /**
+     * 「我的歌单」内容页隐藏「收藏全部」。
+     * 列表本身就是自己的收藏结果，再「收藏全部」既没意义又容易点错；
+     * 插件歌单 / 专辑 / 榜单这些来源列表仍保留，方便一键收下整张。
+     */
+    hideFavoriteAll?: boolean;
 }) {
-    const { artwork, title, meta, description, musicList, extraActions } = props;
+    const {
+        artwork,
+        title,
+        meta,
+        description,
+        musicList,
+        extraActions,
+        hideFavoriteAll,
+    } = props;
+
+    /** 「收藏全部」：和多选「收藏」走同一条路 —— 先选歌单，再把整张收进去 */
+    const favoriteAll = () => {
+        if (!musicList.length) {
+            return;
+        }
+        showAddToSheetPanel(musicList);
+    };
 
     return (
         <div className="media-header">
@@ -45,17 +67,16 @@ export default function MediaHeader(props: {
                         <Icon name="play" size={14} />
                         播放全部
                     </button>
-                    <button
-                        className="btn-ghost"
-                        disabled={!musicList.length}
-                        onClick={() => {
-                            TrackPlayerSingleton.addAll(musicList);
-                            showToast(`已添加 ${musicList.length} 首歌曲到播放列表`);
-                        }}
-                    >
-                        <Icon name="plus" size={14} />
-                        收藏全部
-                    </button>
+                    {!hideFavoriteAll && (
+                        <button
+                            className="btn-ghost"
+                            disabled={!musicList.length}
+                            onClick={favoriteAll}
+                        >
+                            <Icon name="heartFilled" size={14} />
+                            收藏全部
+                        </button>
+                    )}
                     {extraActions}
                 </div>
             </div>

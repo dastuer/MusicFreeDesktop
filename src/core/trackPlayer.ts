@@ -10,6 +10,20 @@ import {
 } from "./ipc";
 import { setMusicHistory } from "./musicHistory";
 import { getQuality } from "./appConfig";
+import {
+    bindProgressPersistence,
+    clearAllProgress,
+    flushProgress,
+    getInitialSession,
+    getRawProgress,
+    getSavedProgress,
+    getStoredCurrentMusic,
+    getStoredPlayList,
+    isRememberProgressEnabled,
+    markSessionSong,
+    rememberProgress,
+    saveSessionPlayList,
+} from "./playProgress";
 
 export type MusicState = "playing" | "paused" | "stopped" | "loading";
 export type MusicRepeatMode = "off" | "queue" | "single";
@@ -115,11 +129,15 @@ class TrackPlayer extends EventEmitter {
     /** 播放停滞自救用的定时器与次数（见 onAudioStall） */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
     private stallNudges = 0;
+    /** 摆进度时挂上去的一次性监听，换歌前必须摘掉（见 applyStartPosition） */
+    private pendingSeekListener: (() => void) | null = null;
 
     setup() {
         if (this.audio) {
             return;
         }
+        // 播放进度的落盘点（关窗 / 切后台），与播放器生命周期同起
+        bindProgressPersistence();
         const audio = new Audio();
         audio.preload = "auto";
         audio.volume = Math.min(Number(localStorage.getItem("volume") ?? 0.8), 1);
@@ -135,25 +153,98 @@ class TrackPlayer extends EventEmitter {
         audio.addEventListener("stalled", this.onAudioStall);
         this.audio = audio;
 
-        // 恢复播放列表
+        // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
+        this.restoreSession();
+    }
+
+    /**
+     * 还原「上次播放会话」：播放列表 + 当前歌曲 + 听到哪儿。
+     *
+     * 两个来源，**谁的 `updatedAt` 新用谁**：
+     * - localStorage（`playList` / `currentMusic` / `playProgress`）：同步可读，重启后第一帧就摆对位置
+     * - 主进程 `data/session.json`（`getInitialSession()`）：退出时由主进程主动要来写下的，
+     *   与 origin 无关、也不依赖 localStorage 的异步提交，用来兜住
+     *   「进程被强杀 / dev 实例与打包版 origin 不同 / 本地存储被清」这几种情况
+     *
+     * 只改状态与 atom，**不自动出声**（要不要接着听由用户按播放决定）。
+     */
+    private restoreSession() {
+        let session: IPlaySessionSnapshot | null = null;
         try {
-            const saved = localStorage.getItem("playList");
-            if (saved) {
-                this._playList = JSON.parse(saved);
+            session = getInitialSession();
+            const playList = getStoredPlayList() ?? session?.playList ?? null;
+            if (playList?.length) {
+                this._playList = playList;
                 setAtom(playListAtom, this._playList);
+                // 顺手把队列同步回会话文件：那份只在「队列变化」时写，而它正是
+                // 「localStorage 那份读不到（换了 origin / 被清）」时的唯一兜底
+                saveSessionPlayList(this._playList);
             }
-            const savedCurrent = localStorage.getItem("currentMusic");
-            if (savedCurrent) {
-                this._currentMusic = JSON.parse(savedCurrent);
-                setAtom(currentMusicAtom, this._currentMusic);
+
+            // 歌曲 + 进度：两个来源各成一份候选。来源内部必须自洽（歌曲与它自己的进度记录
+            // 对得上）才算数，否则宁可当它没有进度。最终按 updatedAt 取新的那份。
+            const localRecord = getRawProgress();
+            const localMusic = getStoredCurrentMusic();
+            const candidates: {
+                music: IMusic.IMusicItem;
+                position: number;
+                duration: number;
+                updatedAt: number;
+                source: string;
+            }[] = [];
+            if (localMusic?.platform && localMusic?.id) {
+                const matched =
+                    localRecord &&
+                    `${localRecord.platform}:${localRecord.id}` ===
+                        `${localMusic.platform}:${localMusic.id}`
+                        ? localRecord
+                        : null;
+                candidates.push({
+                    music: localMusic,
+                    position: matched?.position ?? 0,
+                    duration: matched?.duration ?? 0,
+                    updatedAt: matched?.updatedAt ?? 0,
+                    source: "localStorage",
+                });
             }
+            if (session?.music?.platform && session?.music?.id) {
+                candidates.push({
+                    music: session.music,
+                    position: Number(session.position) || 0,
+                    duration: Number(session.duration) || 0,
+                    updatedAt: Number(session.musicUpdatedAt) || 0,
+                    source: "会话文件",
+                });
+            }
+            candidates.sort((a, b) => b.updatedAt - a.updatedAt);
+            const best = candidates[0];
+
+            if (best) {
+                this._currentMusic = best.music;
+                setAtom(currentMusicAtom, best.music);
+                // 进度条直接停在上次听到的位置：音源解析要时间，若先渲染 00:00 再跳回去，
+                // 会让人以为进度丢了。开关关掉时只还原歌曲，不还原位置。
+                if (isRememberProgressEnabled() && best.position > 0) {
+                    setAtom(progressAtom, {
+                        position: best.position,
+                        duration: best.duration || best.music.duration || 0,
+                    });
+                }
+                console.log(
+                    `[trackPlayer] 恢复上次播放：${best.music.title ?? best.music.id} @ ${formatSeconds(
+                        best.position,
+                    )}（来源 ${best.source}）`,
+                );
+            }
+
             const savedRepeat = localStorage.getItem("repeatMode");
             if (savedRepeat) {
                 this._repeatMode = savedRepeat as MusicRepeatMode;
                 setAtom(repeatModeAtom, this._repeatMode);
             }
-        } catch {
-            // ignore
+        } catch (e) {
+            // 恢复失败不影响使用，就当这次没有会话
+            console.warn("[trackPlayer] 恢复上次播放失败", e);
         }
     }
 
@@ -170,6 +261,11 @@ class TrackPlayer extends EventEmitter {
         };
         setAtom(progressAtom, progress);
         this.emit(TrackPlayerEvents.ProgressChanged, progress);
+        // 边播边记进度。内部只改内存 + 节流落盘，跟得上 timeupdate 的频率。
+        // 换歌期间（isLoading）音频被摘掉、位置归零，记下去会把好进度盖掉。
+        if (this._currentMusic && this.audio.src && !this.isLoading) {
+            rememberProgress(this._currentMusic, progress.position, progress.duration);
+        }
     };
 
     private clearStallWatch = () => {
@@ -221,6 +317,8 @@ class TrackPlayer extends EventEmitter {
         }
         if (this._currentMusic) {
             setAtom(musicStateAtom, "paused");
+            // 暂停往往就是「要关掉应用了」，这里立刻把进度落盘，不等节流
+            flushProgress();
         }
     };
 
@@ -256,6 +354,7 @@ class TrackPlayer extends EventEmitter {
      */
     private detachAudio() {
         this.clearStallWatch();
+        this.clearPendingSeek();
         const audio = this.audio;
         if (!audio) {
             return;
@@ -268,6 +367,50 @@ class TrackPlayer extends EventEmitter {
         } catch {
             // ignore
         }
+    }
+
+    /** 摘掉「等元数据到位再摆进度」的监听，避免它落到下一首歌头上 */
+    private clearPendingSeek() {
+        if (this.pendingSeekListener) {
+            this.audio?.removeEventListener("loadedmetadata", this.pendingSeekListener);
+            this.pendingSeekListener = null;
+        }
+    }
+
+    /**
+     * 把播放位置摆到上次听到的地方（记忆播放进度 / 重启续播都走这里）。
+     *
+     * 关键点：要在 `<audio>` 还没拿到元数据（readyState = HAVE_NOTHING）时设置。
+     * 规范要求此时把它记成「默认起播位置」，元数据到达后浏览器直接按这个偏移
+     * 发起 Range 请求 —— 不会先老老实实从 0 下载到目标位置再跳过去（那样续播
+     * 反而比从头播还慢）。若元数据已经就绪，则这次赋值立刻生效。
+     */
+    private applyStartPosition(audio: HTMLAudioElement, position: number) {
+        if (!(position > 0) || !Number.isFinite(position)) {
+            return;
+        }
+        this.clearPendingSeek();
+        const seek = () => {
+            try {
+                audio.currentTime = position;
+            } catch {
+                // ignore
+            }
+        };
+        seek();
+        if (audio.readyState >= 1) {
+            // HAVE_METADATA：上面那次已经落到位
+            return;
+        }
+        // 兜底：个别音源/容器不认「默认起播位置」，元数据到位后再摆一次
+        const listener = () => {
+            this.pendingSeekListener = null;
+            if (Math.abs((audio.currentTime || 0) - position) > 2) {
+                seek();
+            }
+        };
+        this.pendingSeekListener = listener;
+        audio.addEventListener("loadedmetadata", listener, { once: true });
     }
 
     /** 进入"解析音源中"：立刻静音旧歌，状态置为 loading */
@@ -322,6 +465,11 @@ class TrackPlayer extends EventEmitter {
         if (!this._currentMusic) {
             return;
         }
+        // 自然播完：记录不再更新（`rememberProgress` 距结尾 < END_GAP 就停写），
+        // 读的时候（getSavedProgress / 设置页）会当成「已听完」，下次从头播。
+        // 这里刻意不清记录：清了的话从「播完」到「下一首播满 5 秒」之间盘上是空的，
+        // 这段窗口里退出应用就等于把「上次播放的歌曲和进度」一起丢了。
+        flushProgress();
         if (this._repeatMode === "single") {
             const audio = this.audio;
             if (!audio) {
@@ -382,6 +530,8 @@ class TrackPlayer extends EventEmitter {
         } else {
             localStorage.removeItem("currentMusic");
         }
+        // 顺手给主进程的会话文件也留一份队列（localStorage 那份才是首帧来源，这份是兜底）
+        saveSessionPlayList(this._playList);
     }
 
     getMusicIndexInPlayList(musicItem?: IMusic.IMusicItem | null) {
@@ -471,6 +621,8 @@ class TrackPlayer extends EventEmitter {
         setAtom(musicStateAtom, "stopped");
         setAtom(progressAtom, { position: 0, duration: 0 });
         this.detachAudio();
+        // 播放列表都清了：进度记忆和会话文件一起作废，别留一段没落盘的进度
+        clearAllProgress();
         this.persistPlayList();
     }
 
@@ -592,6 +744,12 @@ class TrackPlayer extends EventEmitter {
 
         const isNew = !this.isCurrentMusic(target);
         const willLoad = isNew || !!forcePlay;
+        /**
+         * 起播位置 = 这首歌上次听到哪儿（没记过、或记的是别的歌就是 0）。
+         * 必须在下面 `markSessionSong()` 之前读出来：重启后用户点播放走的正是这条路
+         * （`togglePlay()` → `play(current, true)`），顺序反了会把刚要用的记录删掉。
+         */
+        const resumePosition = getSavedProgress(target)?.position ?? 0;
 
         if (!this.autoSkipping) {
             // 用户主动发起的播放：把"连续失败"的计数清零
@@ -599,6 +757,10 @@ class TrackPlayer extends EventEmitter {
         }
 
         if (isNew) {
+            // 换歌即把进度记忆切到新歌（位置 0）并立刻落盘：进度记忆只保留「当前正在听的
+            // 那一首」，切歌后退出应用不该下次启动跳回上一首的位置（见 markSessionSong）。
+            // 必须放在上面读 resumePosition 之后 —— 目标歌曲自己的记录刚刚才读到内存里。
+            markSessionSong(target, target.duration);
             this.stallNudges = 0;
             if (!this.isInPlayList(target)) {
                 this.add(target);
@@ -608,7 +770,8 @@ class TrackPlayer extends EventEmitter {
             this.emit(TrackPlayerEvents.CurrentMusicChanged, target);
             setMusicHistory(target);
             this.persistPlayList();
-            setAtom(progressAtom, { position: 0, duration: target.duration ?? 0 });
+            // 进度条先摆到续播位置，别先显示 00:00 再跳回去
+            setAtom(progressAtom, { position: resumePosition, duration: target.duration ?? 0 });
         }
 
         if (willLoad) {
@@ -632,6 +795,9 @@ class TrackPlayer extends EventEmitter {
             }
             audio.src = resolved.src;
             audio.playbackRate = this._rate;
+            // 紧接着 src 赋值就摆进度：此时还处于 HAVE_NOTHING，浏览器会把它当成
+            // 「默认起播位置」，元数据一到就按这个偏移取流（见 applyStartPosition）
+            this.applyStartPosition(audio, resumePosition);
             await this.updateMediaSession(target);
             if (this.pendingPlayId !== playId) {
                 return;
@@ -762,6 +928,23 @@ class TrackPlayer extends EventEmitter {
                 position,
                 duration: this.audio.duration || 0,
             });
+            // 拖动进度条是最明确的一次「我就要从这儿听」：立刻落盘，不等 timeupdate 的节流
+            if (this._currentMusic) {
+                rememberProgress(
+                    this._currentMusic,
+                    position,
+                    this.audio.duration || 0,
+                    true,
+                );
+                flushProgress();
+            }
+            return;
+        }
+        // 重启后还没开始播、音源也没加载：先把进度记下来，起播时会接着这里
+        // （否则用户看到进度条停在 1:23 却拖不动，拖了也没人理）
+        if (this._currentMusic) {
+            rememberProgress(this._currentMusic, position, this._currentMusic.duration || 0, true);
+            setAtom(progressAtom, { position, duration: this._currentMusic.duration || 0 });
         }
     }
 
@@ -793,6 +976,11 @@ class TrackPlayer extends EventEmitter {
         }
         return { position: 0, duration: 0 };
     }
+}
+
+function formatSeconds(position: number) {
+    const total = Math.max(0, Math.floor(position));
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 export const TrackPlayerSingleton = new TrackPlayer();

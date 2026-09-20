@@ -148,6 +148,10 @@ const PREF_KEYS = [
     "playList",
     "currentMusic",
     "defaultPluginHash",
+    "searchHistory",
+    // 播放进度记忆及其开关：和播放列表/当前歌曲同属会话偏好，一起带走才完整
+    "playProgress",
+    "rememberProgress",
 ];
 
 const PREF_PREFIXES = ["pageSource."];

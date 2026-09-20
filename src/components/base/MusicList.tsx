@@ -92,8 +92,18 @@ interface IMusicListProps {
     selectable?: boolean;
     /** 本地音乐模式：行内显示「在访达中打开/删除」，多选操作栏用删除替代下载 */
     localMode?: boolean;
+    /**
+     * 当前列表是「我的歌单」内容（用户歌单 / 我喜欢的音乐）。
+     * 只有在这里才提供「取消收藏」——它对应「把选中的歌从当前歌单里拿掉」；
+     * 插件歌单 / 专辑 / 排行榜 / 搜索这些来源列表里的歌本来就不在自己的歌单里，批量取消没有意义。
+     */
+    userSheetMode?: boolean;
+    /** 当前列表所属歌单的 id：收藏到歌单时把当前歌单从候选里去掉 */
+    currentSheetId?: string;
     /** 传入后在右键菜单中出现「从歌单中移除」 */
     onRemove?: (musicItem: IMusic.IMusicItem) => void;
+    /** 批量从当前歌单移除（userSheetMode 下「取消收藏」用它，缺省退回取消喜欢） */
+    onRemoveMany?: (musicItems: IMusic.IMusicItem[]) => void | Promise<void>;
     /** 喜欢/移除等操作后的回调（页面刷新用） */
     onMusicChanged?: () => void;
     /**
@@ -132,7 +142,10 @@ export default function MusicList(props: IMusicListProps) {
         className,
         selectable = true,
         localMode = false,
+        userSheetMode = false,
+        currentSheetId,
         onRemove,
+        onRemoveMany,
         onMusicChanged,
         pagination,
     } = props;
@@ -293,13 +306,40 @@ export default function MusicList(props: IMusicListProps) {
         clearSelection();
     };
 
-    const likeSelected = async (like: boolean) => {
+    /**
+     * 多选「收藏」：不直接塞进我喜欢的音乐，而是弹出歌单选择面板，
+     * 由用户决定收藏到哪个歌单。「我喜欢的音乐」在名单首位，点一下就是原来的红心收藏。
+     */
+    const collectSelected = () => {
         if (!selectedItems.length) {
             showToast("请先选择歌曲");
             return;
         }
-        await batchSetLike(selectedItems, like);
-        showToast(like ? `已收藏 ${selectedItems.length} 首歌曲` : `已取消收藏 ${selectedItems.length} 首歌曲`);
+        showAddToSheetPanel(selectedItems, {
+            excludeSheetId: currentSheetId,
+            onDone: () => {
+                clearSelection();
+                onMusicChanged?.();
+            },
+        });
+    };
+
+    /**
+     * 多选「取消收藏」：在我的歌单里 = 从当前歌单移除；
+     * 没给 onRemoveMany 时退回原来的「取消喜欢」。
+     */
+    const removeSelected = async () => {
+        if (!selectedItems.length) {
+            showToast("请先选择歌曲");
+            return;
+        }
+        if (onRemoveMany) {
+            await onRemoveMany(selectedItems);
+            clearSelection();
+            return;
+        }
+        await batchSetLike(selectedItems, false);
+        showToast(`已取消收藏 ${selectedItems.length} 首歌曲`);
         clearSelection();
         onMusicChanged?.();
     };
@@ -380,7 +420,11 @@ export default function MusicList(props: IMusicListProps) {
             {
                 title: "收藏到歌单",
                 icon: "playQueue",
-                onClick: () => showAddToSheetPanel(musicItem),
+                onClick: () =>
+                    showAddToSheetPanel(musicItem, {
+                        excludeSheetId: currentSheetId,
+                        onDone: onMusicChanged,
+                    }),
             },
         ];
 
@@ -742,14 +786,16 @@ export default function MusicList(props: IMusicListProps) {
                             下载
                         </button>
                     )}
-                    <button className="btn-ghost" onClick={() => likeSelected(true)}>
+                    <button className="btn-ghost" onClick={collectSelected}>
                         <Icon name="heartFilled" size={14} />
                         收藏
                     </button>
-                    <button className="btn-ghost" onClick={() => likeSelected(false)}>
-                        <Icon name="heart" size={14} />
-                        取消收藏
-                    </button>
+                    {userSheetMode && (
+                        <button className="btn-ghost" onClick={removeSelected}>
+                            <Icon name="heart" size={14} />
+                            取消收藏
+                        </button>
+                    )}
                     <button className="btn-ghost" onClick={addSelectedToPlayList}>
                         <Icon name="plus" size={14} />
                         添加到播放列表

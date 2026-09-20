@@ -52,31 +52,82 @@ export async function getSheetById(id: string): Promise<IUserSheet | undefined> 
     return sheets.find((it) => it.id === id);
 }
 
-export async function addMusicToSheet(id: string, musicItem: IMusic.IMusicItem) {
+/** 歌单内去重用的键（与 MusicList 的 musicKey 同构） */
+function mediaKey(musicItem: IMusic.IMusicItem) {
+    return `${musicItem.platform}-${musicItem.id}`;
+}
+
+/**
+ * 批量添加到歌单：一次读取、一次落盘。
+ * 歌曲已在歌单内（或传入数组自身有重复）时跳过，返回实际新增/跳过的条数。
+ * 目标是我喜欢的音乐时顺带自增喜欢版本号，红心状态才会跟着刷新。
+ */
+export async function addMusicToSheetMany(
+    id: string,
+    musicItems: IMusic.IMusicItem[],
+): Promise<{ added: number; skipped: number }> {
+    if (!musicItems.length) {
+        return { added: 0, skipped: 0 };
+    }
     const sheets = await getUserSheets();
     const sheet = sheets.find((it) => it.id === id);
     if (!sheet) {
-        return;
+        return { added: 0, skipped: 0 };
     }
-    const exists = sheet.musicList.some(
-        (it) => it.id === musicItem.id && it.platform === musicItem.platform,
-    );
-    if (!exists) {
-        sheet.musicList.unshift(musicItem);
+    const seen = new Set(sheet.musicList.map(mediaKey));
+    const toAdd: IMusic.IMusicItem[] = [];
+    for (const musicItem of musicItems) {
+        const key = mediaKey(musicItem);
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        toAdd.push(musicItem);
     }
-    await saveSheets(sheets);
+    if (toAdd.length) {
+        // unshift(...toAdd) 本身按序插入，新歌会以「原列表里看到的顺序」排在歌单最前。
+        // 注意别顺手加 reverse（batchSetLike 那种「逐个点赞、最新在最上」的语义不适用批量收藏）
+        sheet.musicList.unshift(...toAdd);
+        await saveSheets(sheets);
+        if (id === LIKES_SHEET_ID) {
+            bumpLikesVersion();
+        }
+    }
+    return { added: toAdd.length, skipped: musicItems.length - toAdd.length };
+}
+
+export async function addMusicToSheet(id: string, musicItem: IMusic.IMusicItem) {
+    await addMusicToSheetMany(id, [musicItem]);
+}
+
+/** 批量从歌单移除，返回实际移除的条数 */
+export async function removeMusicFromSheetMany(
+    id: string,
+    musicItems: IMusic.IMusicItem[],
+): Promise<number> {
+    if (!musicItems.length) {
+        return 0;
+    }
+    const sheets = await getUserSheets();
+    const sheet = sheets.find((it) => it.id === id);
+    if (!sheet) {
+        return 0;
+    }
+    const removeKeys = new Set(musicItems.map(mediaKey));
+    const before = sheet.musicList.length;
+    sheet.musicList = sheet.musicList.filter((it) => !removeKeys.has(mediaKey(it)));
+    const removed = before - sheet.musicList.length;
+    if (removed) {
+        await saveSheets(sheets);
+        if (id === LIKES_SHEET_ID) {
+            bumpLikesVersion();
+        }
+    }
+    return removed;
 }
 
 export async function removeMusicFromSheet(id: string, musicItem: IMusic.IMusicItem) {
-    const sheets = await getUserSheets();
-    const sheet = sheets.find((it) => it.id === id);
-    if (!sheet) {
-        return;
-    }
-    sheet.musicList = sheet.musicList.filter(
-        (it) => !(it.id === musicItem.id && it.platform === musicItem.platform),
-    );
-    await saveSheets(sheets);
+    await removeMusicFromSheetMany(id, [musicItem]);
 }
 
 export async function renameSheet(id: string, title: string) {

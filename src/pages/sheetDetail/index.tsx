@@ -8,6 +8,7 @@ import {
     deleteSheet,
     getSheetById,
     removeMusicFromSheet,
+    removeMusicFromSheetMany,
     renameSheet,
 } from "@/core/musicSheet";
 import { showAddToSheetPanel } from "@/components/base/AddToSheetPanel";
@@ -167,6 +168,13 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
         }
     };
 
+    /** 多选「取消收藏」：从当前歌单批量移除（一次写盘） */
+    const handleRemoveMany = async (musicItems: IMusic.IMusicItem[]) => {
+        const removed = await removeMusicFromSheetMany(userSheetId!, musicItems);
+        showToast(removed ? `已从歌单移除 ${removed} 首` : "这些歌曲不在当前歌单中");
+        await refreshUserSheet();
+    };
+
     const handleRename = () => {
         showPrompt({
             title: "重命名歌单",
@@ -204,6 +212,8 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                               : `已加载 ${list.items.length} 首`
                           : "",
                 ].filter(Boolean)}
+                // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
+                hideFavoriteAll={isUserSheet}
                 extraActions={
                     <>
                         {list.items.length > 0 && (
@@ -233,7 +243,10 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
             <MusicList
                 musicList={list.items}
                 loading={list.loading}
+                userSheetMode={isUserSheet}
+                currentSheetId={userSheetId}
                 onRemove={isUserSheet ? handleRemove : undefined}
+                onRemoveMany={isUserSheet ? handleRemoveMany : undefined}
                 onMusicChanged={isUserSheet ? refreshUserSheet : undefined}
                 pagination={{
                     currentPage: list.currentPage,

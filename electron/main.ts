@@ -12,6 +12,7 @@ import cacheManager, { CacheKey } from "./services/cacheManager";
 import mediaCache, {
     DEFAULT_MEDIA_CACHE_LIMIT,
 } from "./services/mediaCache";
+import sessionStore from "./services/sessionStore";
 import backupService, { ResumeMode } from "./services/backupService";
 
 const isMac = process.platform === "darwin";
@@ -71,6 +72,17 @@ function createWindow() {
         mainWindow?.show();
     });
 
+    // 关窗（红点 / ⌘W）在 macOS 上等于退出应用，所以这里也要把「上次播放会话」要回来。
+    // 不这样做的后果见会话文件里的说明：渲染进程仍会写 localStorage，但那是异步提交，
+    // 进程被强杀 / 系统直接收走时最后一段进度会丢。
+    mainWindow.on("close", (event) => {
+        if (!needsSessionFlush()) {
+            return;
+        }
+        event.preventDefault();
+        requestSessionFlush().finally(() => mainWindow?.close());
+    });
+
     // 调试：开发模式下自动打开 DevTools
     // 用 detach（独立窗口）而非 dock：本应用布局精确到 px，内嵌 DevTools 会挤压窗口宽度导致样式错位
     const isDev = !!process.env.ELECTRON_START_URL;
@@ -123,6 +135,7 @@ app.whenReady().then(() => {
     }
     const dataDir = path.join(app.getPath("userData"), "data");
     configStore.setup(dataDir);
+    sessionStore.setup(dataDir);
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
@@ -173,13 +186,63 @@ app.whenReady().then(() => {
 });
 
 // 退出前把防抖中的待写数据落盘，避免丢掉最后几百毫秒内的修改
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
     configStore.flushNow();
+    // 已经要过一次就不再问了（下面 app.quit() 会再进一次这个回调）
+    if (!needsSessionFlush()) {
+        return;
+    }
+    // 挂起这次退出，先把渲染进程内存里的播放进度要回来：主进程手里那份最多落后 15 秒，
+    // 而「退出时到底听到哪儿」只有渲染进程自己知道。
+    event.preventDefault();
+    requestSessionFlush().finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => {
     app.quit();
 });
+
+/** ---------- 上次播放会话 ---------- */
+
+/** 上次向渲染进程要会话的时间，用来避免「关窗 + 退出」两条路各问一遍 */
+let lastSessionFlushAt = 0;
+/** 冷却窗口要比超时长：超时兜底那一轮走的还是同一条路，别让它再问一次 */
+const SESSION_FLUSH_COOLDOWN = 1000;
+/** 渲染进程迟迟不回时也照常退出（它可能已经崩了 / 正在跑长任务） */
+const SESSION_FLUSH_TIMEOUT = 400;
+
+function needsSessionFlush() {
+    return Date.now() - lastSessionFlushAt > SESSION_FLUSH_COOLDOWN;
+}
+
+/**
+ * 向渲染进程要一次「上次播放会话」并等它写完。
+ * 渲染进程收到 `session:flush` 后落盘（`session:save`，主进程同步写文件）再回 `session:saved`，
+ * 所以这个 Promise resolve 时数据已经在盘上，随后的 app.quit() 不会再丢东西。
+ */
+function requestSessionFlush(): Promise<void> {
+    const wc = mainWindow?.webContents;
+    if (!wc || wc.isDestroyed()) {
+        return Promise.resolve();
+    }
+    lastSessionFlushAt = Date.now();
+    return new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) {
+                return;
+            }
+            done = true;
+            clearTimeout(timer);
+            ipcMain.removeListener("session:saved", finish);
+            resolve();
+        };
+        const timer = setTimeout(finish, SESSION_FLUSH_TIMEOUT);
+        timer.unref?.();
+        ipcMain.once("session:saved", finish);
+        wc.send("session:flush");
+    });
+}
 
 /** ---------- IPC ---------- */
 
@@ -191,6 +254,17 @@ ipcMain.handle("config:set", (_e, key: string, value: any) =>
 ipcMain.handle("config:remove", (_e, key: string) =>
     configStore.remove(key));
 ipcMain.handle("config:getAll", () => configStore.getAll());
+
+/** ---------- 上次播放会话（见 services/sessionStore.ts） ---------- */
+
+// 启动时渲染进程要**同步**拿到它才能让进度条首帧就停在正确位置（preload 里 sendSync）
+ipcMain.on("session:getSync", (event) => {
+    event.returnValue = sessionStore.getSnapshot();
+});
+ipcMain.handle("session:save", (_e, partial: any) => {
+    sessionStore.save(partial ?? {});
+    return true;
+});
 
 // 插件
 ipcMain.handle("plugin:list", () => pluginHost.getSerializedPlugins());
