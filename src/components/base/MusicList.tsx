@@ -372,7 +372,7 @@ export default function MusicList(props: IMusicListProps) {
         // 正在播放/在播放队列中的歌曲先清理播放状态，避免删除后播放异常
         for (const it of items) {
             if (TrackPlayerSingleton.isCurrentMusic(it)) {
-                await TrackPlayerSingleton.clearPlayList();
+                await TrackPlayerSingleton.clearPlayListAndStop();
             } else {
                 await TrackPlayerSingleton.remove(it);
             }

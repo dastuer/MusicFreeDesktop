@@ -465,9 +465,16 @@ protocol.registerSchemesAsPrivileged([{
 | 分类 | 成员 |
 | --- | --- |
 | 状态 getter | `playList` / `currentMusic` / `repeatMode` / `getProgress()` / `getVolume()` |
-| 播放控制 | `play(item?, forcePlay?)` / `pause()` / `togglePlay()` / `skipToNext()` / `skipToPrevious()` / `seekTo(position)` |
-| 列表操作 | `add` / `addAll` / `addNext` / `remove` / `clearPlayList` / `playWithReplacePlayList` / `isInPlayList` / `isCurrentMusic` / `getMusicIndexInPlayList` |
+| 播放控制 | `play(item?, forcePlay?)` / `pause()` / `togglePlay()` / `skipToNext()` / `skipToPrevious()` / `seekTo(position)` / `pickPlayAllStart(list)` |
+| 列表操作 | `add` / `addAll` / `addNext` / `remove` / `clearPlayList` / `clearPlayListAndStop` / `playWithReplacePlayList` / `isInPlayList` / `isCurrentMusic` / `getMusicIndexInPlayList` |
 | 模式与倍速 | `toggleRepeatMode()` / `setRate(rate)` / `setVolume(v)` |
+
+#### 清空队列 ≠ 停止播放
+
+- `clearPlayList()`：只清队列，**正在播的这首继续播**（播放列表面板上的「清空」走这里）。
+- `clearPlayListAndStop()`：清队列 + 断音源 + 清当前歌曲与进度记忆。只在「当前这首歌本身被取消」时用——`remove()` 删掉最后一首（队列空了没处可跳）、删除正在播放的本地文件（文件马上就不在了）。
+
+清空后 `_currentMusic` 是个不在队列里的"孤儿"，靠的全是 `getMusicIndexInPlayList` 返回 `-1` 的兜底：`addNext` 插到队首、`getNextIndex` 从第一首开始、`play()` 新歌时重新入列（`play()` 里的自动入列在解析音源**之前**就完成，所以清空不会把正在加载的这首丢在半路）。`onEnded` 里为队列空的情形单开一支：这首歌播完就置 `stopped`，不要去 `skipToNext()`（无处可跳，只会停在结尾装作卡住）；`repeatMode === "single"` 时它仍会一直循环。落盘照旧（`persistPlayList` 把 `currentMusic` 单独写一份），所以重启后这首孤儿照样能还原。
 
 #### 状态同步：双轨制
 
@@ -489,6 +496,7 @@ type MusicRepeatMode = "off" | "queue" | "single";
 - `off` → 顺序播放，播到最后一首停止
 - `queue` → **不是列表循环，是随机播放**（见 `getNextIndex` 中 `repeatMode === "queue"` 分支调用了 `Math.random()`）
 - `single` → 单曲循环
+- 随机模式下「播放全部」的**第一首**也是随机挑的（`pickPlayAllStart`，两个入口：`MediaHeader` 与侧边栏歌单右键菜单）；队列本身保持歌单原顺序，只换开场曲
 
 命名沿用了移动端，改动前需全局排查引用点。
 
@@ -518,7 +526,7 @@ if (this.pendingPlayId === playId) { setAtom(musicStateAtom, "playing"); }
 
 - **启动绝不自动出声**：曾经实现过「启动续播」（靠一个 `lastMusicState` 闸门 + `autoResumeOnLaunch` 开关），已按要求移除。重启后「有位置但不出声」是刻意行为，别再顺手加回去。
 - **退出时的握手顺序**：主进程先 `preventDefault` 挂起退出，渲染进程**必须等 `session:save` 的 Promise resolve 之后**才回执 `session:saved` —— 早回执等于最后一段进度没写进文件。
-- **播放器没起来 / 当前没有歌时什么都不写**：那种「没有进度」是假象（比如页面刚加载完就被关掉），写 null 会把上次退出时记的好记录清掉。要作废记录只有 `clearAllProgress()`（设置页「清除」/ 清空播放列表）。
+- **播放器没起来 / 当前没有歌时什么都不写**：那种「没有进度」是假象（比如页面刚加载完就被关掉），写 null 会把上次退出时记的好记录清掉。要作废记录只有 `clearAllProgress()`（设置页「清除」/ `clearPlayListAndStop()`；注意**只清空队列不会**——当前那首要接着播，退出时仍该记住听到哪儿）。
 - **设置项**（设置页「播放」组）：`rememberProgress` 关掉后既不记也不续（仍还原歌曲，位置归 0）；另有一行显示「已记忆的播放进度」并可清除（清除会清掉会话文件里的歌曲/进度，但**不动队列**）。
 - **`session.json` 坏了丢了只会丢「回到上次播放」这一个功能**，`setup()` 里一律 try/catch 并降级。
 

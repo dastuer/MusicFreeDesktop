@@ -462,6 +462,13 @@ class TrackPlayer extends EventEmitter {
             );
             return;
         }
+        // 队列空了、只剩这一首"孤儿"还在听（清空过播放列表）：播完就到头了，
+        // 别再往下跳（skipToNext 无处可跳，只会把状态停在 paused 让人以为卡住了）。
+        if (this._playList.length === 0) {
+            this.emit(TrackPlayerEvents.PlayEnd);
+            setAtom(musicStateAtom, "stopped");
+            return;
+        }
         // 列表末尾
         const index = this.getMusicIndexInPlayList(this._currentMusic);
         if (
@@ -568,7 +575,8 @@ class TrackPlayer extends EventEmitter {
         this.persistPlayList();
         if (removingCurrent) {
             if (list.length === 0) {
-                await this.clearPlayList();
+                // 移除的就是正在播这首：没有"下一首"可跳，只能整个停下
+                await this.clearPlayListAndStop();
             } else {
                 await this.play(list[Math.min(index, list.length - 1)], true);
             }
@@ -585,21 +593,35 @@ class TrackPlayer extends EventEmitter {
         );
     }
 
-    async clearPlayList() {
+    /**
+     * 清空播放队列，**正在播的这首继续播**。
+     *
+     * 队列空了以后 `_currentMusic` 是个不在队列里的"孤儿"，几处下游都靠
+     * `getMusicIndexInPlayList` 返回 -1 来兜底：`addNext` 插到队首、`getNextIndex`
+     * 从第一首开始、`play` 新歌时会自动重新入列。
+     * 在途的音源解析不能作废（`pendingPlayId`）——那正是当前这首歌；
+     * 进度记忆同样留着，它还要继续播，退出时该记住听到哪儿。
+     */
+    clearPlayList() {
         this._playList = [];
+        setAtom(playListAtom, []);
+        this.persistPlayList();
+    }
+
+    /** 清空队列并且彻底停下：连当前这首歌也不要了（移除最后一首、删除正在播放的本地文件） */
+    async clearPlayListAndStop() {
         this._currentMusic = null;
-        // 任何在途的加载都要作废，否则清空后它还会把解析结果挂上来
+        // 任何在途的加载都要作废，否则停下后它还会把解析结果挂上来
         this.pendingPlayId = "";
         this.isLoading = false;
         this.autoSkipCount = 0;
-        setAtom(playListAtom, []);
         setAtom(currentMusicAtom, null);
         setAtom(musicStateAtom, "stopped");
         setAtom(progressAtom, { position: 0, duration: 0 });
         this.detachAudio();
-        // 播放列表都清了：进度记忆和会话文件一起作废，别留一段没落盘的进度
+        this.clearPlayList();
+        // 歌都不要了：进度记忆和会话文件一起作废，别留一段没落盘的进度
         clearAllProgress();
-        this.persistPlayList();
     }
 
     /** ---------- 播放控制 ---------- */
@@ -876,6 +898,20 @@ class TrackPlayer extends EventEmitter {
         if (nextIndex >= 0) {
             await this.play(this._playList[nextIndex], true);
         }
+    }
+
+    /**
+     * 「播放全部」从哪一首开始：随机播放模式（`repeatMode === "queue"`）下随机挑一首，
+     * 否则就是列表第一首。
+     *
+     * 只决定**第一首**，队列顺序原样保留；后续切歌在随机模式下本来就走 `getNextIndex`
+     * 的随机分支，这里再把整份队列打乱一遍反而重复。
+     */
+    pickPlayAllStart(list: IMusic.IMusicItem[]) {
+        if (this._repeatMode !== "queue" || list.length < 2) {
+            return list[0];
+        }
+        return list[Math.floor(Math.random() * list.length)];
     }
 
     async playWithReplacePlayList(

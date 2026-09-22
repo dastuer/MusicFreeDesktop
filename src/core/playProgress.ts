@@ -312,7 +312,7 @@ export function getRememberedProgress(): { title: string; position: number } | n
     return { title: current.music?.title ?? "", position: current.position };
 }
 
-/** 设置页「清除已记忆的进度」/ 清空播放列表：只清歌曲与进度，不动播放队列 */
+/** 设置页「清除已记忆的进度」/ `clearPlayListAndStop()`：只清歌曲与进度，不动播放队列 */
 export function clearAllProgress() {
     return writeSession(null);
 }

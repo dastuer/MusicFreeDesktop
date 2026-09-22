@@ -58,7 +58,7 @@ export default function MediaHeader(props: {
                         onClick={() => {
                             if (musicList.length) {
                                 TrackPlayerSingleton.playWithReplacePlayList(
-                                    musicList[0],
+                                    TrackPlayerSingleton.pickPlayAllStart(musicList),
                                     musicList,
                                 );
                             }

@@ -84,7 +84,7 @@ export default function Sidebar() {
                 onClick: () => {
                     if (sheet.musicList.length) {
                         TrackPlayerSingleton.playWithReplacePlayList(
-                            sheet.musicList[0],
+                            TrackPlayerSingleton.pickPlayAllStart(sheet.musicList),
                             sheet.musicList,
                         );
                     } else {
