@@ -7,8 +7,11 @@ import { useEffect } from "react";
  */
 
 export type ThemeType = "light" | "dark";
+export type ThemeSetting = ThemeType | "auto";
 
-export const themeTypeAtom = atom<ThemeType>("light");
+/** 用户的选择而不是解析结果：系统为浅色时"浅色"和"跟随系统"会解析出同一个主题，
+ *  拿解析结果判高亮会导致点"跟随系统"毫无反馈 */
+export const themeSettingAtom = atom<ThemeSetting>("light");
 
 export const lightTheme = {
     primary: "#ec4141",
@@ -68,39 +71,39 @@ function applyTheme(type: ThemeType) {
     });
 }
 
+function resolveTheme(setting: ThemeSetting): ThemeType {
+    if (setting !== "auto") return setting;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 export function useThemeSetup() {
-    const setThemeType = useSetAtom(themeTypeAtom);
+    const setThemeSetting = useSetAtom(themeSettingAtom);
 
     useEffect(() => {
-        const saved = (localStorage.getItem("theme") as string) || "light";
-        const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-        const initial: ThemeType =
-            saved === "auto" ? (systemDark ? "dark" : "light") : (saved as ThemeType);
-        setThemeType(initial);
+        const saved = ((localStorage.getItem("theme") as string) || "light") as ThemeSetting;
+        setThemeSetting(saved);
+        const initial = resolveTheme(saved);
         applyTheme(initial);
 
         const media = window.matchMedia("(prefers-color-scheme: dark)");
         const handler = () => {
-            if ((localStorage.getItem("theme") as string) === "auto") {
-                const next: ThemeType = media.matches ? "dark" : "light";
-                setThemeType(next);
-                applyTheme(next);
+            if (localStorage.getItem("theme") === "auto") {
+                applyTheme(media.matches ? "dark" : "light");
             }
         };
         media.addEventListener("change", handler);
         return () => media.removeEventListener("change", handler);
-    }, [setThemeType]);
+    }, [setThemeSetting]);
 }
 
-export function setTheme(type: "light" | "dark" | "auto") {
-    localStorage.setItem("theme", type);
-    const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const resolved: ThemeType = type === "auto" ? (systemDark ? "dark" : "light") : type;
+export function setTheme(setting: ThemeSetting): ThemeType {
+    localStorage.setItem("theme", setting);
+    getDefaultStore().set(themeSettingAtom, setting);
+    const resolved = resolveTheme(setting);
     applyTheme(resolved);
-    getDefaultStore().set(themeTypeAtom, resolved);
     return resolved;
 }
 
-export function useThemeType() {
-    return useAtomValue(themeTypeAtom);
+export function useThemeSetting() {
+    return useAtomValue(themeSettingAtom);
 }

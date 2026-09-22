@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { setTheme, useThemeType } from "@/core/theme";
+import { setTheme, useThemeSetting } from "@/core/theme";
 import { getQuality, setQuality } from "@/core/appConfig";
 import {
     clearAllProgress,
@@ -63,7 +63,7 @@ function ToggleRow(props: {
 }
 
 export default function SettingsPage() {
-    const themeType = useThemeType();
+    const themeSetting = useThemeSetting();
     const [quality, setQualityState] = useState<IMusic.IQualityKey>(getQuality());
     const [appInfo, setAppInfo] = useState<any>(null);
     const [downloadDir, setDownloadDir] = useState("");
@@ -99,12 +99,7 @@ export default function SettingsPage() {
                         {(["light", "dark", "auto"] as const).map((mode) => (
                             <button
                                 key={mode}
-                                className={`segment-item${
-                                    (mode === "auto" && localStorage.getItem("theme") === "auto") ||
-                                    themeType === mode
-                                        ? " active"
-                                        : ""
-                                }`}
+                                className={`segment-item${themeSetting === mode ? " active" : ""}`}
                                 onClick={() => setTheme(mode)}
                             >
                                 {mode === "light" ? "浅色" : mode === "dark" ? "深色" : "跟随系统"}
