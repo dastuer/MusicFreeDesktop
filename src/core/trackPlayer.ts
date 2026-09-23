@@ -56,6 +56,9 @@ const MEDIA_SOURCE_TIMEOUT = 10000;
 /** 连续 N 首都播不出来就停下，不再自动往后跳（否则坏音源会把整个歌单空转一圈） */
 const MAX_AUTO_SKIP = 3;
 
+/** 播放历史留多少首（上一首按它回退；再多也没人按那么回去） */
+const MAX_HISTORY = 50;
+
 /** MediaError 转成人话（见 HTMLMediaElement.error） */
 function describeMediaError(err?: MediaError | null) {
     switch (err?.code) {
@@ -87,6 +90,22 @@ function describePlayError(e: any) {
 }
 
 /** ---------- jotai atoms ---------- */
+/** 音量默认值：没存过、或存的不是数字时用 */
+export const DEFAULT_VOLUME = 0.8;
+
+/**
+ * 读回存过的音量。setup() 与 volumeAtom 共用这一份，否则两边初值不一致，
+ * 第一次按方向键就会把用户音量弹回默认值。
+ */
+function getStoredVolume(): number {
+    const raw = localStorage.getItem("volume");
+    if (raw === null) {
+        return DEFAULT_VOLUME;
+    }
+    const stored = Number(raw);
+    return Number.isFinite(stored) ? Math.min(Math.max(stored, 0), 1) : DEFAULT_VOLUME;
+}
+
 export const playListAtom = atom<IMusic.IMusicItem[]>([]);
 export const currentMusicAtom = atom<IMusic.IMusicItem | null>(null);
 export const musicStateAtom = atom<MusicState>("stopped");
@@ -96,6 +115,7 @@ export const progressAtom = atom<{ position: number; duration: number }>({
     duration: 0,
 });
 export const rateAtom = atom<number>(1);
+export const volumeAtom = atom<number>(getStoredVolume());
 
 const store = getDefaultStore();
 
@@ -109,6 +129,12 @@ class TrackPlayer extends EventEmitter {
     private audio: HTMLAudioElement | null = null;
     private _repeatMode: MusicRepeatMode = "off";
     private _playList: IMusic.IMusicItem[] = [];
+    /**
+     * 播过的歌，按播放顺序，最后一项就是当前这首。
+     * 「上一首」按它回退而不是按队列下标——随机播放下标没有「前一首」，
+     * 列表里直接点歌之后也想回到刚才听到的那首。
+     */
+    private _history: IMusic.IMusicItem[] = [];
     private _currentMusic: IMusic.IMusicItem | null = null;
     private _rate = 1;
     private pendingPlayId = "";
@@ -136,7 +162,7 @@ class TrackPlayer extends EventEmitter {
         bindProgressPersistence(() => this.collectSessionProgress());
         const audio = new Audio();
         audio.preload = "auto";
-        audio.volume = Math.min(Number(localStorage.getItem("volume") ?? 0.8), 1);
+        audio.volume = getStoredVolume();
         audio.addEventListener("ended", this.onEnded);
         audio.addEventListener("timeupdate", this.onProgress);
         audio.addEventListener("loadedmetadata", this.onProgress);
@@ -573,6 +599,8 @@ class TrackPlayer extends EventEmitter {
         this._playList = list;
         setAtom(playListAtom, this._playList);
         this.persistPlayList();
+        // 历史原样留着：删的是队列里的成员，不是「刚才听过它」这件事。
+        // 一起删掉的话，上一首会退到队列下标上，从被删那首的位置跳去别处。
         if (removingCurrent) {
             if (list.length === 0) {
                 // 移除的就是正在播这首：没有"下一首"可跳，只能整个停下
@@ -606,6 +634,8 @@ class TrackPlayer extends EventEmitter {
         this._playList = [];
         setAtom(playListAtom, []);
         this.persistPlayList();
+        // 历史留着：清掉的是队列，不是「听过」。当前这首还在播，它前面那几首
+        // 照样是「刚才播过的」，按上一首要能回去（回去时不塞回空队列，见 skipToPrevious）。
     }
 
     /** 清空队列并且彻底停下：连当前这首歌也不要了（移除最后一首、删除正在播放的本地文件） */
@@ -620,6 +650,8 @@ class TrackPlayer extends EventEmitter {
         setAtom(progressAtom, { position: 0, duration: 0 });
         this.detachAudio();
         this.clearPlayList();
+        // 停下 + 队列清空 = 这一段收听整个作废，历史再留着就只有一个不在任何队列里的幽灵
+        this._history = [];
         // 歌都不要了：进度记忆和会话文件一起作废，别留一段没落盘的进度
         clearAllProgress();
     }
@@ -731,7 +763,15 @@ class TrackPlayer extends EventEmitter {
         }
     }
 
-    async play(musicItem?: IMusic.IMusicItem | null, forcePlay?: boolean) {
+    /**
+     * @param addToPlayList 不在队列里的歌要不要顺手插进队列（默认插）。
+     *   上一首回到一首已被移出队列的歌时传 false：歌照常放出来，但别复活在队列末尾。
+     */
+    async play(
+        musicItem?: IMusic.IMusicItem | null,
+        forcePlay?: boolean,
+        addToPlayList = true,
+    ) {
         if (!musicItem && !this._currentMusic) {
             return;
         }
@@ -756,10 +796,11 @@ class TrackPlayer extends EventEmitter {
 
         if (isNew) {
             this.stallNudges = 0;
-            if (!this.isInPlayList(target)) {
+            if (addToPlayList && !this.isInPlayList(target)) {
                 this.add(target);
             }
             this._currentMusic = target;
+            this.pushHistory(target);
             setAtom(currentMusicAtom, target);
             this.emit(TrackPlayerEvents.CurrentMusicChanged, target);
             setMusicHistory(target);
@@ -893,7 +934,52 @@ class TrackPlayer extends EventEmitter {
         }
     }
 
+    /**
+     * 记一笔播放历史。同一首连续出现只算一条：从历史里回到它、
+     * 或者失败后重播同一首时，否则会留下一格空历史，按一次上一首没反应。
+     */
+    private pushHistory(musicItem: IMusic.IMusicItem) {
+        const last = this._history[this._history.length - 1];
+        if (last && last.id === musicItem.id && last.platform === musicItem.platform) {
+            return;
+        }
+        this._history.push(musicItem);
+        if (this._history.length > MAX_HISTORY) {
+            this._history = this._history.slice(-MAX_HISTORY);
+        }
+    }
+
+    /**
+     * 取出「刚才播的那首」，并把当前这首从历史里退场。
+     *
+     * 退场是为了让连按上一首一路往回走（C → B → A），而不是在两首之间来回弹：
+     * 不退场的话回到 B 之后，历史末尾又变成 B 前面那个 C。
+     * 历史末尾不是当前歌曲时（重启后只有还原的当前歌曲）不退，交给队列下标兜底。
+     */
+    private takePreviousFromHistory() {
+        const prev = this._history[this._history.length - 2];
+        if (!prev) {
+            return null;
+        }
+        if (this.isCurrentMusic(this._history[this._history.length - 1])) {
+            this._history.pop();
+        }
+        return prev;
+    }
+
     async skipToPrevious() {
+        const prev = this.takePreviousFromHistory();
+        if (prev) {
+            // prev 可能已经不在队列里（被删过、或这之后换过队列）：照样播它，但不塞回队列
+            await this.play(prev, true, this.isInPlayList(prev));
+            return;
+        }
+        // 没有历史（刚启动、或已经退到这段收听的第一首）：退回队列里的前一首
+        if (!this.isInPlayList(this._currentMusic)) {
+            // 当前这首本来就不在队列里（刚由历史回到一首被移出队列的歌）：
+            // 队列下标对它没有意义，按位置兜底会凭空跳到队列第一首，不如就地停住。
+            return;
+        }
         const nextIndex = await this.getNextIndex(-1);
         if (nextIndex >= 0) {
             await this.play(this._playList[nextIndex], true);
@@ -920,6 +1006,8 @@ class TrackPlayer extends EventEmitter {
     ) {
         this._playList = [...newPlayList];
         setAtom(playListAtom, this._playList);
+        // 历史不动：换了队列不等于「刚才没播过上一份的最后一首」。
+        // 新队列里的这一首会由 play() 记进历史。
         await this.play(musicItem, true);
     }
 
@@ -958,14 +1046,16 @@ class TrackPlayer extends EventEmitter {
     }
 
     setVolume(volume: number) {
+        const next = Math.min(Math.max(volume, 0), 1);
         if (this.audio) {
-            this.audio.volume = Math.min(Math.max(volume, 0), 1);
-            localStorage.setItem("volume", String(volume));
+            this.audio.volume = next;
         }
+        localStorage.setItem("volume", String(next));
+        setAtom(volumeAtom, next);
     }
 
     getVolume() {
-        return this.audio?.volume ?? 0.8;
+        return this.audio?.volume ?? getStoredVolume();
     }
 
     getProgress() {
@@ -998,6 +1088,9 @@ export function useMusicState() {
 }
 export function useRepeatMode() {
     return useAtomValue(repeatModeAtom);
+}
+export function useVolume() {
+    return useAtomValue(volumeAtom);
 }
 export function useProgress() {
     return useAtomValue(progressAtom);

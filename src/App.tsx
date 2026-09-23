@@ -23,6 +23,7 @@ import {
     loadCurrentLyric,
 } from "./core/trackPlayer";
 import { useThemeSetup } from "./core/theme";
+import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 
 import HomePage from "./pages/home";
@@ -154,6 +155,7 @@ function MainContent(props: { onOpenDetail: () => void }) {
 
 export default function App() {
     useThemeSetup();
+    usePlayerShortcuts();
     const [musicDetailVisible, setMusicDetailVisible] = useState(false);
 
     useEffect(() => {

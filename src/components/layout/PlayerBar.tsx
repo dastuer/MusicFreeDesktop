@@ -4,11 +4,13 @@ import Icon from "../base/Icon";
 import Cover from "../base/Cover";
 import Slider from "../base/Slider";
 import {
+    DEFAULT_VOLUME,
     TrackPlayerSingleton,
     useCurrentMusic,
     useMusicState,
     useProgress,
     useRepeatMode,
+    useVolume,
 } from "@/core/trackPlayer";
 import { isLiked, likesVersionAtom, toggleLike } from "@/core/musicSheet";
 import { showAddToSheetPanel } from "../base/AddToSheetPanel";
@@ -34,8 +36,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const musicState = useMusicState();
     const progress = useProgress();
     const repeatMode = useRepeatMode();
-    const [volume, setVolumeState] = useState(TrackPlayerSingleton.getVolume());
-    const [muted, setMuted] = useState(false);
+    const volume = useVolume();
+    const muted = volume === 0;
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
 
@@ -105,14 +107,14 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     <button
                         className="playerbar-control-btn"
                         onClick={() => TrackPlayerSingleton.skipToPrevious()}
-                        title="上一首"
+                        title="上一首 (←)"
                     >
                         <Icon name="prev" size={20} />
                     </button>
                     <button
                         className="playerbar-play-btn"
                         onClick={() => TrackPlayerSingleton.togglePlay()}
-                        title={loading ? "取消加载" : playing ? "暂停" : "播放"}
+                        title={loading ? "取消加载 (空格)" : playing ? "暂停 (空格)" : "播放 (空格)"}
                     >
                         {loading ? (
                             <span className="playerbar-spinner" />
@@ -123,7 +125,7 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     <button
                         className="playerbar-control-btn"
                         onClick={() => TrackPlayerSingleton.skipToNext()}
-                        title="下一首"
+                        title="下一首 (→)"
                     >
                         <Icon name="next" size={20} />
                     </button>
@@ -173,23 +175,15 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     </button>
                     <button
                         className="playerbar-control-btn"
-                        onClick={() => {
-                            const nextMuted = !muted;
-                            setMuted(nextMuted);
-                            TrackPlayerSingleton.setVolume(nextMuted ? 0 : 0.8);
-                            setVolumeState(nextMuted ? 0 : 0.8);
-                        }}
+                        title={muted ? "取消静音" : "静音"}
+                        onClick={() => TrackPlayerSingleton.setVolume(muted ? DEFAULT_VOLUME : 0)}
                     >
-                        <Icon name={muted || volume === 0 ? "volumeMute" : "volume"} size={16} />
+                        <Icon name={muted ? "volumeMute" : "volume"} size={16} />
                     </button>
                     <Slider
-                        value={muted ? 0 : volume}
+                        value={volume}
                         max={1}
-                        onChange={(v) => {
-                            setVolumeState(v);
-                            setMuted(v === 0);
-                            TrackPlayerSingleton.setVolume(v);
-                        }}
+                        onChange={(v) => TrackPlayerSingleton.setVolume(v)}
                     />
                     <button
                         className="playerbar-control-btn"
