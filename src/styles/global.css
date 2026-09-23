@@ -1187,9 +1187,19 @@ img {
     display: none;
 }
 
+/* 首尾各占半屏空白，第一句和最后一句才有空间滚到容器正中 */
+.music-detail-lyric::before,
+.music-detail-lyric::after {
+    content: "";
+    display: block;
+    height: 50%;
+}
+
 .lyric-line {
+    /* 行高固定：激活行放大字号时占位高度不变，居中位置才不会漂 */
+    line-height: 24px;
     padding: 8px 0;
-    transition: color 0.2s, transform 0.2s;
+    transition: color 0.2s;
     cursor: default;
 }
 
@@ -1197,7 +1207,6 @@ img {
     color: var(--text-color);
     font-size: 17px;
     font-weight: 600;
-    transform: scale(1.02);
 }
 
 .music-detail-title {

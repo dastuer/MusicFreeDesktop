@@ -42,15 +42,40 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
         return index;
     }, [lyric, progress.position]);
 
+    // 本页面是否已经完成过一次定位：首次直接到位，之后才平滑滚动
+    const positionedRef = useRef(false);
+
     useEffect(() => {
-        if (userScrolled || activeIndex < 0 || !lyricRef.current) {
+        const container = lyricRef.current;
+        if (!visible) {
+            positionedRef.current = false;
             return;
         }
-        const el = lyricRef.current.querySelector(
+        if (!container) {
+            return;
+        }
+        const line = container.querySelector<HTMLElement>(
             `.lyric-line[data-index="${activeIndex}"]`,
         );
-        el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, [activeIndex, userScrolled]);
+        if (!line) {
+            return;
+        }
+        if (userScrolled) {
+            positionedRef.current = false;
+            return;
+        }
+        const containerRect = container.getBoundingClientRect();
+        const lineRect = line.getBoundingClientRect();
+        container.scrollTo({
+            top:
+                container.scrollTop +
+                (lineRect.top - containerRect.top) +
+                lineRect.height / 2 -
+                containerRect.height / 2,
+            behavior: positionedRef.current ? "smooth" : "auto",
+        });
+        positionedRef.current = true;
+    }, [activeIndex, userScrolled, visible, lyric.length]);
 
     if (!visible || !currentMusic) {
         return null;
