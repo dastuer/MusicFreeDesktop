@@ -120,6 +120,7 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                     musicList={musicList}
                     loading={loading}
                     isEnd={isEnd}
+                    listId={`artist:${artistItem?.platform}/${artistItem?.id}`}
                     onLoadMore={loadMore}
                 />
             ) : (

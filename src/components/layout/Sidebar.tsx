@@ -86,6 +86,10 @@ export default function Sidebar() {
                         TrackPlayerSingleton.playWithReplacePlayList(
                             TrackPlayerSingleton.pickPlayAllStart(sheet.musicList),
                             sheet.musicList,
+                            // 与歌单详情页传同一个标识，队列的来历认得到这个歌单
+                            `userSheet:${sheet.id}`,
+                            // 「播放全部」是明确指令：一律重新铺一遍这份歌单
+                            true,
                         );
                     } else {
                         showToast("歌单还没有歌曲");

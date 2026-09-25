@@ -79,11 +79,13 @@ export default function TopListDetailPage(props: { topListItem?: IMusic.IMusicSh
                 description={topListItem.description}
                 musicList={musicList}
                 meta={[musicList.length ? `共 ${musicList.length} 首` : ""].filter(Boolean)}
+                listId={`topList:${topListItem.platform}/${topListItem.id}`}
             />
             <MusicList
                 musicList={musicList}
                 loading={loading}
                 isEnd={isEnd}
+                listId={`topList:${topListItem.platform}/${topListItem.id}`}
                 onLoadMore={loadMore}
             />
         </div>

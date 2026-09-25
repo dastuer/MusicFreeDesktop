@@ -25,7 +25,7 @@ import { showToast } from "./Toast";
 
 /**
  * 歌曲列表（桌面端表格形态）：多选框 / 序号 / 封面+标题 / 歌手 / 专辑 / 操作+时长
- * 支持单击播放、双击播放、右键菜单、多选批量下载/收藏
+ * 支持单击播放（整个列表换进播放列表）、右键菜单、多选批量下载/收藏
  */
 
 /** 首屏渲染行数 / 每次追加行数 */
@@ -111,6 +111,12 @@ interface IMusicListProps {
      * 不传时保持老行为（首屏 150 行的分片渲染 + 手动「加载更多」）。
      */
     pagination?: IMusicListPagination;
+    /**
+     * 这份列表的稳定标识（歌单 / 专辑 / 榜单 / 本地音乐…各给各的）。
+     * 点行播放时带进播放队列，队列已经是这份列表就不再重复整队替换、也不重复提示。
+     * 不传则每次点都重新整队替换。
+     */
+    listId?: string;
 }
 
 export interface IMusicListPagination {
@@ -148,6 +154,7 @@ export default function MusicList(props: IMusicListProps) {
         onRemoveMany,
         onMusicChanged,
         pagination,
+        listId,
     } = props;
     const currentMusic = useCurrentMusic();
     const likesVersion = useAtomValue(likesVersionAtom);
@@ -344,14 +351,19 @@ export default function MusicList(props: IMusicListProps) {
         onMusicChanged?.();
     };
 
-    /** 多选批量追加到当前播放列表（TrackPlayer.add 支持数组，内部按 platform+id 去重） */
+    /**
+     * 多选批量追加到当前播放列表（TrackPlayer.add 支持数组，已在队列里的不会重复塞）。
+     * 一次操作只出一条反馈，图标提示优先：有歌进队列时歌单入口图标已经提示过了，
+     * 这里只在「一首都没进」（图标不会提示）时说一声。
+     */
     const addSelectedToPlayList = () => {
         if (!selectedItems.length) {
             showToast("请先选择歌曲");
             return;
         }
-        TrackPlayerSingleton.add(selectedItems);
-        showToast(`已添加 ${selectedItems.length} 首歌曲到播放列表`);
+        if (!TrackPlayerSingleton.add(selectedItems)) {
+            showToast("这些歌曲都已经在播放列表里了");
+        }
         clearSelection();
     };
 
@@ -404,17 +416,18 @@ export default function MusicList(props: IMusicListProps) {
             {
                 title: "下一首播放",
                 icon: "forward",
-                onClick: () => {
-                    TrackPlayerSingleton.addNext(musicItem);
-                    showToast("已添加到下一首播放");
-                },
+                // 反馈走歌单入口图标上那条提示，不再叠一条顶部 toast
+                onClick: () => TrackPlayerSingleton.addNext(musicItem),
             },
             {
                 title: "添加到播放列表",
                 icon: "plus",
                 onClick: () => {
-                    TrackPlayerSingleton.add(musicItem);
-                    showToast("已添加到播放列表");
+                    // 真进了队列就不弹顶部 toast：歌单入口图标上已经提示「已添加到歌单列表」。
+                    // 只有被去重、图标不会提示的情况才在这里说。
+                    if (!TrackPlayerSingleton.add(musicItem)) {
+                        showToast("这首歌已经在播放列表里了");
+                    }
                 },
             },
             {
@@ -567,8 +580,13 @@ export default function MusicList(props: IMusicListProps) {
                     <div
                         key={`${k}-${rowIndex}`}
                         className={`music-row${playing ? " playing" : ""}`}
-                        onDoubleClick={() => TrackPlayerSingleton.play(musicItem, true)}
-                        onClick={() => TrackPlayerSingleton.play(musicItem)}
+                        onClick={() =>
+                            TrackPlayerSingleton.playWithReplacePlayList(
+                                musicItem,
+                                musicList,
+                                listId,
+                            )
+                        }
                         onContextMenu={(e) => openMenu(e, musicItem)}
                     >
                         {selectMode && (

@@ -73,6 +73,7 @@ export default function LocalMusicPage() {
                 description={folder || "扫描本地文件夹中的音乐文件（mp3 / flac / wav / m4a 等）"}
                 musicList={musicList}
                 meta={[musicList.length ? `共 ${musicList.length} 首` : ""].filter(Boolean)}
+                listId="localMusic"
                 extraActions={
                     <button className="btn-ghost" onClick={pickAndScan}>
                         选择文件夹扫描
@@ -84,6 +85,7 @@ export default function LocalMusicPage() {
                 loading={loading}
                 isEnd
                 localMode
+                listId="localMusic"
                 onMusicChanged={refresh}
             />
         </div>

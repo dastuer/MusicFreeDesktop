@@ -21,6 +21,8 @@ export default function MediaHeader(props: {
      * 插件歌单 / 专辑 / 榜单这些来源列表仍保留，方便一键收下整张。
      */
     hideFavoriteAll?: boolean;
+    /** 这份列表的稳定标识，与 `MusicList` 的 `listId` 传同一个值：「播放全部」据此判断队列是否已经是这份列表 */
+    listId?: string;
 }) {
     const {
         artwork,
@@ -30,6 +32,7 @@ export default function MediaHeader(props: {
         musicList,
         extraActions,
         hideFavoriteAll,
+        listId,
     } = props;
 
     /** 「收藏全部」：和多选「收藏」走同一条路 —— 先选歌单，再把整张收进去 */
@@ -60,6 +63,9 @@ export default function MediaHeader(props: {
                                 TrackPlayerSingleton.playWithReplacePlayList(
                                     TrackPlayerSingleton.pickPlayAllStart(musicList),
                                     musicList,
+                                    listId,
+                                    // 「播放全部」是明确指令：一律重新铺一遍这份列表
+                                    true,
                                 );
                             }
                         }}

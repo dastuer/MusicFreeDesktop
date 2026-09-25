@@ -52,6 +52,12 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
 
     const isUserSheet = !!userSheetId;
     const isLikesSheet = userSheetId === LIKES_SHEET_ID;
+    /** 这份歌单的稳定标识：插件歌单按音源+歌单 id，本地歌单（含我喜欢的音乐）按本地歌单 id */
+    const listId = isUserSheet
+        ? `userSheet:${userSheetId}`
+        : sheetItem?.id != null
+          ? `sheet:${sheetItem.platform}/${sheetItem.id}`
+          : "";
 
     /** 本地歌单的头部信息（标题 / 封面 / 描述） */
     const applyUserSheet = useCallback((sheet: any) => {
@@ -214,6 +220,7 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 ].filter(Boolean)}
                 // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
                 hideFavoriteAll={isUserSheet}
+                listId={listId}
                 extraActions={
                     <>
                         {list.items.length > 0 && (
@@ -243,6 +250,7 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
             <MusicList
                 musicList={list.items}
                 loading={list.loading}
+                listId={listId}
                 userSheetMode={isUserSheet}
                 currentSheetId={userSheetId}
                 onRemove={isUserSheet ? handleRemove : undefined}

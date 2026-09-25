@@ -6,6 +6,7 @@ import Slider from "../base/Slider";
 import {
     DEFAULT_VOLUME,
     TrackPlayerSingleton,
+    playListAddedAtom,
     useCurrentMusic,
     useMusicState,
     useProgress,
@@ -40,6 +41,18 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const muted = volume === 0;
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
+    /** 队列一进歌就在歌单入口图标上弹一次提示，两秒后自己收回去 */
+    const playListAddedSeq = useAtomValue(playListAddedAtom);
+    const [queueHintVisible, setQueueHintVisible] = useState(false);
+
+    useEffect(() => {
+        if (!playListAddedSeq) {
+            return;
+        }
+        setQueueHintVisible(true);
+        const timer = setTimeout(() => setQueueHintVisible(false), 2000);
+        return () => clearTimeout(timer);
+    }, [playListAddedSeq]);
 
     // 订阅喜欢状态版本号：列表/播放栏任何位置切换喜欢后同步刷新
     useEffect(() => {
@@ -97,13 +110,20 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             {currentMusic?.title ?? "MusicFree Desktop"}
                         </div>
                         <div className="playerbar-artist">
-                            {currentMusic?.artist ?? "双击列表中的歌曲开始播放"}
+                            {currentMusic?.artist ?? "点击列表中的歌曲开始播放"}
                         </div>
                     </div>
                 </div>
 
-                {/* 中：播放控制 */}
+                {/* 中：播放模式 / 上一首 / 播放暂停 / 下一首 / 播放列表 */}
                 <div className="playerbar-center">
+                    <button
+                        className="playerbar-control-btn"
+                        title={repeatModeMeta[repeatMode].label}
+                        onClick={() => TrackPlayerSingleton.toggleRepeatMode()}
+                    >
+                        <Icon name={repeatModeMeta[repeatMode].icon} size={16} />
+                    </button>
                     <button
                         className="playerbar-control-btn"
                         onClick={() => TrackPlayerSingleton.skipToPrevious()}
@@ -129,9 +149,21 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     >
                         <Icon name="next" size={20} />
                     </button>
+                    <div className="playerbar-queue-entry">
+                        <button
+                            className="playerbar-control-btn"
+                            title="播放列表"
+                            onClick={() => showPlayQueuePanel()}
+                        >
+                            <Icon name="playQueue" size={16} />
+                        </button>
+                        {queueHintVisible && (
+                            <span className="playerbar-queue-hint">已添加到歌单列表</span>
+                        )}
+                    </div>
                 </div>
 
-                {/* 右：下载 / 喜欢 / 播放模式 / 音量 / 播放列表 */}
+                {/* 右：下载 / 喜欢 / 收藏到歌单 / 音量 */}
                 <div className="playerbar-right">
                     {currentMusic && (
                         <button
@@ -168,13 +200,6 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     )}
                     <button
                         className="playerbar-control-btn"
-                        title={repeatModeMeta[repeatMode].label}
-                        onClick={() => TrackPlayerSingleton.toggleRepeatMode()}
-                    >
-                        <Icon name={repeatModeMeta[repeatMode].icon} size={16} />
-                    </button>
-                    <button
-                        className="playerbar-control-btn"
                         title={muted ? "取消静音" : "静音"}
                         onClick={() => TrackPlayerSingleton.setVolume(muted ? DEFAULT_VOLUME : 0)}
                     >
@@ -185,13 +210,6 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                         max={1}
                         onChange={(v) => TrackPlayerSingleton.setVolume(v)}
                     />
-                    <button
-                        className="playerbar-control-btn"
-                        title="播放列表"
-                        onClick={() => showPlayQueuePanel()}
-                    >
-                        <Icon name="playQueue" size={16} />
-                    </button>
                 </div>
             </div>
         </div>

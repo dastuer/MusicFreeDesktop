@@ -28,6 +28,7 @@ export default function HistoryPage() {
                 title="最近播放"
                 musicList={musicList}
                 meta={[musicList.length ? `共 ${musicList.length} 首` : ""].filter(Boolean)}
+                listId="history"
                 extraActions={
                     musicList.length ? (
                         <button
@@ -43,7 +44,7 @@ export default function HistoryPage() {
                     ) : null
                 }
             />
-            <MusicList musicList={musicList} isEnd />
+            <MusicList musicList={musicList} isEnd listId="history" />
         </div>
     );
 }

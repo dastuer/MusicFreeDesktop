@@ -59,6 +59,36 @@ const MAX_AUTO_SKIP = 3;
 /** 播放历史留多少首（上一首按它回退；再多也没人按那么回去） */
 const MAX_HISTORY = 50;
 
+/**
+ * 队列里认一首歌用的键。与 `musicSheet` 的 `mediaKey`、`MusicList` 的 `musicKey` 同一约定，
+ * 也与 `getMusicIndexInPlayList` 的匹配口径一致。
+ */
+function playListKey(musicItem: IMusic.IMusicItem) {
+    return `${musicItem.platform}-${musicItem.id}`;
+}
+
+/** 能进播放队列吗：得有 id（去重和增删都按它认），tmp 路径的临时文件不算 */
+function isQueueable(musicItem?: IMusic.IMusicItem | null) {
+    return !!musicItem?.id && !musicItem.localPath?.startsWith?.("tmp");
+}
+
+/**
+ * 把一份列表整理成能进播放队列的样子：没有 id 的丢掉（队列里靠 platform+id 定位，
+ * 没 id 的歌既找不到下标也删不掉），同一首只留第一份。
+ *
+ * 追加和整队替换共用这一条，所以播放列表面板里永远不会有重复行。
+ */
+function toQueueableList(musicItems: IMusic.IMusicItem[]) {
+    const seen = new Set<string>();
+    return musicItems.filter((it) => {
+        if (!isQueueable(it) || seen.has(playListKey(it))) {
+            return false;
+        }
+        seen.add(playListKey(it));
+        return true;
+    });
+}
+
 /** MediaError 转成人话（见 HTMLMediaElement.error） */
 function describeMediaError(err?: MediaError | null) {
     switch (err?.code) {
@@ -116,6 +146,12 @@ export const progressAtom = atom<{ position: number; duration: number }>({
 });
 export const rateAtom = atom<number>(1);
 export const volumeAtom = atom<number>(getStoredVolume());
+/**
+ * 每次有歌进入播放队列自增（追加、整队替换都算）。
+ * 播放条据此在歌单入口图标上弹一次「已添加到歌单列表」，不能只比对队列长度——
+ * 把 200 首的队列换成 3 首的歌单，长度是减的，却同样是「歌进了播放列表」。
+ */
+export const playListAddedAtom = atom(0);
 
 const store = getDefaultStore();
 
@@ -129,6 +165,13 @@ class TrackPlayer extends EventEmitter {
     private audio: HTMLAudioElement | null = null;
     private _repeatMode: MusicRepeatMode = "off";
     private _playList: IMusic.IMusicItem[] = [];
+    /**
+     * 当前队列是哪份列表装进来的（各列表页给的稳定标识，见 `playWithReplacePlayList`）。
+     * 只有「从某份列表整队替换」会改写它，重启时跟着队列一起还原。
+     * 往队列里追加 / 移除歌曲**不改**这个标识：那是「在这份列表的基础上动动手脚」，
+     * 不是换了列表——所以在同一份列表里继续点歌，不该重新整队替换、也不该再提示一次。
+     */
+    private _currentListId = "";
     /**
      * 播过的歌，按播放顺序，最后一项就是当前这首。
      * 「上一首」按它回退而不是按队列下标——随机播放下标没有「前一首」，
@@ -192,10 +235,21 @@ class TrackPlayer extends EventEmitter {
     private restoreSession() {
         try {
             const session = getInitialSession();
-            const playList = getStoredPlayList() ?? session?.playList ?? null;
+            const storedList = getStoredPlayList();
+            const playList = storedList ?? session?.playList ?? null;
             if (playList?.length) {
-                this._playList = playList;
+                // 去重之前留下的旧队列（可能有重复行）在还原时一并整理掉
+                this._playList = toQueueableList(playList);
+                // 队列标识只认 localStorage 这份队列：退到会话文件那份时对不上号，宁可不认
+                this._currentListId = storedList
+                    ? localStorage.getItem("currentListId") ?? ""
+                    : "";
                 setAtom(playListAtom, this._playList);
+                // 整理过（旧数据里有重复行或进不了队列的条目）就把这份写回 localStorage，
+                // 否则下次启动读到的还是那盘带重复行的
+                if (this._playList.length !== playList.length) {
+                    localStorage.setItem("playList", JSON.stringify(this._playList));
+                }
                 // 顺手把队列同步回会话文件：那份只在「队列变化」时写，而它正是
                 // 「localStorage 那份读不到（换了 origin / 被清）」时的唯一兜底
                 saveSessionPlayList(this._playList);
@@ -534,6 +588,12 @@ class TrackPlayer extends EventEmitter {
             "playList",
             JSON.stringify(this._playList.slice(0, 500).map(slim)),
         );
+        // 队列的来历跟着队列一起存：重启后在这份列表里点歌，不该再来一次整队替换和提示
+        if (this._currentListId) {
+            localStorage.setItem("currentListId", this._currentListId);
+        } else {
+            localStorage.removeItem("currentListId");
+        }
         if (this._currentMusic) {
             localStorage.setItem("currentMusic", JSON.stringify(slim(this._currentMusic)));
         } else {
@@ -560,12 +620,26 @@ class TrackPlayer extends EventEmitter {
         return this._playList.length === 0;
     }
 
+    /** 有歌进了队列：只用来通知播放条弹提示，不参与任何播放逻辑 */
+    private notifyPlayListAdded() {
+        setAtom(playListAddedAtom, store.get(playListAddedAtom) + 1);
+    }
+
+    /**
+     * 追加到播放队列。**已经在队列里的歌不会再塞一份**（按 platform+id 认），
+     * 同一批里重复的也只留第一份——否则播放列表面板里会出现两行同名歌、两行都标着正在播放。
+     *
+     * @returns 真正进队列的条数（调用方据此给准确反馈，别说「已添加 3 首」结果只进了 1 首）
+     */
     addAll(
         musicItems: IMusic.IMusicItem[],
         beforeIndex?: number,
         shouldShuffle?: boolean,
-    ) {
-        const valid = musicItems.filter((it) => it?.id && !it.localPath?.startsWith?.("tmp"));
+    ): number {
+        const inQueue = new Set(this._playList.map(playListKey));
+        const valid = toQueueableList(musicItems).filter(
+            (it) => !inQueue.has(playListKey(it)),
+        );
         const list = [...this._playList];
         const insertAt = beforeIndex === undefined ? list.length : beforeIndex;
         if (shouldShuffle) {
@@ -574,18 +648,30 @@ class TrackPlayer extends EventEmitter {
         list.splice(insertAt, 0, ...valid);
         this._playList = list;
         setAtom(playListAtom, this._playList);
+        if (valid.length) {
+            this.notifyPlayListAdded();
+        }
         this.persistPlayList();
+        return valid.length;
     }
 
     add(musicItem: IMusic.IMusicItem | IMusic.IMusicItem[], beforeIndex?: number) {
         const items = Array.isArray(musicItem) ? musicItem : [musicItem];
-        this.addAll(items, beforeIndex);
+        return this.addAll(items, beforeIndex);
     }
 
+    /**
+     * 插到当前这首之后。已经在队列里的歌是**挪过来**而不是再塞一份：
+     * 「下一首播放」点了之后没反应，比多出一行重复更糟。
+     */
     addNext(musicItem: IMusic.IMusicItem | IMusic.IMusicItem[]) {
         const items = Array.isArray(musicItem) ? musicItem : [musicItem];
+        const keys = new Set(items.filter(isQueueable).map(playListKey));
+        if (keys.size) {
+            this._playList = this._playList.filter((it) => !keys.has(playListKey(it)));
+        }
         const currentIndex = this.getMusicIndexInPlayList(this._currentMusic);
-        this.addAll(items, currentIndex + 1);
+        return this.addAll(items, currentIndex + 1);
     }
 
     async remove(musicItem: IMusic.IMusicItem) {
@@ -1000,14 +1086,38 @@ class TrackPlayer extends EventEmitter {
         return list[Math.floor(Math.random() * list.length)];
     }
 
+    /**
+     * 整队替换并从这首开始播。
+     *
+     * @param listId 这份列表的稳定标识（由各列表页给出，见 `MusicList` 的 `listId`）。
+     *   队列已经是这份列表时——同一标识、且要播的这首就在队列里——直接切歌：
+     *   不重写队列（省掉整张列表跟着重渲染），也不弹「已添加到歌单列表」。
+     *   中途往队列里追加 / 移除过歌曲也算「已经是这份列表」，标识只认来源不认内容。
+     * @param forceReplace 「播放全部」这类明确指令传 true：即使队列已经是这份列表
+     *   也重新铺一遍，把中途手动加进来的歌清掉。列表里点歌不传，走上面的复用判断。
+     */
     async playWithReplacePlayList(
         musicItem: IMusic.IMusicItem,
         newPlayList: IMusic.IMusicItem[],
+        listId = "",
+        forceReplace = false,
     ) {
-        this._playList = [...newPlayList];
-        setAtom(playListAtom, this._playList);
-        // 历史不动：换了队列不等于「刚才没播过上一份的最后一首」。
-        // 新队列里的这一首会由 play() 记进历史。
+        const alreadyThisList =
+            !forceReplace &&
+            !!listId &&
+            this._currentListId === listId &&
+            this.isInPlayList(musicItem);
+        if (!alreadyThisList) {
+            this._playList = toQueueableList(newPlayList);
+            this._currentListId = listId;
+            setAtom(playListAtom, this._playList);
+            // 历史不动：换了队列不等于「刚才没播过上一份的最后一首」。
+            // 新队列里的这一首会由 play() 记进历史。
+            this.notifyPlayListAdded();
+            // 这里必须自己落盘一次：队列已经变了，但接着的 play() 在「点的就是当前这首」
+            // 时走 isNew=false 分支、不会 persist，那份旧队列就会在重启后还魂。
+            this.persistPlayList();
+        }
         await this.play(musicItem, true);
     }
 

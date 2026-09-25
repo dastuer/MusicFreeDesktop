@@ -131,6 +131,7 @@ export default function SearchPage(props: ISearchPageProps) {
                 <MusicList
                     musicList={musicList.items}
                     loading={musicList.loading}
+                    listId={`search:${searchedQuery}:${plugin?.hash ?? ""}`}
                     pagination={{
                         currentPage: musicList.currentPage,
                         totalPages: musicList.totalPages,

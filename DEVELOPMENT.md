@@ -285,8 +285,8 @@ sequenceDiagram
     participant MP as mfs:// 协议处理
     participant NET as 音源平台
 
-    U->>TP: 点击歌曲行 play(item)
-    TP->>TP: 加入播放列表 / 写入历史
+    U->>TP: 点击歌曲行 playWithReplacePlayList(item, 当前列表, listId)
+    TP->>TP: 队列来源标识已是这份列表就跳过整队替换 / 写入历史
     alt 本地音乐 (item.localPath)
         TP->>AU: src = mfs://local/<b64url(path)>
     else 在线音乐
@@ -480,7 +480,7 @@ protocol.registerSchemesAsPrivileged([{
 
 这是本文件最需要注意的设计——**每个状态都同时写 jotai atom 和发射事件**：
 
-- **jotai atoms**（`playListAtom` / `currentMusicAtom` / `musicStateAtom` / `repeatModeAtom` / `progressAtom` / `rateAtom` / `currentLyricAtom`）：给 React 组件订阅
+- **jotai atoms**（`playListAtom` / `playListAddedAtom` / `currentMusicAtom` / `musicStateAtom` / `repeatModeAtom` / `progressAtom` / `rateAtom` / `currentLyricAtom`）：给 React 组件订阅
 - **eventemitter3 事件**（`PlayEnd` / `CurrentMusicChanged` / `ProgressChanged` / `StateChanged`）：给非 React 的监听方
 
 写入 atom 用的是 `getDefaultStore()` 拿到的 store 实例，所以**在组件外也能改状态**，不需要 Provider 包裹。

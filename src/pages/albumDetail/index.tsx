@@ -74,11 +74,13 @@ export default function AlbumDetailPage(props: { albumItem?: IAlbum.IAlbumItem }
                     album.company ? `发行公司：${album.company}` : "",
                     musicList.length ? `共 ${musicList.length} 首` : "",
                 ].filter(Boolean)}
+                listId={`album:${album.platform}/${album.id}`}
             />
             <MusicList
                 musicList={musicList}
                 loading={loading}
                 isEnd={isEnd}
+                listId={`album:${album.platform}/${album.id}`}
                 onLoadMore={loadMore}
             />
         </div>

@@ -1026,8 +1026,52 @@ img {
     }
 }
 
-/* 右侧按钮组：下载 / 喜欢 / 收藏到歌单 / 循环 / 音量 / 播放列表。
-   多一个按钮后 280px 会挤掉音量条，放宽到 300px 与左侧对称。 */
+/* 歌单入口：队列进了新歌时在这枚图标上方弹一句提示 */
+.playerbar-queue-entry {
+    position: relative;
+    display: flex;
+}
+
+.playerbar-queue-hint {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    padding: 5px 9px;
+    border-radius: 6px;
+    background: var(--text-color);
+    color: var(--page-bg);
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    animation: playerbar-queue-hint-in 0.16s ease-out;
+}
+
+.playerbar-queue-hint::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--text-color);
+}
+
+@keyframes playerbar-queue-hint-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 4px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
+}
+
+/* 右侧按钮组：下载 / 喜欢 / 收藏到歌单 / 音量。
+   播放模式和歌单入口已经挪到中间那组，这里 300px 保持与左侧对称，
+   中间一组才真正居中；再往右加按钮就得同步放宽，否则会挤掉音量条。 */
 .playerbar-right {
     width: 300px;
     display: flex;
