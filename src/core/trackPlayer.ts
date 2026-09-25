@@ -178,6 +178,16 @@ class TrackPlayer extends EventEmitter {
      * 列表里直接点歌之后也想回到刚才听到的那首。
      */
     private _history: IMusic.IMusicItem[] = [];
+    /**
+     * 「下一首播放」压进来的歌，`playListKey` 按登记先后排列。
+     *
+     * 队列本身只是它们排在当前这首后面，**能不能真播出来全看这个登记**：随机播放会随机挑下标、
+     * 单曲循环压根不往下走，两条都会把它们挤掉。所以插队不能只靠位置，得单独记一笔。
+     *
+     * 只在内存里，不落盘：重启后队列顺序还原了，它们还排在当前这首后面，
+     * 顺序播放照常播到；为随机/单曲循环把这点状态写进 localStorage 不值当。
+     */
+    private _pendingNext: string[] = [];
     private _currentMusic: IMusic.IMusicItem | null = null;
     private _rate = 1;
     private pendingPlayId = "";
@@ -523,6 +533,12 @@ class TrackPlayer extends EventEmitter {
         if (!this._currentMusic) {
             return;
         }
+        // 「下一首播放」压着的歌还欠着：那才是这首之后该播的，单曲循环和「播到末尾就停」
+        // 两条都不许拦它（skipToNext 内部同样先看待播，这里只是绕开下面的模式分支）。
+        if (this.pendingNextIndex() >= 0) {
+            await this.skipToNext();
+            return;
+        }
         // 自然播完：这里不用管进度记录。它只在退出前写一次，那时读到的是
         //「当前歌曲 + 当前位置」——播完又没跳下一首时位置就在结尾，重启会当成「从头播」；
         // 跳了下一首则记录的是下一首。刻意不做「播完就清记录」这类动作。
@@ -661,7 +677,9 @@ class TrackPlayer extends EventEmitter {
     }
 
     /**
-     * 插到当前这首之后。已经在队列里的歌是**挪过来**而不是再塞一份：
+     * 插到当前这首之后，并且**登记为待播**：不管当前是随机播放还是单曲循环，
+     * 这一首（多首则按登记顺序）都必须在当前这首之后播出来，详见 `_pendingNext`。
+     * 已经在队列里的歌是**挪过来**而不是再塞一份：
      * 「下一首播放」点了之后没反应，比多出一行重复更糟。
      */
     addNext(musicItem: IMusic.IMusicItem | IMusic.IMusicItem[]) {
@@ -671,7 +689,50 @@ class TrackPlayer extends EventEmitter {
             this._playList = this._playList.filter((it) => !keys.has(playListKey(it)));
         }
         const currentIndex = this.getMusicIndexInPlayList(this._currentMusic);
-        return this.addAll(items, currentIndex + 1);
+        const added = this.addAll(items, currentIndex + 1);
+        this.declarePendingNext(items);
+        return added;
+    }
+
+    /**
+     * 登记待播。正在播的这首不登记：它已经在播了，没有「下一首」可插，
+     * 登记了反而会在播完时把自己重新解析播一遍（尤其单曲循环下）。
+     */
+    private declarePendingNext(musicItems: IMusic.IMusicItem[]) {
+        for (const musicItem of musicItems) {
+            const key = playListKey(musicItem);
+            if (
+                !isQueueable(musicItem) ||
+                this.isCurrentMusic(musicItem) ||
+                this._pendingNext.includes(key)
+            ) {
+                continue;
+            }
+            this._pendingNext.push(key);
+        }
+    }
+
+    /** 这首歌播出去了：待播登记兑现，往后交回播放模式 */
+    private consumePendingNext(musicItem: IMusic.IMusicItem) {
+        const key = playListKey(musicItem);
+        const at = this._pendingNext.indexOf(key);
+        if (at >= 0) {
+            this._pendingNext.splice(at, 1);
+        }
+    }
+
+    /**
+     * 该播哪首待播的歌：按登记顺序找第一个仍在队列里的。
+     * @returns 队列下标；没有待播的歌返回 -1
+     */
+    private pendingNextIndex() {
+        for (const key of this._pendingNext) {
+            const index = this._playList.findIndex((it) => playListKey(it) === key);
+            if (index >= 0) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     async remove(musicItem: IMusic.IMusicItem) {
@@ -685,6 +746,8 @@ class TrackPlayer extends EventEmitter {
         this._playList = list;
         setAtom(playListAtom, this._playList);
         this.persistPlayList();
+        // 待播登记一起作废：歌都不在队列里了，没有「下一首播它」可言
+        this.consumePendingNext(musicItem);
         // 历史原样留着：删的是队列里的成员，不是「刚才听过它」这件事。
         // 一起删掉的话，上一首会退到队列下标上，从被删那首的位置跳去别处。
         if (removingCurrent) {
@@ -719,6 +782,8 @@ class TrackPlayer extends EventEmitter {
     clearPlayList() {
         this._playList = [];
         setAtom(playListAtom, []);
+        // 待播登记跟着队列一起作废（否则当前这首播完还会去找那首已经不在的歌）
+        this._pendingNext = [];
         this.persistPlayList();
         // 历史留着：清掉的是队列，不是「听过」。当前这首还在播，它前面那几首
         // 照样是「刚才播过的」，按上一首要能回去（回去时不塞回空队列，见 skipToPrevious）。
@@ -886,6 +951,9 @@ class TrackPlayer extends EventEmitter {
                 this.add(target);
             }
             this._currentMusic = target;
+            // 播到了就是兑现了：直接点队列里那首、待播自动播到、甚至从历史里回去，
+            // 都算「下一首播放」已经生效过，之后交回播放模式（单曲循环下循环的就是它）
+            this.consumePendingNext(target);
             this.pushHistory(target);
             setAtom(currentMusicAtom, target);
             this.emit(TrackPlayerEvents.CurrentMusicChanged, target);
@@ -1014,6 +1082,13 @@ class TrackPlayer extends EventEmitter {
     }
 
     async skipToNext() {
+        // 有「下一首播放」压着就先播它，播放模式这一轮不作数（随机不挑下标、单曲循环也照走）。
+        // 登记在它一开播时就兑现了（见 play 里的 consumePendingNext），之后交回播放模式。
+        const pendingIndex = this.pendingNextIndex();
+        if (pendingIndex >= 0) {
+            await this.play(this._playList[pendingIndex], true);
+            return;
+        }
         const nextIndex = await this.getNextIndex(1);
         if (nextIndex >= 0) {
             await this.play(this._playList[nextIndex], true);
@@ -1110,6 +1185,9 @@ class TrackPlayer extends EventEmitter {
         if (!alreadyThisList) {
             this._playList = toQueueableList(newPlayList);
             this._currentListId = listId;
+            // 整队换掉之后「排在当前这首后面」这个约定已经不成立了：待播登记作废
+            // （没换队列时不动——上面 alreadyThisList 为真就是在同一份列表里继续点歌）
+            this._pendingNext = [];
             setAtom(playListAtom, this._playList);
             // 历史不动：换了队列不等于「刚才没播过上一份的最后一首」。
             // 新队列里的这一首会由 play() 记进历史。

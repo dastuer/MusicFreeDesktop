@@ -525,6 +525,18 @@ type MusicRepeatMode = "off" | "queue" | "single";
 
 命名沿用了移动端，改动前需全局排查引用点。
 
+#### 「下一首播放」优先于循环模式
+
+`addNext`（唯一入口是列表行右键菜单「下一首播放」，见 `MusicList`）除了把歌插到当前这首后面，还会把它登记进 `TrackPlayer._pendingNext`——一组 `playListKey`，按登记先后 FIFO。
+
+**光靠队列位置保证不了这个承诺**：`single` 下 `onEnded` 根本走不到 `skipToNext`，`queue` 下 `getNextIndex` 是对整个列表随机（插队那首命中率约 1/N），两种模式都会把它挤掉；而 `addNext` 是把已入列的歌**挪**到当前这首后面，所以中途点过歌之后，待播那首甚至可能排在当前这首前面。
+
+- **兑现点**：`skipToNext` 和 `onEnded` 都先问 `pendingNextIndex()`，有待播就播它、跳过模式分支（`onEnded` 里这一条排在 `single` 与「列表末尾停止」两条之前，所以播到末尾时插队依然有效）。`skipToPrevious` 不按待播走（先回历史），登记原样留着。
+- **失效时机**：那首一开播就出队（`play()` 里的 `consumePendingNext`），用户直接点它、或它自己解析失败被自动往后跳，都算兑现——之后一切交回播放模式。所以单曲循环下插队歌播完，循环的就是它自己（谁在播循环谁）。
+- **作废时机**：从队列移除（`remove`）、清空队列（`clearPlayList`）、整队替换且真的换了列表（`playWithReplacePlayList` 的 `!alreadyThisList` 分支）。在同一份列表里继续点歌（队列标识没变、没重铺队列）不作废。
+- 正在播的这首不登记（`declarePendingNext` 跳过 `isCurrentMusic`）：它没有「下一首」可插，登记了反而会在播完时被当成待播重新解析一遍。
+- 只在内存里，**不落盘**：重启后队列顺序还原、它仍排在当前这首后面，`off` 模式照常播到；`single` / `queue` 下这个承诺随进程结束失效。
+
 #### 竞态保护
 
 `play()` 里用 `pendingPlayId` 标记本次播放请求：
