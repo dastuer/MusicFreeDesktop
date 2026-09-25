@@ -1,10 +1,10 @@
-# MusicFree Desktop（macOS 版）
+# MusicFree Desktop（macOS / Windows）
 
-基于 Electron + React + TypeScript 全新实现的 MusicFree macOS 桌面版。前端全部页面与交互参考网易云音乐 macOS 客户端重构：左侧边栏导航 + 顶部标题栏（红绿灯内嵌、前进/后退、搜索框）+ 底部播放条 + 正在播放大封面歌词页。
+基于 Electron + React + TypeScript 全新实现的 MusicFree 桌面版。前端全部页面与交互参考网易云音乐 macOS 客户端重构：左侧边栏导航 + 顶部标题栏（红绿灯内嵌、前进/后退、搜索框）+ 底部播放条 + 正在播放大封面歌词页。Windows 侧复用同一套界面，只单独适配了标题栏按钮、图标与安装方式。
 
 **与 MusicFree 移动端音源插件（.js）完全兼容**——插件在主进程沙箱中运行，可用依赖与移动端一致（cheerio / crypto-js / axios / dayjs / qs / he / big-integer / webdav）。
 
-## 运行
+## 开发
 
 ```bash
 npm install          # 国内网络建议先执行: npm config set electron_mirror https://npmmirror.com/mirrors/electron/
@@ -13,7 +13,18 @@ npm run build        # 生产构建（dist-renderer + dist-electron）
 npm start            # 运行生产构建
 ```
 
-打包安装（Windows）：`npm run dist:win` 产出 `release-win\MusicFreeDesktop-Setup-1.0.0.exe`，双击即可安装（免管理员，装在用户目录，自动建桌面与开始菜单快捷方式）。macOS 侧见 `npm run reinstall`。
+## 打包与发布
+
+```bash
+npm run reinstall    # 本机自用：只出 .app 并覆盖 /Applications，随后启动
+npm run dist:mac     # macOS dmg → release/MusicFreeDesktop-<version>-arm64.dmg
+npm run dist:win     # Windows → release-win/ 下的 Setup 与 Portable exe
+```
+
+Windows 版可直接在这台 macOS 上交叉构建，不需要 wine。两个平台的产物都**未签名 / 未公证**：
+macOS 首次打开需右键 →「打开」，Windows 首跑会有 SmartScreen 提示。
+
+已经发布的版本与安装包：[Releases](https://github.com/dastuer/MusicFreeDesktop/releases)（当前最新 `v1.0.0`）。
 
 ## 桌面端兼容性设计
 
@@ -57,21 +68,24 @@ src/                      渲染进程
 
 - 发现音乐：推荐歌单（tag 切换）+ 排行榜入口（来自插件 `getRecommendSheetTags` / `getTopLists`）
 - 搜索：单曲/歌单/专辑/歌手 四类，可切换音源插件，分页加载
-- 歌单 / 专辑 / 歌手 / 榜单详情页（通用媒体头 + 歌曲表格，分页加载更多）
-- 播放：列表循环 / 随机 / 单曲循环、倍速、音量、进度拖动（Range 流式）、下一首播放、播放队列面板
+- 歌单 / 专辑 / 歌手 / 榜单详情页（通用媒体头 + 歌曲表格，分页加载更多、多选批量操作）
+- 播放：列表循环 / 随机 / 单曲循环、倍速、音量、进度拖动（Range 流式）、下一首播放、播放队列面板。
+  在列表里点歌会把整份列表换进播放队列，队列记住自己来自哪份列表，同一份里继续点歌不会重复重排
+- 快捷键：空格播放 / 暂停，← → 上一首 / 下一首，↑ ↓ 音量
 - 正在播放页：大封面 + 歌词滚动（`getLyric`，支持网络 LRC）
 - 本地音乐：文件夹扫描、ID3 元数据、内嵌封面、本地文件流播放
+- 下载管理：批量下载、断点目录可配、下载完成后可直接播放本地文件
 - 最近播放（主进程持久化，重启恢复）
 - 用户歌单：创建 / 收藏单曲 / 侧边栏入口
 - 音源插件管理：网络安装 / 本地安装、启用禁用、排序、用户变量、卸载
-- 设置：主题（浅色/深色/跟随系统）、默认音质（低/标准/高/无损）
+- 设置：主题（浅色/深色/跟随系统）、默认音质（低/标准/高/无损）、记忆播放进度、媒体缓存清理、歌单与配置备份
 - 播放列表与当前歌曲持久化，重启后恢复
 
 ## 已知限制
 
-- 下载管理、桌面歌词、歌单导入分享、自定义主题背景图尚未移植
+- 桌面歌词、歌单导入 / 分享、自定义主题背景图尚未实现
 - 音源可用性取决于插件与其上游平台（部分平台有网络/风控限制）
-- 未做安装包打包（electron-builder），当前为开发机运行形态
+- 安装包未签名 / 未公证，首次启动需要手动放行（见上面「打包与发布」）
 
 ## 插件安装
 
