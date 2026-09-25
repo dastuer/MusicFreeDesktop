@@ -1,6 +1,6 @@
 {
   "name": "musicfree-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "author": "huah",
   "description": "MusicFree 桌面版（macOS / Windows）- 参考网易云桌面端交互重构",
