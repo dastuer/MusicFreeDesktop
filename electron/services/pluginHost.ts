@@ -15,6 +15,30 @@ import coverCache, { isOversizedDataUrl } from "./coverCache";
 const sha256 = (s: string) => CryptoJs.SHA256(s).toString();
 const appVersion = "1.0.0";
 
+/**
+ * 响应体是 JSON 对象/数组（即聚合源而非插件代码）。
+ * 注意 axios 会按 content-type 先把 index.json 解析成对象，
+ * 所以必须先认对象本身：`String(对象)` 得到 "[object Object]"，什么都嗅不出来。
+ */
+export function looksLikeJson(data: any): boolean {
+    if (data === null || data === undefined) {
+        return false;
+    }
+    if (typeof data === "object") {
+        return true;
+    }
+    const text = String(data).trimStart();
+    if (text.charAt(0) !== "{" && text.charAt(0) !== "[") {
+        return false;
+    }
+    try {
+        JSON.parse(text);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** 与 MusicFree 移动端一致的插件可用依赖包 */
 const packages: Record<string, any> = {
     cheerio,
@@ -103,6 +127,17 @@ export interface IPluginResumeResult {
     updated: number;
     skipped: number;
     failed: { platform: string; reason: string }[];
+}
+
+export interface IPluginInstallResult {
+    success: boolean;
+    message?: string;
+    pluginName?: string;
+    pluginHash?: string;
+    pluginUrl?: string;
+    duplicated?: boolean;
+    /** 链接指向聚合订阅源而不是插件代码，渲染进程据此改走订阅源导入 */
+    errorCode?: "IS_PLUGIN_INDEX";
 }
 
 const serializableKeys = [
@@ -360,14 +395,7 @@ class PluginHost {
     installPluginCode(
         code: string,
         options?: { replaceHash?: string },
-    ): {
-        success: boolean;
-        message?: string;
-        pluginName?: string;
-        pluginHash?: string;
-        pluginUrl?: string;
-        duplicated?: boolean;
-    } {
+    ): IPluginInstallResult {
         const plugin = new Plugin(code, "");
         if (plugin.state !== "Mounted" || !plugin.hash) {
             return {
@@ -375,7 +403,52 @@ class PluginHost {
                 message: `插件无法解析：${plugin.errorReason ?? "CannotParse"}`,
             };
         }
+        return this.register(plugin, code, options?.replaceHash);
+    }
 
+    /**
+     * 聚合源导入的安装规则：
+     *  - 源码 hash 已装过 -> unchanged（订阅源里同一份代码反复出现）
+     *  - 同平台已有不低于新版的版本 -> unchanged，不做无谓的替换
+     *  - 否则装上并顶掉同平台旧版（installPluginCode 里会迁移启用状态/顺序/用户变量）
+     */
+    installOrUpdate(code: string): {
+        status: "installed" | "updated" | "unchanged" | "failed";
+        name: string;
+        reason?: string;
+    } {
+        const plugin = new Plugin(code, "");
+        const name = plugin.name || "未知音源";
+        if (plugin.state !== "Mounted" || !plugin.hash) {
+            return {
+                status: "failed",
+                name,
+                reason: `无法解析：${plugin.errorReason ?? "CannotParse"}`,
+            };
+        }
+        if (this.getByHash(plugin.hash)) {
+            return { status: "unchanged", name };
+        }
+        const samePlatform = this.plugins.find((p) => p.name === name);
+        if (
+            samePlatform &&
+            this.isVersionNotOlder(this.versionOf(samePlatform), this.versionOf(plugin))
+        ) {
+            return { status: "unchanged", name };
+        }
+        const registered = this.register(plugin, code, samePlatform?.hash);
+        if (!registered.success) {
+            return { status: "failed", name, reason: registered.message };
+        }
+        return { status: samePlatform ? "updated" : "installed", name };
+    }
+
+    /** 落盘并登记一个已挂载成功的插件；replaceHash 为被替换掉的旧版本 hash */
+    private register(
+        plugin: Plugin,
+        code: string,
+        replaceHash?: string,
+    ): IPluginInstallResult {
         const dest = path.join(this.pluginsDir, `${plugin.hash}.js`);
         try {
             fs.writeFileSync(dest, code, "utf-8");
@@ -396,8 +469,8 @@ class PluginHost {
             };
         }
 
-        if (options?.replaceHash && options.replaceHash !== plugin.hash) {
-            const oldIdx = this.plugins.findIndex((p) => p.hash === options.replaceHash);
+        if (replaceHash && replaceHash !== plugin.hash) {
+            const oldIdx = this.plugins.findIndex((p) => p.hash === replaceHash);
             if (oldIdx >= 0) {
                 const old = this.plugins[oldIdx];
                 try {
@@ -408,10 +481,10 @@ class PluginHost {
                     // 旧文件删不掉不影响使用，最多留个孤儿文件
                 }
                 this.plugins.splice(oldIdx, 1);
-                const oldMeta = this.meta[options.replaceHash];
+                const oldMeta = this.meta[replaceHash];
                 if (oldMeta) {
                     this.meta[plugin.hash] = { ...oldMeta, ...this.meta[plugin.hash] };
-                    delete this.meta[options.replaceHash];
+                    delete this.meta[replaceHash];
                 }
             }
         }
@@ -567,6 +640,15 @@ class PluginHost {
     async installPluginFromUrl(url: string, config?: { notCheckVersion?: boolean }) {
         try {
             const res = await axios.get(url, { timeout: 30000 });
+            if (looksLikeJson(res.data)) {
+                // 聚合订阅源（index.json）不是插件代码。不先拦一下的话，
+                // 用户粘错入口只会收到一句没头没尾的「插件无法解析：CannotParse」。
+                return {
+                    success: false,
+                    errorCode: "IS_PLUGIN_INDEX" as const,
+                    message: "这是聚合源链接",
+                };
+            }
             const code = res.data?.toString() ?? "";
             if (!code.length) {
                 return { success: false, message: "插件源返回为空" };

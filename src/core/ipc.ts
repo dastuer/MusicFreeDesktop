@@ -88,6 +88,32 @@ export async function getSortedSearchablePlugins(): Promise<SerializedPlugin[]> 
     return getSortedPluginsWithAbility("search");
 }
 
+/** ---------- 聚合音源订阅源 ---------- */
+
+/** 与 electron/services/pluginSubscription.ts 的 IPluginSubscription 对齐 */
+export interface SerializedSubscription {
+    id: string;
+    name: string;
+    url: string;
+    addedAt: number;
+    lastCheckAt: number;
+    pluginCount: number;
+}
+
+/** 一次导入（新增订阅源或检查更新）的逐条结果 */
+export interface SubscriptionImportResult {
+    success: boolean;
+    message?: string;
+    /** 需要额外交代一句的情况，比如链接早已订阅 */
+    note?: string;
+    subscription?: SerializedSubscription;
+    total: number;
+    installed: number;
+    updated: number;
+    unchanged: number;
+    failed: { name: string; reason: string }[];
+}
+
 /** ---------- base64url 工具（渲染进程侧构造 mfs:// 链接） ---------- */
 
 export function b64urlEncode(input: string): string {

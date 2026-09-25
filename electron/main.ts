@@ -4,6 +4,7 @@ import fs from "fs";
 import { Readable } from "stream";
 import { registerMediaProtocol } from "./services/mediaProtocol";
 import pluginHost from "./services/pluginHost";
+import pluginSubscription from "./services/pluginSubscription";
 import configStore from "./services/configStore";
 import localMusic from "./services/localMusic";
 import builtinMusic from "./services/builtinMusic";
@@ -140,6 +141,7 @@ app.whenReady().then(() => {
         path.join(app.getPath("userData"), "plugins"),
         configStore,
     );
+    pluginSubscription.setup(configStore);
     localMusic.setup(configStore, dataDir);
     mediaCache.setup(dataDir);
     mediaCache.setLimit(
@@ -280,6 +282,16 @@ ipcMain.handle("plugin:setOrder", (_e, hashes: string[]) =>
     pluginHost.setPluginOrder(hashes));
 ipcMain.handle("plugin:setUserVariables", (_e, hash: string, vars: Record<string, string>) =>
     pluginHost.setUserVariables(hash, vars));
+// 聚合音源订阅源：一条链接指向一份 index.json，里面列出整批插件
+ipcMain.handle("pluginSubscription:list", () => pluginSubscription.list());
+ipcMain.handle("pluginSubscription:add", (_e, url: string, name?: string) =>
+    pluginSubscription.add(url, name));
+ipcMain.handle("pluginSubscription:update", (_e, id: string) =>
+    pluginSubscription.update(id));
+ipcMain.handle("pluginSubscription:rename", (_e, id: string, name: string) =>
+    pluginSubscription.rename(id, name));
+ipcMain.handle("pluginSubscription:remove", (_e, id: string) =>
+    pluginSubscription.remove(id));
 ipcMain.handle("plugin:call", async (_e, payload: { hash: string; method: string; args: any[] }) => {
     try {
         const result = await pluginHost.callMethod(payload.hash, payload.method, payload.args ?? []);

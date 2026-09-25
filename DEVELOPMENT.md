@@ -181,6 +181,7 @@ electron/                        主进程（Node 环境，可读写文件与网
   preload.ts                     contextBridge 暴露 window.mfp（含 channel 白名单）
   services/
     pluginHost.ts                插件宿主：Function 沙箱 + 依赖白名单 + 平台注入
+    pluginSubscription.ts        聚合音源订阅源：解析 index.json 批量装 / 按版本检查更新
     mediaProtocol.ts             mfs:// 协议：远程音频流代理 / 本地文件流
     configStore.ts               userData/data/store.json 键值持久化
     sessionStore.ts              上次播放会话（当前歌曲/进度/队列）→ userData/data/session.json
@@ -401,6 +402,30 @@ Loading ──mountPlugin 成功──> Mounted
 
 - 搜索页默认选中哪个音源
 - 发现页 / 排行榜用哪个插件的数据
+
+#### 聚合音源订阅源（`pluginSubscription.ts`）
+
+一条链接指向一份 `index.json`，里面列出这个源提供的整批插件。链接本身记在 `configStore` 的 `plugin.subscriptions` 下，之后可以一键检查更新。解析器认这几种写法（各家 index 不统一）：
+
+```jsonc
+{
+    "name": "onemusic 音源插件订阅源",
+    "baseUrl": "https://host/plugins/", // 可省；缺省按 index 自身所在目录解析
+    "plugins": [
+        { "name": "one-酷我", "file": "kw.js" }, // 相对 baseUrl
+        { "url": "https://host/plugins/qq.js" }, // 绝对地址
+        "qs.js", // 裸字符串
+    ],
+}
+```
+
+- **只放行 http(s)**：`file://` 之类一律丢弃，不跟着订阅源读本地文件。
+- **安装规则**在 `pluginHost.installOrUpdate`：源码 hash 已装过 → 未变；同 `platform` 已有不低于索引的版本 → 未变（**不降级**）；否则装上并顶掉同平台旧版，`plugin.meta` 的启用状态 / 顺序 / 用户变量跟着迁移，旧文件删掉。
+- **偶发失败要重试**：一次导入要连着拉十几个文件，实测聚合源会偶发连接重置（6 个里少装 1 个）。每个条目退避后重试一次，仍失败只算它自己，汇总提示里点名，用户不必整批重来。
+- **删除订阅源只删记录**，已装入的音源保留。
+- **还没接入备份**：`backupService` 只备份插件本体（按各自 `srcUrl` 恢复），`plugin.subscriptions` 不在里面——换机后音源回得来，但订阅源要重新粘一次链接才能继续检查更新。
+
+`plugin:installFromUrl` 收到 JSON 时会回 `errorCode: "IS_PLUGIN_INDEX"`，前端随即改走订阅源导入，用户不需要区分「单个插件」和「聚合源」。判定用的是 `looksLikeJson(res.data)` 而不是文本首字符——**axios 已按 content-type 把 index.json 解析成了对象**，`String(对象)` 只会得到 `[object Object]`，什么也嗅不出来（这个坑踩过一次）。
 
 #### `getTopLists` 的嵌套结构处理
 
