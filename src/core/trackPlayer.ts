@@ -45,6 +45,8 @@ export interface IPlayFailurePayload {
     reason: string;
     /** 是否会自动跳到下一首 */
     willSkip: boolean;
+    /** 降级重试到的音质档：有值说明本曲没放弃，正在换低档音质重试 */
+    downgradedTo?: IMusic.IQualityKey;
 }
 
 /**
@@ -55,6 +57,9 @@ const MEDIA_SOURCE_TIMEOUT = 10000;
 
 /** 连续 N 首都播不出来就停下，不再自动往后跳（否则坏音源会把整个歌单空转一圈） */
 const MAX_AUTO_SKIP = 3;
+
+/** 本曲内音质降级重试的上限：低→标准→高清→无损一共 4 档，从顶到底最多降 3 次 */
+const MAX_QUALITY_RETRY = 3;
 
 /** 播放历史留多少首（上一首按它回退；再多也没人按那么回去） */
 const MAX_HISTORY = 50;
@@ -119,6 +124,45 @@ function describePlayError(e: any) {
     return e?.message ?? String(e ?? "未知原因");
 }
 
+/** 音质档位从低到高：对齐与降级都按这个顺序 */
+const QUALITY_LADDER: IMusic.IQualityKey[] = ["low", "standard", "high", "super"];
+
+/**
+ * 条目声明了可用音质（`qualities`）时对齐请求档：
+ * 请求档在支持列表里就原样用；不在就降到不高于请求档的最高支持档；
+ * 支持档全部高于请求档时取最低的支持档（声明显然不含请求档，与其赌插件兜底
+ * 不如直接用声明里最稳的最低档）。没声明则返回 null，调用方按原请求档解析。
+ */
+function pickSupportedQuality(
+    requested: IMusic.IQualityKey,
+    qualities?: IMusic.IQuality,
+): IMusic.IQualityKey | null {
+    if (!qualities || typeof qualities !== "object") {
+        return null;
+    }
+    const supported = QUALITY_LADDER.filter((q) => qualities[q]);
+    if (!supported.length) {
+        return null;
+    }
+    const reqIdx = QUALITY_LADDER.indexOf(requested);
+    const atOrBelow = supported.filter((q) => QUALITY_LADDER.indexOf(q) <= reqIdx);
+    return atOrBelow.length ? atOrBelow[atOrBelow.length - 1] : supported[0];
+}
+
+/**
+ * 解析音源用的音质尝试序列：从起始档逐级下降，最多 3 档——单次调用最长等 10s，
+ * 四档全试要 40s，比换歌能忍受的静默期长太多。standard 及以上天然在 3 档以内；
+ * low 不经过 standard，而很多音源只有标准档稳定可用，给它补一个 standard 兜底。
+ */
+function resolveQualityLadder(first: IMusic.IQualityKey): IMusic.IQualityKey[] {
+    const idx = QUALITY_LADDER.indexOf(first);
+    const ladder = QUALITY_LADDER.slice(0, idx + 1).reverse();
+    if (!ladder.includes("standard")) {
+        ladder.push("standard");
+    }
+    return ladder.slice(0, 3);
+}
+
 /** ---------- jotai atoms ---------- */
 /** 音量默认值：没存过、或存的不是数字时用 */
 export const DEFAULT_VOLUME = 0.8;
@@ -151,6 +195,12 @@ export const volumeAtom = atom<number>(getStoredVolume());
  * 播放栏切音质、设置页改默认音质都写它，两处显示才能保持一致。
  */
 export const qualityAtom = atom<IMusic.IQualityKey>(getQuality());
+/**
+ * 当前音源实际命中的音质档（播放栏徽标用）：请求了无损但插件只给了标准时，徽标得说实话。
+ * null 表示还不知道 / 不适用（本地文件、条目自带直链没有档位概念）；
+ * 解析成功时更新，重新解析前清空（期间徽标回退显示默认音质）。
+ */
+export const playingQualityAtom = atom<IMusic.IQualityKey | null>(null);
 /**
  * 每次有歌进入播放队列自增（追加、整队替换都算）。
  * 播放条据此在歌单入口图标上弹一次「已添加到歌单列表」，不能只比对队列长度——
@@ -211,6 +261,14 @@ class TrackPlayer extends EventEmitter {
     private pendingSeekListener: (() => void) | null = null;
     /** 启动时还原出来的起播位置：挂上音源时用一次就作废（见 play / restoreSession） */
     private pendingStartPosition = 0;
+    /** 当前音源实际解析到的音质档（本地文件 / 条目自带直链为 null）：播放失败按它往下降级 */
+    private resolvedQuality: IMusic.IQualityKey | null = null;
+    /** 当前音源解析出的直链：降级重试时排除「换档了但插件给的还是同一条链」 */
+    private resolvedSourceUrl: string | null = null;
+    /** 标记紧跟着的这次 play() 是音质降级重试（此时不清零两个失败计数） */
+    private qualityRetrying = false;
+    /** 当前这首连续降级重试的次数：真正出声后归零（见 onAudioPlaying） */
+    private qualityRetryCount = 0;
 
     setup() {
         if (this.audio) {
@@ -400,10 +458,11 @@ class TrackPlayer extends EventEmitter {
     };
 
     private onAudioPlaying = () => {
-        // 真正出声了：撤掉停滞自救的定时器，并清零"连续失败自动跳过"的计数
+        // 真正出声了：撤掉停滞自救的定时器，并清零"连续失败自动跳过"与"降级重试"的计数
         this.clearStallWatch();
         this.isLoading = false;
         this.autoSkipCount = 0;
+        this.qualityRetryCount = 0;
         setAtom(musicStateAtom, "playing");
     };
 
@@ -490,6 +549,8 @@ class TrackPlayer extends EventEmitter {
     private beginLoading() {
         this.isLoading = true;
         this.detachAudio();
+        // 解析期间实际音质未知，徽标回退显示默认音质；解析成功后更新（见 play）
+        setAtom(playingQualityAtom, null);
         if (this._currentMusic) {
             setAtom(musicStateAtom, "loading");
         }
@@ -503,11 +564,59 @@ class TrackPlayer extends EventEmitter {
         setAtom(musicStateAtom, this._currentMusic ? "paused" : "stopped");
     }
 
-    /** 播放失败：先真正停下来，再看要不要自动往后跳一首 */
-    private async handlePlayFailure(musicItem: IMusic.IMusicItem, rawReason: string) {
+    /** 还能往下降的下一档音质；已在底档 / 本地文件 / 条目自带直链（无档位概念）返回 null */
+    private lowerQualityForRetry(musicItem: IMusic.IMusicItem): IMusic.IQualityKey | null {
+        if (musicItem.localPath) {
+            // 本地文件没有音质概念，播不动是文件本身的问题，降级救不了
+            return null;
+        }
+        const used = this.resolvedQuality;
+        if (!used) {
+            return null;
+        }
+        const idx = QUALITY_LADDER.indexOf(used);
+        return idx > 0 ? QUALITY_LADDER[idx - 1] : null;
+    }
+
+    /**
+     * 播放失败：先在本曲内按音质降级自救（还剩更低档就换档接着当前进度重试），
+     * 救不了再自动往后跳一首。
+     * @param options.allowQualityRetry 传 false 表示降级救不了（解析阶段全档位
+     *   都没拿到链接），直接进入跳歌逻辑，避免把同一轮失败原样再跑一遍。
+     */
+    private async handlePlayFailure(
+        musicItem: IMusic.IMusicItem,
+        rawReason: string,
+        options?: { allowQualityRetry?: boolean },
+    ) {
         const reason = rawReason || "未知原因";
         this.isLoading = false;
+        // 摘掉旧音源前先记下播到哪儿：降级重试要接着这个位置继续，别从头再来
+        const retryPosition = this.audio?.currentTime || 0;
         this.detachAudio();
+
+        const lowerQuality =
+            options?.allowQualityRetry === false ? null : this.lowerQualityForRetry(musicItem);
+        if (lowerQuality && this.qualityRetryCount < MAX_QUALITY_RETRY) {
+            this.qualityRetryCount += 1;
+            console.warn(
+                `[trackPlayer] 播放失败：${musicItem.title}（${reason}），降级为 ${lowerQuality} 重试（第 ${this.qualityRetryCount} 次）`,
+            );
+            this.pendingStartPosition = retryPosition;
+            this.emit(TrackPlayerEvents.PlayFailed, {
+                musicItem,
+                reason,
+                willSkip: false,
+                downgradedTo: lowerQuality,
+            } as IPlayFailurePayload);
+            this.qualityRetrying = true;
+            try {
+                await this.play(musicItem, true, this.isInPlayList(musicItem), lowerQuality);
+            } finally {
+                this.qualityRetrying = false;
+            }
+            return;
+        }
 
         const willSkip = this.autoSkipCount < MAX_AUTO_SKIP && this._playList.length > 1;
         console.warn(
@@ -804,6 +913,7 @@ class TrackPlayer extends EventEmitter {
         setAtom(currentMusicAtom, null);
         setAtom(musicStateAtom, "stopped");
         setAtom(progressAtom, { position: 0, duration: 0 });
+        setAtom(playingQualityAtom, null);
         this.detachAudio();
         this.clearPlayList();
         // 停下 + 队列清空 = 这一段收听整个作废，历史再留着就只有一个不在任何队列里的幽灵
@@ -814,19 +924,39 @@ class TrackPlayer extends EventEmitter {
 
     /** ---------- 播放控制 ---------- */
 
-    /** 解析可播放的 mfs 音源 */
+    /**
+     * 解析可播放的 mfs 音源。音质按 resolveQualityLadder 从请求档逐级下降尝试，
+     * 直到某档给出可用直链。
+     *
+     * @param qualityOverride 强制从这一档开始降（音质降级重试用），不做可用音质对齐
+     * @param excludeUrl 上一轮刚播失败过的直链：插件对各档返回同一条链时直接跳过该档
+     */
     private async resolveMediaUrl(
         musicItem: IMusic.IMusicItem,
-    ): Promise<{ src: string; source?: IPlugin.IMediaSourceResult } | null> {
+        qualityOverride?: IMusic.IQualityKey,
+        excludeUrl?: string,
+    ): Promise<{
+        src: string;
+        source?: IPlugin.IMediaSourceResult;
+        /** 实际命中直链的音质档；本地文件 / 条目自带直链没有档位概念，为 null */
+        quality: IMusic.IQualityKey | null;
+    } | null> {
         if (musicItem.localPath) {
-            return { src: buildLocalMediaUrl(musicItem.localPath) };
+            return { src: buildLocalMediaUrl(musicItem.localPath), quality: null };
         }
         const plugin = await getPluginByMedia(musicItem);
         if (plugin?.supportedMethods.includes("getMediaSource")) {
-            for (const quality of [getQuality(), "standard"]) {
+            // 条目自带可用音质声明（qualities）时先对齐请求档：默认音质不在支持列表里
+            // 就降到最接近的支持档，避免发出一个注定拿不到音源的请求。
+            // 降级重试传进来的 override 不做对齐——它本来就是要往更低档试。
+            const requested =
+                qualityOverride ??
+                pickSupportedQuality(getQuality(), musicItem.qualities) ??
+                getQuality();
+            for (const quality of resolveQualityLadder(requested)) {
                 try {
                     // 等待期间旧歌已经被停掉（静音中），所以这里给单次调用加个更紧的超时，
-                    // 免得一个卡死的音源让播放器一直静音等满 30s（甚至两个音质 60s）
+                    // 免得一个卡死的音源让播放器一直静音干等
                     const source = (await Promise.race([
                         pluginCall(
                             plugin.hash,
@@ -842,6 +972,13 @@ class TrackPlayer extends EventEmitter {
                         ),
                     ])) as IPlugin.IMediaSourceResult | null;
                     if (source?.url) {
+                        if (source.url === excludeUrl) {
+                            // 这条直链刚播失败过（换档但插件给的还是同一条链），换下一档
+                            console.warn(
+                                `[trackPlayer] ${quality} 返回的直链与刚失败的相同，跳过`,
+                            );
+                            continue;
+                        }
                         return {
                             src: buildRemoteMediaUrl({
                                 url: source.url,
@@ -855,6 +992,7 @@ class TrackPlayer extends EventEmitter {
                                 },
                             }),
                             source,
+                            quality,
                         };
                     }
                     console.warn(`[trackPlayer] getMediaSource empty for ${quality}`);
@@ -862,10 +1000,15 @@ class TrackPlayer extends EventEmitter {
                     console.warn(
                         `[trackPlayer] getMediaSource failed (${quality}):`,
                         e?.message ?? e,
-                    );                }
+                    );
+                }
             }
         }
         if (musicItem.url) {
+            // 条目自带的直链刚播失败过就别再原样试一遍
+            if (musicItem.url === excludeUrl) {
+                return null;
+            }
             return {
                 src: buildRemoteMediaUrl({
                     url: musicItem.url,
@@ -875,6 +1018,9 @@ class TrackPlayer extends EventEmitter {
                         quality: "",
                     },
                 }),
+                // source 只是为了让调用方记下这条直链用于失败排除，不是插件返回的音源
+                source: { url: musicItem.url },
+                quality: null,
             };
         }
         return null;
@@ -922,11 +1068,14 @@ class TrackPlayer extends EventEmitter {
     /**
      * @param addToPlayList 不在队列里的歌要不要顺手插进队列（默认插）。
      *   上一首回到一首已被移出队列的歌时传 false：歌照常放出来，但别复活在队列末尾。
+     * @param qualityOverride 本次解析强制使用的音质档（音质降级重试用）。
+     *   不传时按「默认音质（对齐条目声明的可用音质）」解析。
      */
     async play(
         musicItem?: IMusic.IMusicItem | null,
         forcePlay?: boolean,
         addToPlayList = true,
+        qualityOverride?: IMusic.IQualityKey,
     ) {
         if (!musicItem && !this._currentMusic) {
             return;
@@ -945,13 +1094,17 @@ class TrackPlayer extends EventEmitter {
          */
         const resumePosition = this.isCurrentMusic(target) ? this.pendingStartPosition : 0;
 
-        if (!this.autoSkipping) {
-            // 用户主动发起的播放：把"连续失败"的计数清零
+        if (!this.autoSkipping && !this.qualityRetrying) {
+            // 用户主动发起的播放：把"连续失败"与"降级重试"的计数清零
             this.autoSkipCount = 0;
+            this.qualityRetryCount = 0;
         }
 
         if (isNew) {
             this.stallNudges = 0;
+            // 换新歌了，上一首残留的起播位置作废：降级重试失败后跳歌时，
+            // 别把旧歌的位置带到新歌头上（restoreSession 的续播位置属于同一首，不受影响）
+            this.pendingStartPosition = 0;
             if (addToPlayList && !this.isInPlayList(target)) {
                 this.add(target);
             }
@@ -975,14 +1128,30 @@ class TrackPlayer extends EventEmitter {
         }
 
         try {
-            const resolved = await this.resolveMediaUrl(target);
+            const resolved = await this.resolveMediaUrl(
+                target,
+                qualityOverride,
+                // 降级重试时排除刚失败的那条直链：不少音源各档返回同一条链，
+                // 换档不换链就别再试它（正常播放不排除，给瞬时网络问题留重来的机会）
+                qualityOverride ? (this.resolvedSourceUrl ?? undefined) : undefined,
+            );
             if (this.pendingPlayId !== playId) {
                 // 已经被后面的播放请求取代（连点下一首、快速点列表），丢弃这次结果
                 return;
             }
             if (!resolved) {
-                throw new Error("音源没有返回可播放的链接");
+                // 全档位都没解析出链接：resolveMediaUrl 内部已逐档降到底，
+                // 再重试只会原样再失败一轮，直接按失败处理
+                await this.handlePlayFailure(target, "音源没有返回可播放的链接", {
+                    allowQualityRetry: false,
+                });
+                return;
             }
+            // 记下实际用的音质档与直链：之后播放失败时按档降级重试、并排除同一条坏链
+            this.resolvedQuality = resolved.quality;
+            this.resolvedSourceUrl = resolved.source?.url ?? null;
+            // 播放栏徽标同步为实际命中的档位（可能比请求的低，也可能没有档位概念）
+            setAtom(playingQualityAtom, resolved.quality);
             const audio = this.audio;
             if (!audio) {
                 return;
@@ -1008,6 +1177,7 @@ class TrackPlayer extends EventEmitter {
                 // 失败来自一次已被取代的请求，不该弹提示、也不该自动跳歌
                 return;
             }
+            // 能走到这说明解析已拿到过链接、是播放环节出的问题：允许按档降级自救
             await this.handlePlayFailure(target, describePlayError(e));
         }
     }
@@ -1310,6 +1480,10 @@ export function useVolume() {
 }
 export function useQuality() {
     return useAtomValue(qualityAtom);
+}
+/** 当前音源实际命中的音质档（播放栏徽标用），null = 未知 / 无档位概念 */
+export function usePlayingQuality() {
+    return useAtomValue(playingQualityAtom);
 }
 /** 只改「默认音质」配置，不动正在播的歌（设置页用；播放栏的即时切换走 applyQuality） */
 export function setDefaultQuality(quality: IMusic.IQualityKey) {

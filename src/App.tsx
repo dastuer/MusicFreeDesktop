@@ -167,10 +167,14 @@ export default function App() {
         setupDesktopLyrics();
     }, []);
 
-    // 换歌失败时把原因说出来：失败后播放器会真正停下来，不再静默地把上一首继续放下去
+    // 播放失败时把原因说出来：能降级音质自救的本曲会接着重试，救不了才停住或跳下一首
     useEffect(() => {
         const onPlayFailed = (payload: IPlayFailurePayload) => {
             const title = payload.musicItem?.title ?? "当前歌曲";
+            if (payload.downgradedTo) {
+                showToast(`「${title}」播放失败：${payload.reason}，已自动降低音质重试`);
+                return;
+            }
             showToast(
                 payload.willSkip
                     ? `「${title}」无法播放：${payload.reason}，已跳到下一首`

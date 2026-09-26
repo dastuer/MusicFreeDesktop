@@ -10,6 +10,7 @@ import {
     playListAddedAtom,
     useCurrentMusic,
     useMusicState,
+    usePlayingQuality,
     useProgress,
     useQuality,
     useRepeatMode,
@@ -54,7 +55,14 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const repeatMode = useRepeatMode();
     const volume = useVolume();
     const quality = useQuality();
+    // 实际命中的音质档：请求了无损但被降级到标准时，徽标要跟着说实话
+    const playingQuality = usePlayingQuality();
     const muted = volume === 0;
+    /**
+     * 徽标显示的音质：优先用实际命中的档位（解析降级后徽标跟着实话实说）；
+     * 解析中 / 还未知时回退显示默认音质；本地文件没有音质概念，不显示徽标。
+     */
+    const badgeQuality = currentMusic?.localPath ? null : playingQuality ?? quality;
     const lyricsVisible = useDesktopLyricsVisible();
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
@@ -99,11 +107,13 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
             rect.top - 8,
             (Object.keys(qualityMeta) as IMusic.IQualityKey[]).map((q) => ({
                 title: qualityMeta[q],
-                checked: q === quality,
+                // 勾选态与徽标同源：显示的是实际在播的档位（可能已被降级），不是配置值
+                checked: q === badgeQuality,
                 // 正在播的歌就地换源（进度保留）；没在播就只记设置，下次解析生效
                 onClick: () => TrackPlayerSingleton.applyQuality(q),
             })),
-            { above: true },
+            // 四个两字短项：紧凑变体宽度贴内容，不再撑到默认的 160px；勾选与文字间留 20px
+            { above: true, compact: true, checkGap: true },
         );
     };
 
@@ -234,13 +244,15 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
 
                 {/* 右：音质 / 喜欢 / 音量 / 更多（下载、收藏收进更多菜单） */}
                 <div className="playerbar-right">
-                    <button
-                        className="playerbar-quality"
-                        title="选择音质"
-                        onClick={showQualityMenu}
-                    >
-                        {qualityMeta[quality]}
-                    </button>
+                    {badgeQuality && (
+                        <button
+                            className="playerbar-quality"
+                            title="选择音质"
+                            onClick={showQualityMenu}
+                        >
+                            {qualityMeta[badgeQuality]}
+                        </button>
+                    )}
                     {currentMusic && (
                         <button
                             className="playerbar-control-btn"

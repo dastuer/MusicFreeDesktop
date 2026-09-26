@@ -23,6 +23,8 @@ interface IMenuState {
     above?: boolean;
     /** 紧凑变体：宽度贴内容（播放栏「…」这种只有两个短项的菜单） */
     compact?: boolean;
+    /** 勾选标记与文字之间留出 20px 间距（音质这种带勾选的紧凑短项菜单用） */
+    checkGap?: boolean;
 }
 
 let menuListener: ((state: IMenuState) => void) | null = null;
@@ -31,9 +33,16 @@ export function showContextMenu(
     x: number,
     y: number,
     items: IContextMenuItem[],
-    options?: { above?: boolean; compact?: boolean },
+    options?: { above?: boolean; compact?: boolean; checkGap?: boolean },
 ) {
-    menuListener?.({ x, y, items, above: options?.above, compact: options?.compact });
+    menuListener?.({
+        x,
+        y,
+        items,
+        above: options?.above,
+        compact: options?.compact,
+        checkGap: options?.checkGap,
+    });
 }
 
 export default function ContextMenuHost() {
@@ -106,7 +115,12 @@ export default function ContextMenuHost() {
                         <Icon
                             name="check"
                             size={15}
-                            style={{ marginLeft: "auto", color: "var(--primary-color)" }}
+                            style={{
+                                // 紧凑菜单里 auto 会塌成 0、勾选标记紧贴文字：
+                                // checkGap 时给 20px 外边距，把间距加在文字与图标之间
+                                marginLeft: state.checkGap ? 20 : "auto",
+                                color: "var(--primary-color)",
+                            }}
                         />
                     )}
                 </div>
