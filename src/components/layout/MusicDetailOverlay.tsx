@@ -72,7 +72,9 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                 container.scrollTop +
                 (lineRect.top - containerRect.top) +
                 lineRect.height / 2 -
-                containerRect.height / 2,
+                containerRect.height / 2 +
+                // 激活行比居中位置再上移一行（行高固定 40px，多滚一行正好上移一格）
+                lineRect.height,
             behavior: positionedRef.current ? "smooth" : "auto",
         });
         positionedRef.current = true;
