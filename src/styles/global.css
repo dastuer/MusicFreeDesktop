@@ -1258,9 +1258,9 @@ img {
     }
 }
 
-/* 右侧按钮组：下载 / 喜欢 / 收藏到歌单 / 音量。
-   播放模式和歌单入口已经挪到中间那组，这里 300px 保持与左侧对称，
-   中间一组才真正居中；再往右加按钮就得同步放宽，否则会挤掉音量条。 */
+/* 右侧按钮组：音质 / 喜欢 / 音量 / 更多（下载、收藏收进更多菜单）。
+   播放模式和歌单入口已经挪到中间那组，这里 300px 与左侧等宽，
+   中间一组才真正居中。 */
 .playerbar-right {
     width: 300px;
     display: flex;
@@ -1269,8 +1269,93 @@ img {
     gap: 6px;
 }
 
-.playerbar-right .slider {
-    width: 90px;
+/* 音质入口：播放栏右侧的文字徽标，点开选音质。
+   当前音质立即生效（正在播的歌就地换源），与设置页的「默认音质」是同一份配置。 */
+.playerbar-quality {
+    background: transparent;
+    border: 1px solid var(--divider);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 5px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.playerbar-quality:hover {
+    color: var(--text-color);
+    border-color: var(--text-tertiary);
+    background: var(--hover-bg);
+}
+
+/* 音量入口：悬浮图标在上方弹出竖向音量面板（参考网易云）。面板整个悬于按钮上方、
+   中间留 6px 缝，靠向下的小箭头补上，鼠标从图标滑进面板不会中途丢 :hover */
+.playerbar-volume-entry {
+    position: relative;
+    display: flex;
+}
+
+.playerbar-volume-pop {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 10px 10px;
+    background: var(--page-bg);
+    border: 1px solid var(--divider);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.playerbar-volume-entry:hover .playerbar-volume-pop {
+    display: flex;
+}
+
+/* 向下的小箭头：菱形下半截探出面板底边，描边方向与旋转角对应 */
+.playerbar-volume-pop::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    background: var(--page-bg);
+    border-right: 1px solid var(--divider);
+    border-bottom: 1px solid var(--divider);
+    transform: translateX(-50%) translateY(-50%) rotate(45deg);
+}
+
+/* 百分比占位固定宽：面板宽度由内容撑开，不锁住的话「8%」和「100%」会让面板跟着变宽变窄 */
+.playerbar-volume-value {
+    min-width: 32px;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--text-secondary);
+}
+
+/* 音量滑杆配色：填充用主题色渐变（近滑块处深、末端浅），滑块白色带投影。
+   滑块始终可见（参考网易云）——面板里鼠标常停在百分比上，那时滑杆并未 :hover */
+.playerbar-volume-slider .slider-filled {
+    background: linear-gradient(
+        180deg,
+        var(--primary-color),
+        color-mix(in srgb, var(--primary-color) 65%, #ffffff)
+    );
+}
+
+.playerbar-volume-slider .slider-thumb {
+    width: 12px;
+    height: 12px;
+    background: #ffffff;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+    opacity: 1;
 }
 
 /* ---------- Slider ---------- */
@@ -1298,6 +1383,41 @@ img {
 
 .slider.filled-primary .slider-filled {
     background: var(--primary-color);
+}
+
+/* 竖向滑杆：轨道竖立、填充自下而上、滑块沿竖向定位（播放栏音量面板用） */
+.slider.vertical {
+    width: 14px;
+    height: 96px;
+    justify-content: center;
+}
+
+.slider.vertical .slider-track {
+    width: 5px;
+    height: 100%;
+    border-radius: 2.5px;
+    position: relative;
+}
+
+/* 横向滑杆悬浮时轨道会变粗（height 5px），竖向不吃这条：高度始终撑满 */
+.slider.vertical .slider-track,
+.slider.vertical:hover .slider-track,
+.slider.vertical.dragging .slider-track {
+    height: 100%;
+}
+
+.slider.vertical .slider-filled {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+/* 竖向时滑块中心对准填充顶端：bottom 定位 + 向下平移半个自身 */
+.slider.vertical .slider-thumb {
+    top: auto;
+    left: 50%;
+    transform: translate(-50%, 50%);
 }
 
 .slider-thumb {
@@ -1790,6 +1910,14 @@ html[data-theme="dark"] .search-history-panel {
     background: var(--hover-bg);
 }
 
+/* 紧凑变体：项目少、文字短的菜单（播放栏「…」更多），宽度贴内容不再撑到 160px。
+   必须用 max-content：贴右边缘时 fixed 元素的收缩宽度会被「left 到窗口右缘」的
+   剩余空间压小导致文字换行，且换行后测宽变小、溢出矫正也救不回来 */
+.context-menu.compact {
+    min-width: 0;
+    width: max-content;
+}
+
 /* ---------- Toast ---------- */
 .toast-host {
     position: fixed;
@@ -2241,4 +2369,99 @@ html[data-theme="dark"] .search-history-panel {
     line-height: 1.7;
     color: var(--text-tertiary);
     padding: 10px 16px;
+}
+
+/* ---------- 桌面歌词 ---------- */
+/* 开关（播放栏「词ON」）：文字图标，开启时亮主色并挂 ON 角标 */
+.playerbar-lyrics-toggle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 6px;
+    border-radius: 6px;
+}
+
+.playerbar-lyrics-toggle:hover {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.playerbar-lyrics-toggle.on {
+    color: var(--primary-color);
+}
+
+.playerbar-lyrics-badge {
+    position: absolute;
+    right: -3px;
+    bottom: -1px;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 2px 3px;
+    border-radius: 4px;
+    background: var(--primary-color);
+    color: #ffffff;
+}
+
+/* 悬浮窗本体（独立透明置顶窗口）：深色胶囊，与主题无关，整体可拖动 */
+body.in-desktop-lyrics-window {
+    background: transparent;
+}
+
+.desktop-lyrics {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 18px 0 22px;
+    background: rgba(18, 18, 20, 0.88);
+    border-radius: 14px;
+    /* 无边框窗口的拖拽区：胶囊整体随手拖，按钮单独排除 */
+    -webkit-app-region: drag;
+    cursor: default;
+}
+
+.desktop-lyrics-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #ffffff;
+    font-size: 17px;
+    font-weight: 600;
+}
+
+.desktop-lyrics-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    -webkit-app-region: no-drag;
+}
+
+.desktop-lyrics-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: #ffffff;
+    opacity: 0.85;
+    padding: 5px;
+    border-radius: 6px;
+}
+
+.desktop-lyrics-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.14);
 }

@@ -25,6 +25,7 @@ import {
 import { useThemeSetup } from "./core/theme";
 import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
+import { setupDesktopLyrics } from "./core/desktopLyrics";
 
 import HomePage from "./pages/home";
 import SearchPage from "./pages/search";
@@ -162,6 +163,8 @@ export default function App() {
         // setup() 只还原播放列表 / 当前歌曲，并把进度条摆到上次听到的位置，
         // 不会自动出声：重启后要不要接着听，由用户按播放决定。
         TrackPlayerSingleton.setup();
+        // 桌面歌词：接好「状态推送 → 歌词窗」与「歌词窗遥控 → 播放器」两条链路
+        setupDesktopLyrics();
     }, []);
 
     // 换歌失败时把原因说出来：失败后播放器会真正停下来，不再静默地把上一首继续放下去

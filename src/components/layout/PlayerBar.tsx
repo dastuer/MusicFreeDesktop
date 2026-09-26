@@ -11,12 +11,18 @@ import {
     useCurrentMusic,
     useMusicState,
     useProgress,
+    useQuality,
     useRepeatMode,
     useVolume,
 } from "@/core/trackPlayer";
 import { isLiked, likesVersionAtom, toggleLike } from "@/core/musicSheet";
+import {
+    toggleDesktopLyrics,
+    useDesktopLyricsVisible,
+} from "@/core/desktopLyrics";
 import { showAddToSheetPanel } from "../base/AddToSheetPanel";
 import { showDownloadPanel } from "../base/DownloadPanel";
+import { showContextMenu } from "../base/ContextMenu";
 import { showToast } from "../base/Toast";
 import { showPlayQueuePanel } from "./PlayQueuePanel";
 
@@ -24,6 +30,14 @@ const repeatModeMeta: Record<string, { icon: string; label: string }> = {
     off: { icon: "repeatOff", label: "列表循环" },
     queue: { icon: "repeatQueue", label: "随机播放" },
     single: { icon: "repeatSingle", label: "单曲循环" },
+};
+
+/** 音质短标签：徽标和菜单都用它（与下载管理页同一套叫法） */
+const qualityMeta: Record<IMusic.IQualityKey, string> = {
+    low: "低品",
+    standard: "标准",
+    high: "高清",
+    super: "无损",
 };
 
 function formatTime(s: number) {
@@ -39,7 +53,9 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const progress = useProgress();
     const repeatMode = useRepeatMode();
     const volume = useVolume();
+    const quality = useQuality();
     const muted = volume === 0;
+    const lyricsVisible = useDesktopLyricsVisible();
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
     /** 队列一进歌就在歌单入口图标上弹一次提示，两秒后自己收回去 */
@@ -71,6 +87,52 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
         const next = await toggleLike(currentMusic);
         setLiked(next);
         showToast(next ? "已添加到我喜欢的音乐" : "已取消喜欢");
+    };
+
+    const showQualityMenu = (e: React.MouseEvent) => {
+        // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+        showContextMenu(
+            rect.left,
+            // y 传「菜单底边」锚点：贴底的播放栏，菜单要向按钮上方展开（参考网易云）
+            rect.top - 8,
+            (Object.keys(qualityMeta) as IMusic.IQualityKey[]).map((q) => ({
+                title: qualityMeta[q],
+                checked: q === quality,
+                // 正在播的歌就地换源（进度保留）；没在播就只记设置，下次解析生效
+                onClick: () => TrackPlayerSingleton.applyQuality(q),
+            })),
+            { above: true },
+        );
+    };
+
+    const showMoreMenu = (e: React.MouseEvent) => {
+        // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
+        e.stopPropagation();
+        const music = currentMusic;
+        if (!music) {
+            return;
+        }
+        const rect = e.currentTarget.getBoundingClientRect();
+        showContextMenu(
+            rect.left,
+            rect.top - 8,
+            [
+                {
+                    title: "下载",
+                    icon: "download",
+                    onClick: () => showDownloadPanel([music]),
+                },
+                {
+                    title: "收藏",
+                    icon: "addToSheet",
+                    onClick: () => showAddToSheetPanel(music),
+                },
+            ],
+            // 贴底的播放栏：菜单向上展开；两项短文字，宽度贴内容
+            { above: true, compact: true },
+        );
     };
 
     const playing = musicState === "playing";
@@ -170,17 +232,15 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     </div>
                 </div>
 
-                {/* 右：下载 / 喜欢 / 收藏到歌单 / 音量 */}
+                {/* 右：音质 / 喜欢 / 音量 / 更多（下载、收藏收进更多菜单） */}
                 <div className="playerbar-right">
-                    {currentMusic && (
-                        <button
-                            className="playerbar-control-btn"
-                            title="下载当前歌曲"
-                            onClick={() => showDownloadPanel([currentMusic])}
-                        >
-                            <Icon name="download" size={16} />
-                        </button>
-                    )}
+                    <button
+                        className="playerbar-quality"
+                        title="选择音质"
+                        onClick={showQualityMenu}
+                    >
+                        {qualityMeta[quality]}
+                    </button>
                     {currentMusic && (
                         <button
                             className="playerbar-control-btn"
@@ -196,27 +256,47 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             />
                         </button>
                     )}
+                    {/* 桌面歌词开关（参考网易云「词ON」）：文字图标，开启时亮主色 + ON 角标 */}
+                    <button
+                        className={`playerbar-lyrics-toggle${lyricsVisible ? " on" : ""}`}
+                        title={lyricsVisible ? "关闭桌面歌词" : "开启桌面歌词"}
+                        onClick={() => toggleDesktopLyrics()}
+                    >
+                        词
+                        {lyricsVisible && <span className="playerbar-lyrics-badge">ON</span>}
+                    </button>
+                    {/* 音量：悬浮图标在上方弹出竖向音量面板（参考网易云）；
+                        点击图标本身仍是静音开关，拖竖杆即时调音量 */}
+                    <div className="playerbar-volume-entry">
+                        <button
+                            className="playerbar-control-btn"
+                            title={muted ? "取消静音" : "静音"}
+                            onClick={() => TrackPlayerSingleton.setVolume(muted ? DEFAULT_VOLUME : 0)}
+                        >
+                            <Icon name={muted ? "volumeMute" : "volume"} size={16} />
+                        </button>
+                        <div className="playerbar-volume-pop">
+                            <Slider
+                                vertical
+                                className="playerbar-volume-slider"
+                                value={volume}
+                                max={1}
+                                onChange={(v) => TrackPlayerSingleton.setVolume(v)}
+                            />
+                            <div className="playerbar-volume-value">
+                                {Math.round(volume * 100)}%
+                            </div>
+                        </div>
+                    </div>
                     {currentMusic && (
                         <button
                             className="playerbar-control-btn"
-                            title="收藏到歌单"
-                            onClick={() => showAddToSheetPanel(currentMusic)}
+                            title="更多操作"
+                            onClick={showMoreMenu}
                         >
-                            <Icon name="addToSheet" size={16} />
+                            <Icon name="more" size={16} />
                         </button>
                     )}
-                    <button
-                        className="playerbar-control-btn"
-                        title={muted ? "取消静音" : "静音"}
-                        onClick={() => TrackPlayerSingleton.setVolume(muted ? DEFAULT_VOLUME : 0)}
-                    >
-                        <Icon name={muted ? "volumeMute" : "volume"} size={16} />
-                    </button>
-                    <Slider
-                        value={volume}
-                        max={1}
-                        onChange={(v) => TrackPlayerSingleton.setVolume(v)}
-                    />
                 </div>
             </div>
         </div>

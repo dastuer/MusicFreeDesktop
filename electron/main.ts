@@ -15,6 +15,7 @@ import mediaCache, {
 } from "./services/mediaCache";
 import sessionStore from "./services/sessionStore";
 import backupService, { ResumeMode } from "./services/backupService";
+import lyricsWindow from "./services/lyricsWindow";
 
 const isMac = process.platform === "darwin";
 const isWin = process.platform === "win32";
@@ -84,6 +85,12 @@ function createWindow() {
         requestSessionFlush().finally(() => mainWindow?.close());
     });
 
+    // 主窗口没了桌面歌词窗也没必要留：一起收掉，window-all-closed 才能正常退出
+    mainWindow.on("closed", () => {
+        lyricsWindow.close();
+        mainWindow = null;
+    });
+
     // 调试：开发模式下自动打开 DevTools
     // 用 detach（独立窗口）而非 dock：本应用布局精确到 px，内嵌 DevTools 会挤压窗口宽度导致样式错位
     const isDev = !!process.env.ELECTRON_START_URL;
@@ -137,6 +144,11 @@ app.whenReady().then(() => {
     const dataDir = path.join(app.getPath("userData"), "data");
     configStore.setup(dataDir);
     sessionStore.setup(dataDir);
+    // 桌面歌词悬浮窗：注册 IPC 与窗口管理
+    lyricsWindow.setup({
+        configStore,
+        getMainWindow: () => mainWindow,
+    });
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
@@ -181,7 +193,9 @@ app.whenReady().then(() => {
     createWindow();
 
     app.on("activate", () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
+        // 不能按「没有窗口」判断：桌面歌词窗开着时 getAllWindows() 不为空，
+        // 但主窗口可能已经没了，点 Dock 图标必须能把它拉回来
+        if (!mainWindow || mainWindow.isDestroyed()) {
             createWindow();
         }
     });

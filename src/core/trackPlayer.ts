@@ -9,7 +9,7 @@ import {
     pluginCall,
 } from "./ipc";
 import { setMusicHistory } from "./musicHistory";
-import { getQuality } from "./appConfig";
+import { getQuality, setQuality } from "./appConfig";
 import {
     bindProgressPersistence,
     clearAllProgress,
@@ -146,6 +146,11 @@ export const progressAtom = atom<{ position: number; duration: number }>({
 });
 export const rateAtom = atom<number>(1);
 export const volumeAtom = atom<number>(getStoredVolume());
+/**
+ * 选中的音质：appConfig 里那份「默认音质」的响应式视图。
+ * 播放栏切音质、设置页改默认音质都写它，两处显示才能保持一致。
+ */
+export const qualityAtom = atom<IMusic.IQualityKey>(getQuality());
 /**
  * 每次有歌进入播放队列自增（追加、整队替换都算）。
  * 播放条据此在歌单入口图标上弹一次「已添加到歌单列表」，不能只比对队列长度——
@@ -1246,6 +1251,29 @@ class TrackPlayer extends EventEmitter {
         return this.audio?.volume ?? getStoredVolume();
     }
 
+    /**
+     * 切换音质：写回配置（与设置页的「默认音质」是同一份），并让当前这首尽快用上。
+     * 正在播：记住位置重新解析音源，无缝换到新音质；暂停中：作废已解析的音源、
+     * 位置先记着，下次按播放就用新音质从这里接着播（不替用户出声）；
+     * 本地文件没有音质概念，音源解析中（src 还没挂上）也只改配置，不折腾在途请求。
+     */
+    async applyQuality(quality: IMusic.IQualityKey) {
+        setQuality(quality);
+        setAtom(qualityAtom, quality);
+        const music = this._currentMusic;
+        const audio = this.audio;
+        if (!music || music.localPath || !audio?.src) {
+            return;
+        }
+        this.pendingStartPosition = audio.currentTime || 0;
+        if (audio.paused) {
+            // 作废现有音源后，togglePlay / resume 看到 src 为空会走完整解析（新音质 + 记住的位置）
+            this.detachAudio();
+            return;
+        }
+        await this.play(music, true);
+    }
+
     getProgress() {
         if (this.audio) {
             return {
@@ -1279,6 +1307,14 @@ export function useRepeatMode() {
 }
 export function useVolume() {
     return useAtomValue(volumeAtom);
+}
+export function useQuality() {
+    return useAtomValue(qualityAtom);
+}
+/** 只改「默认音质」配置，不动正在播的歌（设置页用；播放栏的即时切换走 applyQuality） */
+export function setDefaultQuality(quality: IMusic.IQualityKey) {
+    setQuality(quality);
+    setAtom(qualityAtom, quality);
 }
 export function useProgress() {
     return useAtomValue(progressAtom);

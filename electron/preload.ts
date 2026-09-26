@@ -53,6 +53,9 @@ const allowedChannels = [
     "backup:webdav:test",
     "backup:webdav:upload",
     "backup:webdav:download",
+    "lyrics:show",
+    "lyrics:hide",
+    "lyrics:getVisible",
 ];
 
 /**
@@ -87,5 +90,37 @@ contextBridge.exposeInMainWorld("mfp", {
     /** 告知主进程「这次的会话已经写完盘了」，它可以继续退出 */
     notifySessionSaved: () => {
         ipcRenderer.send("session:saved");
+    },
+    /** ---------- 桌面歌词（两个窗口之间都经主进程中转，见 services/lyricsWindow.ts） ---------- */
+    /** 主窗口 → 歌词窗：推送播放状态（歌曲/进度/歌词行/喜欢） */
+    sendLyricsState: (state: any) => {
+        ipcRenderer.send("lyrics:state", state);
+    },
+    /** 歌词窗 → 主窗口：遥控命令（togglePlay / next / prev / toggleLike） */
+    sendLyricsCommand: (cmd: string) => {
+        ipcRenderer.send("lyrics:command", cmd);
+    },
+    /** 歌词窗挂载完成：请主进程让主窗口补推一份最新状态 */
+    notifyLyricsReady: () => {
+        ipcRenderer.send("lyrics:ready");
+    },
+    /** 主窗口：歌词窗可见性变化（开关回执，Toggle 按钮状态跟它走） */
+    onLyricsVisibility: (callback: (visible: boolean) => void) => {
+        ipcRenderer.on("lyrics:visibility", (_e, visible) => callback(visible));
+    },
+    /** 歌词窗：接收播放状态 */
+    onLyricsState: (callback: (state: any) => void) => {
+        ipcRenderer.on("lyrics:state", (_e, state) => callback(state));
+    },
+    /** 主窗口：接收歌词窗遥控命令 */
+    onLyricsCommand: (callback: (cmd: string) => void) => {
+        ipcRenderer.on("lyrics:command", (_e, cmd) => callback(cmd));
+    },
+    /**
+     * 主窗口 → 主进程：菜单栏托盘图标（base64 PNG）。
+     * SVG 图标只有渲染进程画得出来（canvas），主进程收图后建 Tray 用。
+     */
+    sendLyricsIcons: (icons: Record<string, string>) => {
+        ipcRenderer.send("lyrics:setIcons", icons);
     },
 });

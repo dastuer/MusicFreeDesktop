@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { setTheme, useThemeSetting } from "@/core/theme";
-import { getQuality, setQuality } from "@/core/appConfig";
+import { setDefaultQuality, useQuality } from "@/core/trackPlayer";
 import {
     clearAllProgress,
     getRememberedProgress,
@@ -64,7 +64,8 @@ function ToggleRow(props: {
 
 export default function SettingsPage() {
     const themeSetting = useThemeSetting();
-    const [quality, setQualityState] = useState<IMusic.IQualityKey>(getQuality());
+    // 与播放栏共享同一份音质状态：两边随便哪边改，另一处都跟着变
+    const quality = useQuality();
     const [appInfo, setAppInfo] = useState<any>(null);
     const [downloadDir, setDownloadDir] = useState("");
     const [rememberProgress, setRememberProgressState] = useState(
@@ -122,8 +123,7 @@ export default function SettingsPage() {
                                 key={q}
                                 className={`segment-item${quality === q ? " active" : ""}`}
                                 onClick={() => {
-                                    setQuality(q);
-                                    setQualityState(q);
+                                    setDefaultQuality(q);
                                 }}
                             >
                                 {qualityLabels[q]}

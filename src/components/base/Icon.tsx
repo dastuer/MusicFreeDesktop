@@ -1,5 +1,37 @@
 import React from "react";
 
+/**
+ * 播放器遥控图标的原始路径数据：桌面歌词的菜单栏托盘图标要把这些形状
+ * 画进 canvas 导出 PNG（主进程拿不到 JSX），所以单独放一份；
+ * 下面 iconPaths 的对应项由它生成，改形状只改这里。
+ */
+export const playerIconData = {
+    play: {
+        d: "M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5z",
+        filled: true,
+    },
+    pause: {
+        d: "M7 5h3.4v14H7zM13.6 5H17v14h-3.4z",
+        filled: true,
+    },
+    prev: {
+        d: "M7 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zm10.5.2-8.2 5.2a.7.7 0 0 0 0 1.2l8.2 5.2A.8.8 0 0 0 18.8 17V7a.8.8 0 0 0-1.3-.8z",
+        filled: true,
+    },
+    next: {
+        d: "M17 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zM6.5 6.2l8.2 5.2a.7.7 0 0 1 0 1.2l-8.2 5.2A.8.8 0 0 1 5.2 17V7a.8.8 0 0 1 1.3-.8z",
+        filled: true,
+    },
+    heart: {
+        d: "M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z",
+        filled: false,
+    },
+    heartFilled: {
+        d: "M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z",
+        filled: true,
+    },
+} as const;
+
 const iconPaths: Record<string, React.ReactNode> = {
     home: <path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     search: (
@@ -27,12 +59,12 @@ const iconPaths: Record<string, React.ReactNode> = {
             <path d="M12 2.5v2.6M12 18.9v2.6M21.5 12h-2.6M5.1 12H2.5M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9M18.7 18.7l-1.9-1.9M7.2 7.2 5.3 5.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </>
     ),
-    play: <path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5z" fill="currentColor" />,
-    pause: <path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z" fill="currentColor" />,
+    play: <path d={playerIconData.play.d} fill="currentColor" />,
+    pause: <path d={playerIconData.pause.d} fill="currentColor" />,
     // 上一首：左侧竖条 + 左向三角。路径本身已经是正确的朝向，
     // 早期误加的 scale(-1,1) 会把两个图标一起镜像，导致「上一首/下一首」看起来反了。
-    prev: <path d="M7 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zm10.5.2-8.2 5.2a.7.7 0 0 0 0 1.2l8.2 5.2A.8.8 0 0 0 18.8 17V7a.8.8 0 0 0-1.3-.8z" fill="currentColor" />,
-    next: <path d="M17 6a1 1 0 0 1 2 0v12a1 1 0 0 1-2 0zM6.5 6.2l8.2 5.2a.7.7 0 0 1 0 1.2l-8.2 5.2A.8.8 0 0 1 5.2 17V7a.8.8 0 0 1 1.3-.8z" fill="currentColor" />,
+    prev: <path d={playerIconData.prev.d} fill="currentColor" />,
+    next: <path d={playerIconData.next.d} fill="currentColor" />,
     volume: <path d="M4 9.5h3L12 5v14l-5-4.5H4zM15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     volumeMute: <path d="M4 9.5h3L12 5v14l-5-4.5H4zM16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
     repeatOff: <path d="M7 7h10a4 4 0 0 1 4 4v1M17 17H7a4 4 0 0 1-4-4v-1m1-5L7 4m-3 3h3m10 10 3 3m3-3h-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
@@ -46,8 +78,8 @@ const iconPaths: Record<string, React.ReactNode> = {
             <path d="M17.5 10.5v7M14 14h7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </>
     ),
-    heart: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
-    heartFilled: <path d="M12 20.7 4.7 13.4a5 5 0 0 1 7-7.1l.3.2.3-.2a5 5 0 0 1 7 7.1z" fill="currentColor" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
+    heart: <path d={playerIconData.heart.d} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
+    heartFilled: <path d={playerIconData.heartFilled.d} fill="currentColor" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />,
     check: <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />,
     trash: (
         <>

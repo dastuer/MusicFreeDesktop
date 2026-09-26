@@ -139,6 +139,7 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
     /**
      * 多选模式：入口在头部「…」更多菜单里（和播放/下载并排太占地方），
      * 状态提到页面这一层，由 MediaHeader 和 MusicList 共享。
+     * 重命名 / 删除歌单同样收进「…」菜单：低频管理操作不占头部一行。
      */
     const [selectMode, setSelectMode] = useState(false);
 
@@ -227,8 +228,10 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
                 hideFavoriteAll={isUserSheet}
                 listId={listId}
-                moreMenuItems={
-                    list.items.length > 0
+                // 重命名 / 删除歌单只对本机歌单开放（「我喜欢的音乐」不可改不可删）；
+                // 放在「…」菜单里，空歌单也能进菜单做管理操作
+                moreMenuItems={[
+                    ...(list.items.length > 0
                         ? [
                               {
                                   title: "多选",
@@ -236,32 +239,33 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                                   onClick: () => setSelectMode(true),
                               },
                           ]
-                        : []
-                }
+                        : []),
+                    ...(isUserSheet && !isLikesSheet
+                        ? [
+                              {
+                                  title: "重命名",
+                                  icon: "settings",
+                                  onClick: handleRename,
+                              },
+                              {
+                                  title: "删除歌单",
+                                  icon: "trash",
+                                  danger: true,
+                                  onClick: handleDelete,
+                              },
+                          ]
+                        : []),
+                ]}
                 extraActions={
-                    <>
-                        {list.items.length > 0 && (
-                            <button
-                                className="btn-ghost"
-                                onClick={() => showDownloadPanel(list.items)}
-                            >
-                                <Icon name="download" size={14} />
-                                下载全部
-                            </button>
-                        )}
-                        {isUserSheet && !isLikesSheet ? (
-                            <>
-                                <button className="btn-ghost" onClick={handleRename}>
-                                    <Icon name="settings" size={13} />
-                                    重命名
-                                </button>
-                                <button className="btn-ghost" onClick={handleDelete}>
-                                    <Icon name="close" size={13} />
-                                    删除歌单
-                                </button>
-                            </>
-                        ) : null}
-                    </>
+                    list.items.length > 0 ? (
+                        <button
+                            className="btn-ghost"
+                            onClick={() => showDownloadPanel(list.items)}
+                        >
+                            <Icon name="download" size={14} />
+                            下载全部
+                        </button>
+                    ) : null
                 }
             />
             <MusicList

@@ -24,7 +24,7 @@ export default function MediaHeader(props: {
     hideFavoriteAll?: boolean;
     /** 这份列表的稳定标识，与 `MusicList` 的 `listId` 传同一个值：「播放全部」据此判断队列是否已经是这份列表 */
     listId?: string;
-    /** 尾部「…」按钮的下拉菜单项（如「多选」）：传了才显示按钮 */
+    /** 尾部「…」按钮的下拉菜单项（多选 / 重命名这类低频操作）：传了才显示按钮 */
     moreMenuItems?: IContextMenuItem[];
 }) {
     const {
