@@ -136,6 +136,12 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
     });
     const { replaceAll } = list;
 
+    /**
+     * 多选模式：入口在头部「…」更多菜单里（和播放/下载并排太占地方），
+     * 状态提到页面这一层，由 MediaHeader 和 MusicList 共享。
+     */
+    const [selectMode, setSelectMode] = useState(false);
+
     // 用户歌单：定时刷新（在别处喜欢/收藏的歌能自动出现）。
     // 用 replaceAll 就地替换，避免把用户从第 N 页踢回第 1 页。
     useEffect(() => {
@@ -221,6 +227,17 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
                 hideFavoriteAll={isUserSheet}
                 listId={listId}
+                moreMenuItems={
+                    list.items.length > 0
+                        ? [
+                              {
+                                  title: "多选",
+                                  icon: "check",
+                                  onClick: () => setSelectMode(true),
+                              },
+                          ]
+                        : []
+                }
                 extraActions={
                     <>
                         {list.items.length > 0 && (
@@ -251,6 +268,9 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 musicList={list.items}
                 loading={list.loading}
                 listId={listId}
+                searchable
+                selectMode={selectMode}
+                onSelectModeChange={setSelectMode}
                 userSheetMode={isUserSheet}
                 currentSheetId={userSheetId}
                 onRemove={isUserSheet ? handleRemove : undefined}

@@ -31,6 +31,7 @@ let panelListener: ((session: ISheetPanelSession) => void) | null = null;
 /**
  * 打开「添加到歌单」弹层。
  * @param musicItem 单首或多首
+ * @param options
  * @param options.excludeSheetId 不列入候选的歌单（当前所在歌单）
  * @param options.onDone 成功加入某个歌单后触发（弹层随即关闭）
  */

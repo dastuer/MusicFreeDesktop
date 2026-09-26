@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import Cover from "./Cover";
 import Icon from "./Icon";
@@ -117,6 +117,14 @@ interface IMusicListProps {
      * 不传则每次点都重新整队替换。
      */
     listId?: string;
+    /** 在工具条上显示搜索框：按标题 / 歌手 / 专辑过滤已加载的歌曲 */
+    searchable?: boolean;
+    /**
+     * 多选模式受控：传入 `onSelectModeChange` 后，工具条不再显示「多选」按钮，
+     * 入口交给外部（如头部「更多」菜单），开关状态由页面持有。
+     */
+    selectMode?: boolean;
+    onSelectModeChange?: (selectMode: boolean) => void;
 }
 
 export interface IMusicListPagination {
@@ -155,6 +163,9 @@ export default function MusicList(props: IMusicListProps) {
         onMusicChanged,
         pagination,
         listId,
+        searchable = false,
+        selectMode: selectModeProp,
+        onSelectModeChange,
     } = props;
     const currentMusic = useCurrentMusic();
     const likesVersion = useAtomValue(likesVersionAtom);
@@ -163,8 +174,44 @@ export default function MusicList(props: IMusicListProps) {
 
     const [likedKeys, setLikedKeys] = useState<Set<string>>(new Set());
     const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-    /** 多选模式：默认关闭，进入后才显示选择框 */
-    const [selectMode, setSelectMode] = useState(false);
+    /** 多选模式：默认关闭，进入后才显示选择框。外部受控时以 props 为准 */
+    const [internalSelectMode, setInternalSelectMode] = useState(false);
+    const selectModeControlled = onSelectModeChange != null;
+    const selectMode = selectModeControlled ? !!selectModeProp : internalSelectMode;
+    const changeSelectMode = (next: boolean) => {
+        if (selectModeControlled) {
+            onSelectModeChange!(next);
+        } else {
+            setInternalSelectMode(next);
+        }
+    };
+    /**
+     * 搜索关键词：按标题 / 歌手 / 专辑过滤当前已加载的歌曲。
+     * `searchKeyword` 是输入框显示值（跟随打字）；`appliedKeyword` 才真正参与过滤——
+     * 输入法拼写（拼音合成）过程中不更新，等候选上屏（compositionEnd）才触发搜索。
+     */
+    const [searchKeyword, setSearchKeyword] = useState("");
+    const [appliedKeyword, setAppliedKeyword] = useState("");
+    const composingRef = useRef(false);
+
+    const handleSearchInput = (value: string) => {
+        setSearchKeyword(value);
+        if (!composingRef.current) {
+            setAppliedKeyword(value);
+        }
+    };
+
+    const handleSearchComposition = (value: string, composing: boolean) => {
+        composingRef.current = composing;
+        if (!composing) {
+            setAppliedKeyword(value);
+        }
+    };
+
+    const clearSearch = () => {
+        setSearchKeyword("");
+        setAppliedKeyword("");
+    };
     /**
      * 分片渲染：本地音乐动辄上千首，一次性铺满 DOM 会让切页卡住。
      * 首屏只渲染前 150 行，滚到底部哨兵再追加 150 行。
@@ -173,10 +220,10 @@ export default function MusicList(props: IMusicListProps) {
     const [visibleCount, setVisibleCount] = useState(INITIAL_ROWS);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
 
-    // 换了列表就回到首屏行数（按长度判断，避免父组件每次渲染传新数组导致反复重置）
+    // 换了列表或改了搜索词就回到首屏行数（按长度判断，避免父组件每次渲染传新数组导致反复重置）
     useEffect(() => {
         setVisibleCount(INITIAL_ROWS);
-    }, [musicList.length]);
+    }, [musicList.length, appliedKeyword]);
 
     // 哨兵进入视口 → 追加一批
     useEffect(() => {
@@ -200,15 +247,35 @@ export default function MusicList(props: IMusicListProps) {
     const visibleList =
         musicList.length > visibleCount ? musicList.slice(0, visibleCount) : musicList;
 
+    /** 搜索过滤：匹配标题 / 别名 / 歌手 / 专辑（不分页限制，在全量已加载列表里找） */
+    const trimmedKeyword = appliedKeyword.trim();
+    const isSearching = trimmedKeyword.length > 0;
+    const filteredList = useMemo(() => {
+        if (!isSearching) {
+            return musicList;
+        }
+        const kw = trimmedKeyword.toLowerCase();
+        return musicList.filter((it) =>
+            [it.title, it.alias, it.artist, it.album].some(
+                (v) => typeof v === "string" && v.toLowerCase().includes(kw),
+            ),
+        );
+    }, [musicList, isSearching, trimmedKeyword]);
+
     /**
      * 分页模式：只把当前页交给渲染，序号仍按全量列表连续编号。
      * 此时不走 visibleCount 分片（一页最多 200 行，不需要再切）。
+     * 搜索时忽略分页：直接在过滤结果里分片渲染，序号从 1 连续编号。
      */
     const pageStart = pagination ? (pagination.currentPage - 1) * pagination.pageSize : 0;
-    const rowList = pagination
-        ? musicList.slice(pageStart, pageStart + pagination.pageSize)
-        : visibleList;
-    const rowOffset = pagination ? pageStart : 0;
+    const rowList = isSearching
+        ? filteredList.slice(0, visibleCount)
+        : pagination
+          ? musicList.slice(pageStart, pageStart + pagination.pageSize)
+          : visibleList;
+    const rowOffset = isSearching || !pagination ? 0 : pageStart;
+    /** 搜索时没有「页」的概念，全选按钮等文案按无分页处理 */
+    const pagingActive = !!pagination && !isSearching;
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -268,11 +335,11 @@ export default function MusicList(props: IMusicListProps) {
     };
 
     /**
-     * 「全选」的作用范围：分页模式下只作用于当前页。
+     * 「全选」的作用范围：分页模式下只作用于当前页，搜索时作用于过滤结果里已渲染的行。
      * 否则在第 1 页点全选会连带把后面几十页没看见的歌一起选中，批量下载/删除容易出事。
      * 手选不受影响——已选集合是跨页保留的。
      */
-    const selectableList = pagination ? rowList : musicList;
+    const selectableList = isSearching || pagination ? rowList : musicList;
     const allSelected =
         selectableList.length > 0 &&
         selectableList.every((it) => selectedKeys.has(musicKey(it)));
@@ -301,7 +368,7 @@ export default function MusicList(props: IMusicListProps) {
 
     const exitSelectMode = () => {
         clearSelection();
-        setSelectMode(false);
+        changeSelectMode(false);
     };
 
     const downloadSelected = () => {
@@ -537,13 +604,42 @@ export default function MusicList(props: IMusicListProps) {
         <div className={`music-list ${selectable && selectMode ? "selecting" : ""} ${className ?? ""}`}>
             {selectable && (
                 <div className="music-list-toolbar">
-                    <button
-                        className="btn-ghost"
-                        onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
-                    >
-                        <Icon name={selectMode ? "close" : "check"} size={13} />
-                        {selectMode ? "退出多选" : "多选"}
-                    </button>
+                    {searchable && (
+                        <div className="music-search-box">
+                            <Icon name="search" size={14} />
+                            <input
+                                value={searchKeyword}
+                                onChange={(e) => handleSearchInput(e.target.value)}
+                                onCompositionStart={(e) =>
+                                    handleSearchComposition(e.currentTarget.value, true)
+                                }
+                                onCompositionEnd={(e) =>
+                                    handleSearchComposition(e.currentTarget.value, false)
+                                }
+                                placeholder="搜索"
+                            />
+                            {searchKeyword && (
+                                <span
+                                    className="music-search-clear"
+                                    title="清除搜索"
+                                    onClick={clearSearch}
+                                >
+                                    <Icon name="close" size={12} />
+                                </span>
+                            )}
+                        </div>
+                    )}
+                    {!selectModeControlled && (
+                        <button
+                            className="btn-ghost"
+                            onClick={() =>
+                                changeSelectMode(!selectMode)
+                            }
+                        >
+                            <Icon name={selectMode ? "close" : "check"} size={13} />
+                            {selectMode ? "退出多选" : "多选"}
+                        </button>
+                    )}
                 </div>
             )}
             <div className="music-list-header">
@@ -551,7 +647,7 @@ export default function MusicList(props: IMusicListProps) {
                     <div
                         className={`music-row-check header-check${allSelected ? " checked" : ""}`}
                         title={
-                            pagination
+                            pagingActive
                                 ? allSelected
                                     ? "取消全选本页"
                                     : "全选本页"
@@ -583,8 +679,9 @@ export default function MusicList(props: IMusicListProps) {
                         onClick={() =>
                             TrackPlayerSingleton.playWithReplacePlayList(
                                 musicItem,
-                                musicList,
-                                listId,
+                                isSearching ? filteredList : musicList,
+                                // 搜索结果和整份列表不是同一份内容，此时不带 listId，避免复用判断拿着旧队列
+                                isSearching ? "" : listId,
                             )
                         }
                         onContextMenu={(e) => openMenu(e, musicItem)}
@@ -662,7 +759,7 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 );
             })}
-            {!pagination && visibleCount < musicList.length && (
+            {!pagination && visibleCount < (isSearching ? filteredList.length : musicList.length) && (
                 <div ref={sentinelRef} className="music-list-sentinel" />
             )}
             {!pagination && loading && <div className="loading-hint">加载中…</div>}
@@ -675,7 +772,14 @@ export default function MusicList(props: IMusicListProps) {
                     加载更多
                 </div>
             )}
-            {pagination && musicList.length > 0 && (
+            {isSearching && (
+                <div className="music-search-result">
+                    {filteredList.length
+                        ? `找到 ${filteredList.length} 首包含「${trimmedKeyword}」的歌曲`
+                        : "没有找到匹配的歌曲"}
+                </div>
+            )}
+            {pagingActive && musicList.length > 0 && (
                 <div className="music-pager">
                     <div className="music-pager-info">
                         <span className="music-pager-count">
@@ -776,7 +880,7 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 </div>
             )}
-            {!loading && !musicList.length && (
+            {!loading && !isSearching && !musicList.length && (
                 <div className="empty-hint">这里空空如也</div>
             )}
             {selectable && selectMode && (
@@ -786,10 +890,10 @@ export default function MusicList(props: IMusicListProps) {
                     </span>
                     <button className="btn-ghost" onClick={toggleSelectAll}>
                         {allSelected
-                            ? pagination
+                            ? pagingActive
                                 ? "取消全选本页"
                                 : "取消全选"
-                            : pagination
+                            : pagingActive
                               ? "全选本页"
                               : "全选"}
                     </button>

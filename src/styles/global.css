@@ -385,6 +385,58 @@ img {
     font-size: 12px;
 }
 
+/* ---------- 列表搜索框（原「多选」按钮的位置，多选入口移到了头部「…」菜单） ---------- */
+.music-search-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 73px;
+    padding: 7px 12px;
+    border: 1px solid var(--divider);
+    border-radius: 16px;
+    color: var(--text-tertiary);
+    transition: width 0.25s ease, border-color 0.12s;
+}
+
+/* 聚焦或已输入内容时展开：失焦后只要还有关键词就保持展开 */
+.music-search-box:focus-within,
+.music-search-box:has(input:not(:placeholder-shown)) {
+    width: 150px;
+    border-color: var(--primary-color);
+    color: var(--text-secondary);
+}
+
+.music-search-box input {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-color);
+    font-size: 12px;
+}
+
+.music-search-box input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.music-search-clear {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--text-tertiary);
+}
+
+.music-search-clear:hover {
+    color: var(--text-color);
+}
+
+.music-search-result {
+    padding: 10px 8px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
 .music-row.playing .music-row-title {
     color: var(--primary-color);
 }
@@ -1619,6 +1671,11 @@ html[data-theme="dark"] .search-history-panel {
     display: flex;
     gap: 10px;
     margin-top: auto;
+}
+
+/* 头部「…」更多菜单按钮：方一点，和并排的文字按钮区分 */
+.media-header-more {
+    padding: 7px 10px;
 }
 
 /* ---------- 设置页 ---------- */

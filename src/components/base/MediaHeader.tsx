@@ -2,6 +2,7 @@ import React from "react";
 import Cover from "./Cover";
 import Icon from "./Icon";
 import { showAddToSheetPanel } from "./AddToSheetPanel";
+import { showContextMenu, IContextMenuItem } from "./ContextMenu";
 import { TrackPlayerSingleton } from "@/core/trackPlayer";
 
 /**
@@ -23,6 +24,8 @@ export default function MediaHeader(props: {
     hideFavoriteAll?: boolean;
     /** 这份列表的稳定标识，与 `MusicList` 的 `listId` 传同一个值：「播放全部」据此判断队列是否已经是这份列表 */
     listId?: string;
+    /** 尾部「…」按钮的下拉菜单项（如「多选」）：传了才显示按钮 */
+    moreMenuItems?: IContextMenuItem[];
 }) {
     const {
         artwork,
@@ -33,6 +36,7 @@ export default function MediaHeader(props: {
         extraActions,
         hideFavoriteAll,
         listId,
+        moreMenuItems,
     } = props;
 
     /** 「收藏全部」：和多选「收藏」走同一条路 —— 先选歌单，再把整张收进去 */
@@ -84,6 +88,20 @@ export default function MediaHeader(props: {
                         </button>
                     )}
                     {extraActions}
+                    {!!moreMenuItems?.length && (
+                        <button
+                            className="btn-ghost media-header-more"
+                            title="更多操作"
+                            onClick={(e) => {
+                                // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                showContextMenu(rect.left, rect.bottom + 8, moreMenuItems);
+                            }}
+                        >
+                            <Icon name="more" size={16} />
+                        </button>
+                    )}
                 </div>
             </div>
         </div>
