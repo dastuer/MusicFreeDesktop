@@ -1069,37 +1069,25 @@ img {
     min-width: 0;
 }
 
-/* 黑胶盘：60px 圆盘，最外层 9px 深色圆环，内嵌 42px 圆形封面。
-   环面两道同心高光纹路 + 斜向反光，播放时整体缓慢旋转 */
+/* 黑胶盘：60px 圆盘，封面全幅垫底，网易云裁出的黑胶圆环图叠在上面
+   （src/assets/vinyl-ring.png，取自 coverall.png 雪碧图 -140px -580px 处，206x205）。
+   环图自带约 5px 透明边，外扩 2.55% 让环外缘顶满盘边；中心透明孔约 63%，封面从中露出。
+   播放时整体缓慢旋转，暂停停在当前角度 */
 .playerbar-disc {
-    box-sizing: border-box;
+    position: relative;
     width: 60px;
     height: 60px;
-    border-radius: 50%;
-    padding: 9px;
-    background:
-        /* 斜向反光：让转动时环面有明暗变化 */
-        linear-gradient(
-            135deg,
-            rgba(255, 255, 255, 0.14) 0%,
-            rgba(255, 255, 255, 0) 40%,
-            rgba(255, 255, 255, 0.06) 65%,
-            rgba(255, 255, 255, 0) 90%
-        ),
-        /* 盘面基底 + 两道同心高光纹（封面半径 21，环区 21~30） */
-        radial-gradient(
-            circle,
-            #141414 0 21px,
-            #333333 21px 22px,
-            #141414 22px 25px,
-            #333333 25px 26px,
-            #141414 26px 28px,
-            #0c0c0c 28px 30px
-        );
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
     flex-shrink: 0;
     animation: playerbar-cover-spin 20s linear infinite;
     animation-play-state: paused;
+}
+
+.playerbar-disc::after {
+    content: "";
+    position: absolute;
+    inset: -2.55%;
+    background: url("../assets/vinyl-ring.png") center / 100% 100% no-repeat;
+    pointer-events: none;
 }
 
 .playerbar-disc.playing {
@@ -1377,16 +1365,34 @@ img {
 }
 
 /* 封面随窗口宽度伸缩，限制最大尺寸 */
+/* 详情页大封面 = 放大版黑胶盘，与底部播放栏同一张网易云圆环图叠加，
+   结构一致：封面全幅垫底 + ::after 叠环图，播放时缓慢旋转 */
 .music-detail-cover-wrap {
+    position: relative;
     width: clamp(240px, 38vw, 480px);
     aspect-ratio: 1;
     flex-shrink: 0;
+    /* 圆角只为了让投影呈圆形，容器本身无背景 */
+    border-radius: 50%;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+    animation: playerbar-cover-spin 20s linear infinite;
+    animation-play-state: paused;
+}
+
+.music-detail-cover-wrap::after {
+    content: "";
+    position: absolute;
+    inset: -2.55%;
+    background: url("../assets/vinyl-ring.png") center / 100% 100% no-repeat;
+    pointer-events: none;
+}
+
+.music-detail-cover-wrap.playing {
+    animation-play-state: running;
 }
 
 .music-detail-cover {
-    border-radius: 12px;
     object-fit: cover;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
 }
 
 /* 右侧信息列：标题/歌手/歌词居中对齐，宽度随窗口伸缩 */

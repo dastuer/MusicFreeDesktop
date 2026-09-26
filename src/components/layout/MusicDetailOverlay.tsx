@@ -20,6 +20,7 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
     const { visible, onClose } = props;
     const currentMusic = useCurrentMusic();
     const musicState = useMusicState();
+    const playing = musicState === "playing";
     const progress = useProgress();
     const lyric = useCurrentLyric();
     const lyricRef = useRef<HTMLDivElement>(null);
@@ -109,11 +110,11 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                 </button>
             </div>
             <div className="music-detail-body">
-                <div className="music-detail-cover-wrap">
+                <div className={`music-detail-cover-wrap${playing ? " playing" : ""}`}>
                     <Cover
                         src={currentMusic.artwork}
                         size="100%"
-                        borderRadius={12}
+                        borderRadius="50%"
                         className="music-detail-cover"
                         style={{ width: "100%", height: "100%" }}
                     />

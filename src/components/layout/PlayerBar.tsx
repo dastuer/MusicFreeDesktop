@@ -106,8 +106,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     <div className={`playerbar-disc${playing ? " playing" : ""}`}>
                         <Cover
                             src={currentMusic?.artwork}
-                            size={42}
-                            borderRadius={21}
+                            size={60}
+                            borderRadius={30}
                             className="playerbar-cover"
                         />
                     </div>
