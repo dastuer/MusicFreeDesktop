@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useAtomValue } from "jotai";
 import Icon from "../base/Icon";
 import Cover from "../base/Cover";
+import Marquee from "../base/Marquee";
 import Slider from "../base/Slider";
 import {
     DEFAULT_VOLUME,
@@ -77,19 +78,22 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
 
     return (
         <div className="app-playerbar">
-            {/* 进度条 */}
+            {/* 进度条贴着状态栏顶边，不直接展示时间；悬浮/拖动时条变粗并在滑块上方冒出时间气泡 */}
             <div className="playerbar-progress-row">
-                <span className="playerbar-time">{formatTime(progress.position)}</span>
                 <Slider
+                    className="playerbar-progress"
                     value={progress.position}
                     max={progress.duration || currentMusic?.duration || 0}
                     commitOnRelease
                     onCommit={(v) => TrackPlayerSingleton.seekTo(v)}
                     onChange={() => undefined}
+                    tooltip={(v) => (
+                        <span className="playerbar-time-bubble">
+                            {/* 斜杠两侧用细空格，比常规空格更紧凑 */}
+                            {formatTime(v) + "\u2009/\u2009" + formatTime(progress.duration || currentMusic?.duration || 0)}
+                        </span>
+                    )}
                 />
-                <span className="playerbar-time" style={{ width: 42 }}>
-                    {formatTime(progress.duration || currentMusic?.duration || 0)}
-                </span>
             </div>
 
             <div className="playerbar-main-row">
@@ -99,16 +103,19 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     style={{ cursor: currentMusic ? "pointer" : "default" }}
                     onClick={() => currentMusic && onOpenDetail?.()}
                 >
-                    <Cover
-                        src={currentMusic?.artwork}
-                        size={46}
-                        borderRadius={6}
-                        className="playerbar-cover"
-                    />
+                    <div className={`playerbar-disc${playing ? " playing" : ""}`}>
+                        <Cover
+                            src={currentMusic?.artwork}
+                            size={42}
+                            borderRadius={21}
+                            className="playerbar-cover"
+                        />
+                    </div>
                     <div className="playerbar-info">
-                        <div className="playerbar-title">
-                            {currentMusic?.title ?? "MusicFree Desktop"}
-                        </div>
+                        <Marquee
+                            className="playerbar-title"
+                            text={currentMusic?.title ?? "MusicFree Desktop"}
+                        />
                         <div className="playerbar-artist">
                             {currentMusic?.artist ?? "点击列表中的歌曲开始播放"}
                         </div>

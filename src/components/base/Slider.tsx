@@ -10,10 +10,12 @@ interface ISliderProps {
     className?: string;
     /** 填充色是否使用主题色 */
     filledPrimary?: boolean;
+    /** 传入时在滑块上方渲染气泡（跟随拖动值），悬浮/拖动时显示 */
+    tooltip?: (value: number) => React.ReactNode;
 }
 
 export default function Slider(props: ISliderProps) {
-    const { value, max, onChange, commitOnRelease, onCommit, className, filledPrimary } =
+    const { value, max, onChange, commitOnRelease, onCommit, className, filledPrimary, tooltip } =
         props;
     const trackRef = useRef<HTMLDivElement>(null);
     const [dragging, setDragging] = useState(false);
@@ -70,6 +72,17 @@ export default function Slider(props: ISliderProps) {
                 <div className="slider-filled" style={{ width: `${percent * 100}%` }} />
             </div>
             <div className="slider-thumb" style={{ left: `${percent * 100}%` }} />
+            {tooltip && (
+                <div
+                    className="slider-tooltip"
+                    /* 两端各留 48px，防止气泡探出可视区被裁掉 */
+                    style={{
+                        left: `clamp(48px, ${percent * 100}%, calc(100% - 48px))`,
+                    }}
+                >
+                    {tooltip(displayValue)}
+                </div>
+            )}
         </div>
     );
 }

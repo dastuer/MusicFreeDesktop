@@ -19,7 +19,7 @@
     --playerbar-bg: rgba(246, 246, 248, 0.88);
     --mask: rgba(0, 0, 0, 0.4);
     --titlebar-height: 64px;
-    --playerbar-height: 84px;
+    --playerbar-height: 80px;
     --sidebar-width: 208px;
 }
 
@@ -131,7 +131,8 @@ img {
 .app-playerbar {
     grid-row: 2;
     grid-column: 1 / 3;
-    border-top: 1px solid var(--divider);
+    position: relative;
+    /* 顶部分隔线由贴顶的进度条轨道充当，不再画 border-top */
     background: var(--playerbar-bg);
     backdrop-filter: blur(40px);
     display: flex;
@@ -955,60 +956,177 @@ img {
 }
 
 /* ---------- 播放条 ---------- */
+/* 进度条贴着状态栏顶边通栏铺开（网易云样式），细轨道直接充当状态栏的顶边框，
+   轨道上沿与状态栏上沿齐平，上方不露底色。
+   row 顶到状态栏上沿之外，轨道底边锚定：悬浮变粗时向上生长 */
 .playerbar-progress-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 14px;
-}
-
-.playerbar-time {
-    font-size: 11px;
-    color: var(--text-tertiary);
-    font-variant-numeric: tabular-nums;
-    width: 38px;
-    text-align: center;
+    position: absolute;
+    top: -6px;
+    left: 0;
+    right: 0;
+    /* 往下留出可点区域，细条也容易命中 */
+    padding-bottom: 6px;
 }
 
 .playerbar-progress-row .slider {
-    flex: 1;
+    width: 100%;
+    height: 8px;
+    /* 轨道锚定在 slider 底部（即状态栏顶边），变粗时向上生长 */
+    align-items: flex-end;
+}
+
+/* 平时 2px 细条，悬浮/拖动才变粗并露出滑块；粗细变化加过渡让生长更顺滑 */
+.playerbar-progress .slider-track {
+    height: 2px;
+    border-radius: 0;
+    transition: height 0.15s ease;
+}
+
+.playerbar-progress .slider-filled {
+    border-radius: 0;
+    /* 已播放部分：日落系彩色渐变，方向与播放方向相反（金→橙→粉→红），播放头一端是品牌红 */
+    background: linear-gradient(270deg, #ec4141 0%, #ff6b9d 40%, #ff9a44 70%, #ffd93d 100%);
+}
+
+/* 滑块始终白色，浅色背景下靠描边阴影保持可见。
+   注意基础样式带 translateY(-50%)，top 值即滑块中心相对 slider 顶部的位置 */
+.playerbar-progress .slider-thumb {
+    top: 7px;
+    width: 12px;
+    height: 12px;
+    background: #ffffff;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+    transition: top 0.15s, opacity 0.15s;
+}
+
+/* 悬浮判定挂在整行（含下方 10px 缓冲区）而不是 slider 盒子本身：
+   边界离细条足够远，鼠标停在条的下边缘不会反复进出触发宽度抖动。
+   选择器带 .playerbar-progress 提高特异性，避免被文件后方通用 Slider 的
+   hover 规则（轨道 5px）反盖 */
+.playerbar-progress-row:hover .playerbar-progress .slider-track,
+.playerbar-progress.slider.dragging .slider-track {
+    height: 6px;
+}
+
+.playerbar-progress-row:hover .playerbar-progress .slider-thumb,
+.playerbar-progress.slider.dragging .slider-thumb {
+    top: 5px;
+    opacity: 1;
+}
+
+.playerbar-progress-row:hover .playerbar-progress .slider-tooltip,
+.playerbar-progress.slider.dragging .slider-tooltip {
+    opacity: 1;
+}
+
+/* 时间气泡：跟随滑块，悬浮/拖动时显示 */
+.slider-tooltip {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+}
+
+.slider:hover .slider-tooltip,
+.slider.dragging .slider-tooltip {
+    opacity: 1;
+}
+
+.playerbar-time-bubble {
+    display: inline-block;
+    padding: 6px 18px;
+    border-radius: 18px;
+    /* 浅色主题白底黑字，深色主题黑底白字，随主题变量自动切换 */
+    background: var(--page-bg);
+    color: var(--text-color);
+    border: 1px solid var(--divider);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    /* 圆体数字配等宽数距，时间读数更醒目 */
+    font-family: "SF Pro Rounded", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .playerbar-main-row {
     flex: 1;
     display: flex;
     align-items: center;
-    padding-top: 8px;
+    /* 高度 72 = 上下 8px 内边距 + 内容区 56；封面 46 居中后上下各余 5px，
+       视觉上与顶部进度条下方的留白对称 */
 }
 
 .playerbar-left {
     width: 300px;
+    /* 播放条内边距 16px + 这里 12px = 封面距窗口左缘 28px */
+    margin-left: 12px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     min-width: 0;
 }
 
+/* 黑胶盘：60px 圆盘，最外层 9px 深色圆环，内嵌 42px 圆形封面。
+   环面两道同心高光纹路 + 斜向反光，播放时整体缓慢旋转 */
+.playerbar-disc {
+    box-sizing: border-box;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    padding: 9px;
+    background:
+        /* 斜向反光：让转动时环面有明暗变化 */
+        linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.14) 0%,
+            rgba(255, 255, 255, 0) 40%,
+            rgba(255, 255, 255, 0.06) 65%,
+            rgba(255, 255, 255, 0) 90%
+        ),
+        /* 盘面基底 + 两道同心高光纹（封面半径 21，环区 21~30） */
+        radial-gradient(
+            circle,
+            #141414 0 21px,
+            #333333 21px 22px,
+            #141414 22px 25px,
+            #333333 25px 26px,
+            #141414 26px 28px,
+            #0c0c0c 28px 30px
+        );
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+    animation: playerbar-cover-spin 20s linear infinite;
+    animation-play-state: paused;
+}
+
+.playerbar-disc.playing {
+    animation-play-state: running;
+}
+
 .playerbar-cover {
-    width: 46px;
-    height: 46px;
-    border-radius: 6px;
-    object-fit: cover;
-    cursor: pointer;
     background: var(--hover-bg);
+}
+
+@keyframes playerbar-cover-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .playerbar-info {
     min-width: 0;
     cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
 }
 
 .playerbar-title {
     font-size: 13px;
     font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     max-width: 180px;
 }
 
@@ -1019,6 +1137,34 @@ img {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+}
+
+/* ---------- 走马灯（超长歌名循环滚动） ---------- */
+.marquee {
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.marquee-track {
+    display: inline-flex;
+    will-change: transform;
+}
+
+.marquee-copy {
+    flex-shrink: 0;
+    /* 两份文本之间的间隔，滚到头后停顿感来自这里 */
+    padding-right: 48px;
+}
+
+@keyframes marquee-scroll {
+    0%,
+    8% {
+        transform: translateX(0);
+    }
+    92%,
+    100% {
+        transform: translateX(calc(-1 * var(--marquee-shift)));
+    }
 }
 
 .playerbar-center {
