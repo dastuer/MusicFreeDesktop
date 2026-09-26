@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import Draggable from "react-draggable";
 import Icon from "../base/Icon";
 import { showContextMenu } from "../base/ContextMenu";
 import { showPrompt } from "../base/PromptDialog";
@@ -12,6 +13,7 @@ import {
     ensureLikesSheet,
     getUserSheets,
     renameSheet,
+    reorderSheets,
 } from "@/core/musicSheet";
 import { TrackPlayerSingleton } from "@/core/trackPlayer";
 
@@ -28,11 +30,34 @@ const subNavItems = [
     { path: "settings", title: "设置", icon: "settings" },
 ] as const;
 
+// 歌单行拖动排序的位移单位：.sidebar-item 高 38 + margin-bottom 2
+const ITEM_PITCH = 40;
+
+/** 一次拖动会话的状态；dragRef 是权威，drag state 只是渲染镜像 */
+interface DragState {
+    id: string;
+    startIndex: number;
+    /** 自拖拽起点累计的指针位移（px） */
+    y: number;
+    targetIndex: number;
+    /** 超过 3px 才算真拖了，普通点击不触发抬起效果与 click 抑制 */
+    moved: boolean;
+}
+
 export default function Sidebar() {
     const route = useCurrentRoute();
     const [sheets, setSheets] = useState<IUserSheet[]>([]);
+    // ---------- 拖动排序（react-draggable，「我喜欢的音乐」不参与） ----------
+    const dragRef = useRef<DragState | null>(null);
+    const [drag, setDrag] = useState<DragState | null>(null);
+    // 拖完松手紧跟着的那次 click 是拖拽的收尾，不是「打开歌单」
+    const suppressClickUntilRef = useRef(0);
 
     const refreshSheets = () => {
+        // 拖动中本地顺序就是权威顺序，别让 3 秒轮询把旧顺序刷回来
+        if (dragRef.current) {
+            return;
+        }
         getUserSheets().then(setSheets);
     };
 
@@ -132,6 +157,54 @@ export default function Sidebar() {
         showContextMenu(e.clientX, e.clientY, items);
     };
 
+    // ---------- 拖动排序（react-draggable，「我喜欢的音乐」不参与） ----------
+    // 策略：被拖项由 Draggable 控制位移平滑跟随指针；拖动经过其他歌单时，
+    // 其余项按 40px 一个档位做过渡动画让位；松手一次性换位落盘。
+    // 轮询刷新在拖动期间挂起（见 refreshSheets），避免旧顺序刷回来。
+
+    const handleDragStart = (sheetId: string, startIndex: number) => {
+        dragRef.current = { id: sheetId, startIndex, y: 0, targetIndex: startIndex, moved: false };
+        setDrag(dragRef.current);
+    };
+
+    const handleDragMove = (deltaY: number) => {
+        const cur = dragRef.current;
+        if (!cur) {
+            return;
+        }
+        const y = cur.y + deltaY;
+        const targetIndex = Math.max(
+            0,
+            Math.min(userSheets.length - 1, cur.startIndex + Math.round(y / ITEM_PITCH)),
+        );
+        dragRef.current = { ...cur, y, targetIndex, moved: cur.moved || Math.abs(y) > 3 };
+        setDrag(dragRef.current);
+    };
+
+    const handleDragStop = () => {
+        const d = dragRef.current;
+        dragRef.current = null;
+        setDrag(null);
+        if (!d || !d.moved || d.targetIndex === d.startIndex) {
+            return;
+        }
+        suppressClickUntilRef.current = Date.now() + 400;
+        // 本地先换位（likes 永远钉在最前），再落盘对齐
+        const likes = sheets.filter((it) => it.id === LIKES_SHEET_ID);
+        const others = sheets.filter((it) => it.id !== LIKES_SHEET_ID);
+        const [movedSheet] = others.splice(d.startIndex, 1);
+        others.splice(d.targetIndex, 0, movedSheet);
+        setSheets([...likes, ...others]);
+        reorderSheets(others.map((it) => it.id)).then(refreshSheets);
+    };
+
+    const handleSheetClick = (sheet: IUserSheet) => {
+        if (Date.now() < suppressClickUntilRef.current) {
+            return;
+        }
+        navigate("sheetDetail", { userSheetId: sheet.id, title: sheet.title });
+    };
+
     return (
         <aside className="app-sidebar">
             {/* macOS 红绿灯区域：拖拽 + 留白 */}
@@ -184,45 +257,107 @@ export default function Sidebar() {
                         </span>
                     </div>
                 )}
-                {userSheets.map((sheet) => (
-                    <div
-                        key={sheet.id}
-                        className={`sidebar-item${isActiveSheet(sheet.id) ? " active" : ""}`}
-                        onClick={() =>
-                            navigate("sheetDetail", {
-                                userSheetId: sheet.id,
-                                title: sheet.title,
-                            })
+                {userSheets.map((sheet, index) => {
+                    const draggingSelf = drag?.id === sheet.id && drag.moved;
+                    // 其余项给被拖项让位：跨过一个档位就补上 40px 过渡位移
+                    let shiftY = 0;
+                    if (drag?.moved && drag.id !== sheet.id) {
+                        if (index > drag.startIndex && index <= drag.targetIndex) {
+                            shiftY = -ITEM_PITCH;
+                        } else if (index < drag.startIndex && index >= drag.targetIndex) {
+                            shiftY = ITEM_PITCH;
                         }
-                        onContextMenu={(e) => sheetMenu(e, sheet)}
-                    >
-                        <span className="sidebar-item-icon">
-                            <Icon name="playQueue" size={16} />
-                        </span>
-                        <span
-                            style={{
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                            }}
+                    }
+                    return (
+                        <SheetDraggable
+                            key={sheet.id}
+                            offsetY={drag?.id === sheet.id ? drag.y : 0}
+                            dragging={!!draggingSelf}
+                            shiftY={shiftY}
+                            onStart={() => handleDragStart(sheet.id, index)}
+                            onMove={handleDragMove}
+                            onStop={handleDragStop}
+                            onOpen={() => handleSheetClick(sheet)}
+                            onContextMenu={(e) => sheetMenu(e, sheet)}
                         >
-                            {sheet.title}
-                        </span>
-                        <span
-                            style={{
-                                marginLeft: "auto",
-                                fontSize: 11,
-                                color: "var(--text-tertiary)",
-                            }}
-                        >
-                            {sheet.musicList.length}
-                        </span>
-                    </div>
-                ))}
+                            <span className="sidebar-item-icon">
+                                <Icon name="playQueue" size={16} />
+                            </span>
+                            <span
+                                style={{
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                }}
+                            >
+                                {sheet.title}
+                            </span>
+                            <span
+                                style={{
+                                    marginLeft: "auto",
+                                    fontSize: 11,
+                                    color: "var(--text-tertiary)",
+                                }}
+                            >
+                                {sheet.musicList.length}
+                            </span>
+                        </SheetDraggable>
+                    );
+                })}
             </div>
             <nav className="sidebar-nav" style={{ paddingBottom: 12 }}>
                 {subNavItems.map(renderItem)}
             </nav>
         </aside>
+    );
+}
+
+/**
+ * 侧边栏歌单行的拖拽外壳。
+ * 外层 div 的 transform 由 Draggable 接管（被拖项跟随指针），
+ * 内层 .sidebar-item 的 transform 留给「让位」过渡动画——
+ * 两者必须分层，否则 Draggable 写入的 translate 会把让位位移覆盖掉。
+ */
+function SheetDraggable(props: {
+    offsetY: number;
+    dragging: boolean;
+    shiftY: number;
+    onStart: () => void;
+    onMove: (deltaY: number) => void;
+    onStop: () => void;
+    onOpen: () => void;
+    onContextMenu: (e: React.MouseEvent) => void;
+    children: React.ReactNode;
+}) {
+    const nodeRef = useRef<HTMLDivElement>(null);
+    return (
+        <Draggable
+            nodeRef={nodeRef}
+            axis="y"
+            position={{ x: 0, y: props.offsetY }}
+            onStart={props.onStart}
+            onDrag={(_, data) => props.onMove(data.deltaY)}
+            onStop={props.onStop}
+        >
+            <div
+                ref={nodeRef}
+                style={{ position: "relative", zIndex: props.dragging ? 10 : undefined }}
+            >
+                <div
+                    className={`sidebar-item${props.dragging ? " dragging" : ""}`}
+                    style={{
+                        transform:
+                            !props.dragging && props.shiftY
+                                ? `translateY(${props.shiftY}px)`
+                                : undefined,
+                        transition: props.dragging ? "none" : "transform 160ms ease",
+                    }}
+                    onClick={props.onOpen}
+                    onContextMenu={props.onContextMenu}
+                >
+                    {props.children}
+                </div>
+            </div>
+        </Draggable>
     );
 }

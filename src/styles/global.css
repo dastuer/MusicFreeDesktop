@@ -228,6 +228,13 @@ img {
     color: var(--primary-color);
 }
 
+/* 侧边栏歌单拖动排序：被拖项抬起浮在上面，其余项带过渡实时让位 */
+.sidebar-item.dragging {
+    background: var(--hover-bg);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    cursor: grabbing;
+}
+
 .sidebar-item-icon {
     color: var(--text-secondary);
     display: flex;

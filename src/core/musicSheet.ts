@@ -139,6 +139,19 @@ export async function renameSheet(id: string, title: string) {
     }
 }
 
+/**
+ * 按传入顺序重排用户歌单（侧边栏拖动排序落盘用）。
+ * 「我喜欢的音乐」不参与排序，永远钉在最前。
+ */
+export async function reorderSheets(orderedIds: string[]) {
+    const sheets = await getUserSheets();
+    const likes = sheets.filter((it) => it.id === LIKES_SHEET_ID);
+    const others = sheets.filter((it) => it.id !== LIKES_SHEET_ID);
+    const order = new Map(orderedIds.map((id, i) => [id, i]));
+    others.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    await saveSheets([...likes, ...others]);
+}
+
 /** 「我喜欢的音乐」：固定 id 的特殊歌单 */
 export const LIKES_SHEET_ID = "my-likes";
 export const LIKES_SHEET_TITLE = "我喜欢的音乐";
