@@ -1420,8 +1420,17 @@ img {
     text-align: center;
 }
 
-.music-detail-lyric {
+/* 歌词滚动容器的外层：时间胶囊钉在这里的右侧，不随歌词滚动 */
+.music-detail-lyric-wrap {
+    position: relative;
     width: 100%;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.music-detail-lyric {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1456,8 +1465,36 @@ img {
 
 .lyric-line.active {
     color: var(--text-color);
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 600;
+}
+
+/* 滑动歌词时钉在歌词区右侧：滚动位置那行的起始时间（网易云样式），点击跳到该句 */
+.lyric-time-pill {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 10px;
+    border: 1px solid color-mix(in srgb, var(--text-color) 25%, transparent);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-color);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 16px;
+    cursor: pointer;
+    z-index: 1;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.lyric-time-pill:hover {
+    background: color-mix(in srgb, var(--text-color) 16%, transparent);
+    border-color: color-mix(in srgb, var(--text-color) 40%, transparent);
 }
 
 .music-detail-title {

@@ -16,6 +16,12 @@ import { useProgress } from "@/core/trackPlayer";
  * 覆盖在主内容区之上，底部播放条保持可见
  */
 
+function formatTime(s: number) {
+    const sec = Math.floor(s % 60);
+    const min = Math.floor(s / 60);
+    return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
 export default function MusicDetailOverlay(props: { visible: boolean; onClose: () => void }) {
     const { visible, onClose } = props;
     const currentMusic = useCurrentMusic();
@@ -25,6 +31,7 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
     const lyric = useCurrentLyric();
     const lyricRef = useRef<HTMLDivElement>(null);
     const [userScrolled, setUserScrolled] = useState(false);
+    const [scrollIndex, setScrollIndex] = useState(-1);
 
     useEffect(() => {
         if (visible && currentMusic) {
@@ -80,6 +87,30 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
         positionedRef.current = true;
     }, [activeIndex, userScrolled, visible, lyric.length]);
 
+    // 滚动浏览时激活行跟随滚动位置（距容器中心最近的一行），与播放位置激活互不影响
+    const displayIndex = userScrolled ? scrollIndex : activeIndex;
+    const scrollLine = userScrolled && scrollIndex >= 0 ? lyric[scrollIndex] : undefined;
+
+    const updateScrollIndex = () => {
+        const container = lyricRef.current;
+        if (!container) {
+            return;
+        }
+        const containerRect = container.getBoundingClientRect();
+        const centerY = containerRect.top + containerRect.height / 2;
+        let best = -1;
+        let bestDist = Infinity;
+        container.querySelectorAll<HTMLElement>(".lyric-line").forEach((line) => {
+            const rect = line.getBoundingClientRect();
+            const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = Number(line.dataset.index);
+            }
+        });
+        setScrollIndex(best);
+    };
+
     if (!visible || !currentMusic) {
         return null;
     }
@@ -127,32 +158,60 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                         {currentMusic.artist}
                         {currentMusic.album ? ` - ${currentMusic.album}` : ""}
                     </div>
-                    <div
-                        className="music-detail-lyric"
-                        ref={lyricRef}
-                        onWheel={() => {
-                            setUserScrolled(true);
-                            clearTimeout((lyricRef.current as any)?._scrollTimer);
-                            (lyricRef.current as any)._scrollTimer = setTimeout(
-                                () => setUserScrolled(false),
-                                3000,
-                            );
-                        }}
-                    >
-                        {lyric.length ? (
-                            lyric.map((item, index) => (
-                                <div
-                                    key={index}
-                                    data-index={index}
-                                    className={`lyric-line${
-                                        index === activeIndex ? " active" : ""
-                                    }`}
-                                >
-                                    {item.lrc || "·"}
-                                </div>
-                            ))
-                        ) : (
-                            <div className="empty-hint">纯音乐，请欣赏</div>
+                    <div className="music-detail-lyric-wrap">
+                        <div
+                            className="music-detail-lyric"
+                            ref={lyricRef}
+                            onWheel={() => {
+                                setUserScrolled(true);
+                                updateScrollIndex();
+                                clearTimeout((lyricRef.current as any)?._scrollTimer);
+                                (lyricRef.current as any)._scrollTimer = setTimeout(
+                                    () => setUserScrolled(false),
+                                    3000,
+                                );
+                            }}
+                            onScroll={() => {
+                                // 自动跟随产生的滚动不算手动浏览
+                                if (userScrolled) {
+                                    updateScrollIndex();
+                                }
+                            }}
+                        >
+                            {lyric.length ? (
+                                lyric.map((item, index) => (
+                                    <div
+                                        key={index}
+                                        data-index={index}
+                                        className={`lyric-line${
+                                            index === displayIndex ? " active" : ""
+                                        }`}
+                                    >
+                                        {item.lrc || "·"}
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="empty-hint">纯音乐，请欣赏</div>
+                            )}
+                        </div>
+                        {/* 滑动歌词时钉在歌词区右侧：滚动位置那行的起始时间，点击跳到该句 */}
+                        {scrollLine && (
+                            <button
+                                className="lyric-time-pill"
+                                title="跳到这句"
+                                onClick={() => {
+                                    TrackPlayerSingleton.seekTo(scrollLine.time);
+                                    // 暂停状态下点胶囊：跳到该句后继续播放
+                                    if (!playing) {
+                                        TrackPlayerSingleton.togglePlay();
+                                    }
+                                    setUserScrolled(false);
+                                    clearTimeout((lyricRef.current as any)?._scrollTimer);
+                                }}
+                            >
+                                <Icon name="play" size={10} />
+                                {formatTime(scrollLine.time)}
+                            </button>
                         )}
                     </div>
                 </div>
