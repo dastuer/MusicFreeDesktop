@@ -13,7 +13,8 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
     const [type, setType] = useState<"music" | "album">("music");
     const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
     const [albums, setAlbums] = useState<IArtist.IAlbumItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    // 进页面就要拉数据，初始即加载态：否则 effect 首帧置位前会先闪一帧空态
+    const [loading, setLoading] = useState(() => !!artistItem);
     const [page, setPage] = useState(1);
     const [isEnd, setIsEnd] = useState(true);
 
@@ -148,7 +149,8 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                     ))}
                 </div>
             )}
-            {loading && <div className="loading-hint">加载中…</div>}
+            {/* 单曲列表的加载占位由 MusicList 的骨架屏负责，这里的提示只给专辑卡片 tab 用 */}
+            {type !== "music" && loading && <div className="loading-hint">加载中…</div>}
         </div>
     );
 }

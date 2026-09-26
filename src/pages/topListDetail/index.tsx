@@ -10,7 +10,8 @@ import { getPluginByMedia, pluginCall } from "@/core/ipc";
 export default function TopListDetailPage(props: { topListItem?: IMusic.IMusicSheetItem }) {
     const { topListItem } = props;
     const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    // 进页面就要拉数据，初始即加载态：否则 effect 首帧置位前会先闪一帧空态
+    const [loading, setLoading] = useState(() => !!topListItem);
     const [page, setPage] = useState(1);
     const [isEnd, setIsEnd] = useState(true);
 

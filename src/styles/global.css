@@ -15,6 +15,8 @@
     --text-secondary: #666666;
     --text-tertiary: #999999;
     --text-placeholder: #cccccc;
+    --skeleton-bg: #ececec;
+    --skeleton-highlight: #f8f8f8;
     --divider: rgba(0, 0, 0, 0.09);
     --playerbar-bg: rgba(246, 246, 248, 0.88);
     --mask: rgba(0, 0, 0, 0.4);
@@ -32,6 +34,8 @@ html[data-theme="dark"] {
     --text-secondary: #a8a8a8;
     --text-tertiary: #7c7c7c;
     --text-placeholder: #5c5c5c;
+    --skeleton-bg: rgba(255, 255, 255, 0.07);
+    --skeleton-highlight: rgba(255, 255, 255, 0.13);
     --divider: rgba(255, 255, 255, 0.09);
     --playerbar-bg: rgba(25, 25, 25, 0.9);
     --mask: rgba(0, 0, 0, 0.6);
@@ -335,6 +339,13 @@ img {
 .music-list {
     width: 100%;
     font-size: 13px;
+    /* 行网格模板：表头 / 数据行 / 骨架屏共用一份，改列结构只动这里；
+       多选态整体前移一列（见 .music-list.selecting） */
+    --music-row-cols: 36px 2.2fr 1fr 122px;
+}
+
+.music-list.selecting {
+    --music-row-cols: 28px 36px 2.2fr 1fr 122px;
 }
 
 /* 分片渲染的滚动哨兵：不占高度，只用来触发「再渲染一批」 */
@@ -346,7 +357,7 @@ img {
 
 .music-list-header {
     display: grid;
-    grid-template-columns: 36px 1fr 1.2fr 1fr 122px;
+    grid-template-columns: var(--music-row-cols);
     gap: 12px;
     color: var(--text-tertiary);
     font-size: 12px;
@@ -358,14 +369,9 @@ img {
     z-index: 5;
 }
 
-.music-list.selecting .music-list-header,
-.music-list.selecting .music-row {
-    grid-template-columns: 28px 36px 1fr 1.2fr 1fr 122px;
-}
-
 .music-row {
     display: grid;
-    grid-template-columns: 36px 1fr 1.2fr 1fr 122px;
+    grid-template-columns: var(--music-row-cols);
     gap: 12px;
     align-items: center;
     padding: 8px;
@@ -464,6 +470,53 @@ img {
     margin-left: 6px;
 }
 
+/* 主列：封面 + 两行信息，上行歌名，下行音源标识+歌手（替代原来的独立歌手列） */
+.music-row-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.music-row-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+/* 下行：标识在前、歌手紧跟其后；没有标识时歌手贴左 */
+.music-row-sub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.music-row-sub .music-row-artist {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    min-width: 0;
+}
+
+/* 音源标识（我的歌单里歌名下的小徽标）：歌是从不同音源收藏进来的，标一下出处。
+   不挤标题——标题超长省略时徽标保持完整可见 */
+.music-row-source {
+    flex-shrink: 0;
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 400;
+    color: var(--text-tertiary);
+    border: 1px solid var(--divider);
+    border-radius: 4px;
+    padding: 2px 5px;
+}
+
 .music-row-artist,
 .music-row-album {
     color: var(--text-secondary);
@@ -482,6 +535,87 @@ img {
     font-variant-numeric: tabular-nums;
     text-align: right;
     font-size: 12px;
+}
+
+/* ---------- 骨架屏：首屏加载 / 分页换页数据未到时的占位行 ----------
+   列结构与 .music-row 一致（共用 --music-row-cols，多选态也跟着变），
+   数据到达后骨架换真行，高度不变不会跳 */
+.music-skeleton {
+    padding: 0 8px;
+}
+
+.music-skeleton-row {
+    display: grid;
+    grid-template-columns: var(--music-row-cols);
+    gap: 12px;
+    align-items: center;
+    padding: 8px;
+}
+
+.music-skeleton-bar,
+.music-skeleton-cover {
+    background: linear-gradient(
+        90deg,
+        var(--skeleton-bg) 25%,
+        var(--skeleton-highlight) 50%,
+        var(--skeleton-bg) 75%
+    );
+    background-size: 200% 100%;
+    animation: music-skeleton-shimmer 1.4s linear infinite;
+}
+
+.music-skeleton-bar {
+    height: 12px;
+    border-radius: 4px;
+}
+
+.music-skeleton-cover {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 5px;
+}
+
+.music-skeleton-index {
+    width: 14px;
+    margin: 0 auto;
+}
+
+.music-skeleton-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.music-skeleton-lines {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.music-skeleton-actions {
+    width: 58px;
+    height: 12px;
+    margin-left: auto;
+}
+
+@keyframes music-skeleton-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: -100% 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .music-skeleton-bar,
+    .music-skeleton-cover {
+        animation: none;
+    }
 }
 
 /* ---------- 行内多选框 / 快捷操作 ---------- */
@@ -859,7 +993,7 @@ img {
     -webkit-appearance: none;
     border: 1px solid var(--divider);
     outline: none;
-    background: var(--hover-bg);
+    background: transparent;
     color: var(--text-color);
     font-size: 12px;
     font-weight: 500;

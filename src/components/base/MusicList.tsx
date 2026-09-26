@@ -24,13 +24,25 @@ import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "./Toast";
 
 /**
- * 歌曲列表（桌面端表格形态）：多选框 / 序号 / 封面+标题 / 歌手 / 专辑 / 操作+时长
+ * 歌曲列表（桌面端表格形态）：多选框 / 序号 / 封面+歌名+歌手两行主列 / 专辑 / 操作+时长
  * 支持单击播放（整个列表换进播放列表）、右键菜单、多选批量下载/收藏
  */
 
 /** 首屏渲染行数 / 每次追加行数 */
 const INITIAL_ROWS = 150;
 const ROWS_PER_STEP = 150;
+
+/** 骨架屏占位行的宽度模式：逐行变化比整齐划一更像真实列表 */
+const SKELETON_WIDTHS = [
+    { title: "62%", sub: "34%", album: "72%" },
+    { title: "78%", sub: "44%", album: "52%" },
+    { title: "46%", sub: "28%", album: "64%" },
+    { title: "70%", sub: "38%", album: "78%" },
+    { title: "54%", sub: "30%", album: "46%" },
+    { title: "84%", sub: "46%", album: "66%" },
+    { title: "50%", sub: "32%", album: "56%" },
+    { title: "66%", sub: "36%", album: "74%" },
+];
 
 function formatDuration(seconds?: number) {
     if (!seconds || !Number.isFinite(seconds)) {
@@ -96,6 +108,8 @@ interface IMusicListProps {
      * 当前列表是「我的歌单」内容（用户歌单 / 我喜欢的音乐）。
      * 只有在这里才提供「取消收藏」——它对应「把选中的歌从当前歌单里拿掉」；
      * 插件歌单 / 专辑 / 排行榜 / 搜索这些来源列表里的歌本来就不在自己的歌单里，批量取消没有意义。
+     * 另外「我的歌单」里的歌是从各个音源搜索收藏进来的、来源不统一，标题后会挂音源标识徽标；
+     * 插件歌单 / 专辑 / 榜单整份列表同源，不需要标。
      */
     userSheetMode?: boolean;
     /** 当前列表所属歌单的 id：收藏到歌单时把当前歌单从候选里去掉 */
@@ -276,6 +290,15 @@ export default function MusicList(props: IMusicListProps) {
     const rowOffset = isSearching || !pagination ? 0 : pageStart;
     /** 搜索时没有「页」的概念，全选按钮等文案按无分页处理 */
     const pagingActive = !!pagination && !isSearching;
+    /**
+     * 骨架屏：有加载在跑、但当前一行都渲染不出来时顶上——
+     * 首屏加载（loading）和分页换页数据未到（loadingMore 且本页为空）都算。
+     * 已有内容时的追加加载仍走底部「加载中…」提示，不闪骨架。
+     */
+    const showSkeleton =
+        !isSearching &&
+        rowList.length === 0 &&
+        (loading || (!!pagination && pagination.loadingMore));
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -662,7 +685,6 @@ export default function MusicList(props: IMusicListProps) {
                 )}
                 <div style={{ textAlign: "center" }}>#</div>
                 <div>标题</div>
-                <div>歌手</div>
                 <div>专辑</div>
                 <div style={{ textAlign: "right" }}>操作 / 时长</div>
             </div>
@@ -704,16 +726,28 @@ export default function MusicList(props: IMusicListProps) {
                                 rowIndex + 1
                             )}
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                            <Cover src={musicItem.artwork} size={32} borderRadius={4} />
-                            <span className="music-row-title">
-                                {musicItem.title}
-                                {musicItem.alias && (
-                                    <span className="music-row-alias">（{musicItem.alias}）</span>
-                                )}
-                            </span>
+                        <div className="music-row-main">
+                            <Cover src={musicItem.artwork} size={40} borderRadius={5} />
+                            <div className="music-row-info">
+                                <span className="music-row-title">
+                                    {musicItem.title}
+                                    {musicItem.alias && (
+                                        <span className="music-row-alias">（{musicItem.alias}）</span>
+                                    )}
+                                </span>
+                                <div className="music-row-sub">
+                                    {userSheetMode && musicItem.platform && (
+                                        <span
+                                            className="music-row-source"
+                                            title={`来源音源：${musicItem.platform}`}
+                                        >
+                                            {musicItem.platform}
+                                        </span>
+                                    )}
+                                    <span className="music-row-artist">{musicItem.artist}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div className="music-row-artist">{musicItem.artist}</div>
                         <div className="music-row-album">{musicItem.album}</div>
                         <div className="music-row-actions">
                             <span
@@ -759,10 +793,39 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 );
             })}
+            {showSkeleton && (
+                <div className="music-skeleton" aria-hidden>
+                    {SKELETON_WIDTHS.map((w, i) => (
+                        <div className="music-skeleton-row" key={i}>
+                            <div className="music-skeleton-bar music-skeleton-index" />
+                            <div className="music-skeleton-main">
+                                <div className="music-skeleton-cover" />
+                                <div className="music-skeleton-lines">
+                                    <div
+                                        className="music-skeleton-bar"
+                                        style={{ width: w.title }}
+                                    />
+                                    <div
+                                        className="music-skeleton-bar"
+                                        style={{ width: w.sub }}
+                                    />
+                                </div>
+                            </div>
+                            <div
+                                className="music-skeleton-bar"
+                                style={{ width: w.album }}
+                            />
+                            <div className="music-skeleton-bar music-skeleton-actions" />
+                        </div>
+                    ))}
+                </div>
+            )}
             {!pagination && visibleCount < (isSearching ? filteredList.length : musicList.length) && (
                 <div ref={sentinelRef} className="music-list-sentinel" />
             )}
-            {!pagination && loading && <div className="loading-hint">加载中…</div>}
+            {!pagination && loading && rowList.length > 0 && (
+                <div className="loading-hint">加载中…</div>
+            )}
             {!pagination && !loading && !isEnd && onLoadMore && (
                 <div
                     className="loading-hint"

@@ -8,7 +8,8 @@ export default function AlbumDetailPage(props: { albumItem?: IAlbum.IAlbumItem }
     const { albumItem } = props;
     const [album, setAlbum] = useState<IAlbum.IAlbumItem | null>(albumItem ?? null);
     const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    // 进页面就要拉数据，初始即加载态：否则 effect 首帧置位前会先闪一帧空态
+    const [loading, setLoading] = useState(() => !!albumItem);
     const [page, setPage] = useState(1);
     const [isEnd, setIsEnd] = useState(true);
 
