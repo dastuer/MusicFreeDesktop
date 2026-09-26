@@ -1788,7 +1788,8 @@ img {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: var(--hover-bg);
+    background: transparent;
+    border: 1px solid var(--divider);
     border-radius: 8px;
     padding: 0 12px;
     width: 240px;
