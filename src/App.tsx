@@ -144,7 +144,25 @@ function MainContent(props: { onOpenDetail: () => void }) {
                         className={`titlebar-spacer${historyVisible ? " panel-open" : ""}`}
                         style={{ flex: 1 }}
                     />
-                    <div style={{ width: 8 }} />
+                    {/* 右上角固定入口：音源 / 设置（原侧边栏底部入口上移到这里） */}
+                    <div className="titlebar-actions">
+                        <button
+                            className={`titlebar-nav-btn${route.path === "pluginManage" ? " active" : ""}`}
+                            onClick={() => navigate("pluginManage")}
+                            title="音源"
+                        >
+                            <Icon name="plugin" size={17} />
+                        </button>
+                        <button
+                            className={`titlebar-nav-btn${route.path === "settings" ? " active" : ""}`}
+                            onClick={() => navigate("settings")}
+                            title="设置"
+                        >
+                            <Icon name="settings" size={17} />
+                        </button>
+                    </div>
+                    {/* 设置入口右侧留 20px 边距 */}
+                    <div style={{ width: 20 }} />
                 </div>
                 <div className="page-container" key={`${route.path}-${JSON.stringify(route.params)}`}>
                     <Page {...route.params} />

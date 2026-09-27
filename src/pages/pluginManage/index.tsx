@@ -258,7 +258,7 @@ export default function PluginManagePage() {
     const currentEditing = plugins.find((p) => p.hash === editingVars);
 
     return (
-        <div>
+        <div style={{ maxWidth: 720 }}>
             <div className="section-title">音源插件</div>
 
             <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>

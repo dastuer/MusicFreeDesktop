@@ -181,6 +181,19 @@ img {
     cursor: default;
 }
 
+/* 标题栏右上角的固定入口（音源 / 设置） */
+.titlebar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    -webkit-app-region: no-drag;
+}
+
+.titlebar-nav-btn.active {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
 /*
  * 标题栏空白区（搜索框右侧到底部播放条那一侧）。它本身是拖拽区 —— 继承 .titlebar-drag 的
  * -webkit-app-region: drag。但拖拽区里的 mousedown 会被窗口拖动吞掉，渲染进程收不到，
@@ -247,6 +260,50 @@ img {
     display: flex;
     align-items: center;
     justify-content: space-between;
+}
+
+/* 分组标题右侧操作区（新建歌单 + 展开/收起箭头） */
+.sidebar-section-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 「我的歌单」分组的收起箭头：展开朝下，收起转成朝右 */
+.sidebar-collapse-chevron {
+    color: var(--text-tertiary);
+    display: flex;
+    transition: transform 0.22s ease;
+}
+
+.sidebar-collapse-chevron.collapsed {
+    transform: rotate(-90deg);
+}
+
+/*
+ * 「我的歌单」列表的展开/收起容器：单行网格轨道 1fr↔0fr 过渡实现高度动画。
+ * 列表本体在 .sidebar-sheet-clip 里（overflow: hidden + min-height: 0），
+ * 轨道才能被压到 0；收起结束后再藏 visibility，避免不可见内容还能被 Tab 聚焦。
+ */
+.sidebar-sheet-collapse {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    transition: grid-template-rows 0.26s ease, visibility 0s;
+}
+
+.sidebar-sheet-collapse.collapsed {
+    grid-template-rows: minmax(0, 0fr);
+    visibility: hidden;
+    transition: grid-template-rows 0.26s ease, visibility 0s 0.26s;
+}
+
+.sidebar-sheet-clip {
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 .sidebar-sheet-list {

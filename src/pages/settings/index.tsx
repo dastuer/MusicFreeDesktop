@@ -86,7 +86,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div style={{ maxWidth: 640 }}>
+        <div style={{ maxWidth: 720 }}>
             <div className="section-title">设置</div>
 
             <div className="settings-group">

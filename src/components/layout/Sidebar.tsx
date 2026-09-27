@@ -25,10 +25,8 @@ const mainNavItems = [
     { path: "downloading", title: "下载管理", icon: "download" },
 ] as const;
 
-const subNavItems = [
-    { path: "pluginManage", title: "音源", icon: "plugin" },
-    { path: "settings", title: "设置", icon: "settings" },
-] as const;
+/** 「我的歌单」分组收起状态落在这里，下次启动还原 */
+const SHEETS_COLLAPSED_KEY = "sidebar.sheetsCollapsed";
 
 // 歌单行拖动排序的位移单位：.sidebar-item 高 38 + margin-bottom 2
 const ITEM_PITCH = 40;
@@ -47,6 +45,10 @@ interface DragState {
 export default function Sidebar() {
     const route = useCurrentRoute();
     const [sheets, setSheets] = useState<IUserSheet[]>([]);
+    // 「我的歌单」分组收起状态，记忆到 localStorage
+    const [sheetsCollapsed, setSheetsCollapsed] = useState(
+        () => localStorage.getItem(SHEETS_COLLAPSED_KEY) === "1",
+    );
     // ---------- 拖动排序（react-draggable，「我喜欢的音乐」不参与） ----------
     const dragRef = useRef<DragState | null>(null);
     const [drag, setDrag] = useState<DragState | null>(null);
@@ -85,6 +87,13 @@ export default function Sidebar() {
 
     const isActiveSheet = (sheetId: string) =>
         route.path === "sheetDetail" && route.params?.userSheetId === sheetId;
+
+    const toggleSheetsCollapsed = () => {
+        setSheetsCollapsed((v) => {
+            localStorage.setItem(SHEETS_COLLAPSED_KEY, v ? "0" : "1");
+            return !v;
+        });
+    };
 
     const createSheetAction = () => {
         showPrompt({
@@ -210,78 +219,49 @@ export default function Sidebar() {
             {/* macOS 红绿灯区域：拖拽 + 留白 */}
             <div className="sidebar-drag" />
             <nav className="sidebar-nav">{mainNavItems.map(renderItem)}</nav>
-            <div className="sidebar-section-title">
+            <div
+                className="sidebar-section-title"
+                style={{ cursor: "pointer", userSelect: "none" }}
+                onClick={toggleSheetsCollapsed}
+                title={sheetsCollapsed ? "展开歌单列表" : "收起歌单列表"}
+            >
                 我的歌单
-                <Icon
-                    name="plus"
-                    size={14}
-                    title="新建歌单"
-                    style={{ cursor: "pointer", color: "var(--text-tertiary)" }}
-                    onClick={createSheetAction}
-                />
+                <span className="sidebar-section-actions">
+                    <Icon
+                        name="plus"
+                        size={14}
+                        title="新建歌单"
+                        style={{ cursor: "pointer", color: "var(--text-tertiary)" }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            createSheetAction();
+                        }}
+                    />
+                    <Icon
+                        name="chevronDown"
+                        size={14}
+                        className={`sidebar-collapse-chevron${sheetsCollapsed ? " collapsed" : ""}`}
+                    />
+                </span>
             </div>
-            <div className="sidebar-sheet-list">
-                {likesSheet && (
-                    <div
-                        className={`sidebar-item${isActiveSheet(LIKES_SHEET_ID) ? " active" : ""}`}
-                        onClick={() =>
-                            navigate("sheetDetail", {
-                                userSheetId: LIKES_SHEET_ID,
-                                title: likesSheet.title,
-                            })
-                        }
-                    >
-                        <span
-                            className="sidebar-item-icon"
-                            style={{ color: "var(--primary-color)" }}
+            <div className={`sidebar-sheet-collapse${sheetsCollapsed ? " collapsed" : ""}`}>
+                <div className="sidebar-sheet-clip">
+                    <div className="sidebar-sheet-list">
+                    {likesSheet && (
+                        <div
+                            className={`sidebar-item${isActiveSheet(LIKES_SHEET_ID) ? " active" : ""}`}
+                            onClick={() =>
+                                navigate("sheetDetail", {
+                                    userSheetId: LIKES_SHEET_ID,
+                                    title: likesSheet.title,
+                                })
+                            }
                         >
-                            <Icon name="heart" size={16} />
-                        </span>
-                        <span
-                            style={{
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                            }}
-                        >
-                            {likesSheet.title}
-                        </span>
-                        <span
-                            style={{
-                                marginLeft: "auto",
-                                fontSize: 11,
-                                color: "var(--text-tertiary)",
-                            }}
-                        >
-                            {likesSheet.musicList.length}
-                        </span>
-                    </div>
-                )}
-                {userSheets.map((sheet, index) => {
-                    const draggingSelf = drag?.id === sheet.id && drag.moved;
-                    // 其余项给被拖项让位：跨过一个档位就补上 40px 过渡位移
-                    let shiftY = 0;
-                    if (drag?.moved && drag.id !== sheet.id) {
-                        if (index > drag.startIndex && index <= drag.targetIndex) {
-                            shiftY = -ITEM_PITCH;
-                        } else if (index < drag.startIndex && index >= drag.targetIndex) {
-                            shiftY = ITEM_PITCH;
-                        }
-                    }
-                    return (
-                        <SheetDraggable
-                            key={sheet.id}
-                            offsetY={drag?.id === sheet.id ? drag.y : 0}
-                            dragging={!!draggingSelf}
-                            shiftY={shiftY}
-                            onStart={() => handleDragStart(sheet.id, index)}
-                            onMove={handleDragMove}
-                            onStop={handleDragStop}
-                            onOpen={() => handleSheetClick(sheet)}
-                            onContextMenu={(e) => sheetMenu(e, sheet)}
-                        >
-                            <span className="sidebar-item-icon">
-                                <Icon name="playQueue" size={16} />
+                            <span
+                                className="sidebar-item-icon"
+                                style={{ color: "var(--primary-color)" }}
+                            >
+                                <Icon name="heart" size={16} />
                             </span>
                             <span
                                 style={{
@@ -290,7 +270,7 @@ export default function Sidebar() {
                                     textOverflow: "ellipsis",
                                 }}
                             >
-                                {sheet.title}
+                                {likesSheet.title}
                             </span>
                             <span
                                 style={{
@@ -299,15 +279,60 @@ export default function Sidebar() {
                                     color: "var(--text-tertiary)",
                                 }}
                             >
-                                {sheet.musicList.length}
+                                {likesSheet.musicList.length}
                             </span>
-                        </SheetDraggable>
-                    );
-                })}
+                        </div>
+                    )}
+                    {userSheets.map((sheet, index) => {
+                        const draggingSelf = drag?.id === sheet.id && drag.moved;
+                        // 其余项给被拖项让位：跨过一个档位就补上 40px 过渡位移
+                        let shiftY = 0;
+                        if (drag?.moved && drag.id !== sheet.id) {
+                            if (index > drag.startIndex && index <= drag.targetIndex) {
+                                shiftY = -ITEM_PITCH;
+                            } else if (index < drag.startIndex && index >= drag.targetIndex) {
+                                shiftY = ITEM_PITCH;
+                            }
+                        }
+                        return (
+                            <SheetDraggable
+                                key={sheet.id}
+                                offsetY={drag?.id === sheet.id ? drag.y : 0}
+                                dragging={!!draggingSelf}
+                                shiftY={shiftY}
+                                onStart={() => handleDragStart(sheet.id, index)}
+                                onMove={handleDragMove}
+                                onStop={handleDragStop}
+                                onOpen={() => handleSheetClick(sheet)}
+                                onContextMenu={(e) => sheetMenu(e, sheet)}
+                            >
+                                <span className="sidebar-item-icon">
+                                    <Icon name="playQueue" size={16} />
+                                </span>
+                                <span
+                                    style={{
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                    }}
+                                >
+                                    {sheet.title}
+                                </span>
+                                <span
+                                    style={{
+                                        marginLeft: "auto",
+                                        fontSize: 11,
+                                        color: "var(--text-tertiary)",
+                                    }}
+                                >
+                                    {sheet.musicList.length}
+                                </span>
+                            </SheetDraggable>
+                        );
+                    })}
+                    </div>
+                </div>
             </div>
-            <nav className="sidebar-nav" style={{ paddingBottom: 12 }}>
-                {subNavItems.map(renderItem)}
-            </nav>
         </aside>
     );
 }
