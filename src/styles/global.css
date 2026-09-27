@@ -1587,13 +1587,28 @@ img {
 .music-detail-overlay {
     position: fixed;
     inset: 0;
+    bottom: var(--playerbar-height);
     background: var(--page-bg);
     z-index: 100;
     display: flex;
     flex-direction: column;
-    animation: slide-up 0.28s ease;
+    /* 收起态整页沉到播放栏后方（播放栏 z-index: 101 正好盖住它）：
+       展开时整页上移进场，收起时整页下移退场；
+       visibility 延迟到退场过渡结束才隐藏，退场过程中页面保持可见 */
+    transform: translateY(100%);
+    visibility: hidden;
+    transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1),
+        visibility 0s linear 0.5s;
+    will-change: transform;
 }
 
+.music-detail-overlay.open {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1), visibility 0s;
+}
+
+/* 播放列表面板等小幅上浮进场仍在用的关键帧 */
 @keyframes slide-up {
     from {
         transform: translateY(30px);
@@ -1653,6 +1668,11 @@ img {
 
 .music-detail-cover-wrap.playing {
     animation-play-state: running;
+}
+
+/* 收起后封面不可见，暂停旋转省掉无谓的合成开销 */
+.music-detail-overlay:not(.open) .music-detail-cover-wrap {
+    animation-play-state: paused;
 }
 
 .music-detail-cover {
@@ -1727,6 +1747,13 @@ img {
 .lyric-line.active {
     color: var(--text-color);
     font-size: 20px;
+    font-weight: 600;
+}
+
+/* 滚动浏览歌词时，播放位置那行用主题色同时点亮（亮白高亮留给滚动位置）；
+   两行重合时颜色以主题色为准，字号仍随高亮放大。规则须排在 .active 之后 */
+.lyric-line.playing {
+    color: var(--primary-color);
     font-weight: 600;
 }
 

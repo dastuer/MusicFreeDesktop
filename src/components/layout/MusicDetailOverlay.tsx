@@ -87,7 +87,8 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
         positionedRef.current = true;
     }, [activeIndex, userScrolled, visible, lyric.length]);
 
-    // 滚动浏览时激活行跟随滚动位置（距容器中心最近的一行），与播放位置激活互不影响
+    // 滚动浏览时激活行跟随滚动位置（距容器中心最近的一行）；
+    // 浏览期间播放位置那行以 .playing 主题色同时点亮，两处激活并存互不挤占
     const displayIndex = userScrolled ? scrollIndex : activeIndex;
     const scrollLine = userScrolled && scrollIndex >= 0 ? lyric[scrollIndex] : undefined;
 
@@ -111,15 +112,14 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
         setScrollIndex(best);
     };
 
-    if (!visible || !currentMusic) {
+    // 收起时不卸载：组件常驻挂载，靠 .open 类切换 transform 过渡，
+    // 展开/收起才有完整的整页上移/下移动画（卸载式显隐只能做入场）
+    if (!currentMusic) {
         return null;
     }
 
     return (
-        <div
-            className="music-detail-overlay"
-            style={{ bottom: "var(--playerbar-height)" }}
-        >
+        <div className={`music-detail-overlay${visible ? " open" : ""}`}>
             {/* 顶部操作栏：避开 macOS 红绿灯区域，收起按钮加大热区 */}
             <div
                 style={{
@@ -185,6 +185,8 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                                         data-index={index}
                                         className={`lyric-line${
                                             index === displayIndex ? " active" : ""
+                                        }${
+                                            userScrolled && index === activeIndex ? " playing" : ""
                                         }`}
                                     >
                                         {item.lrc || "·"}
