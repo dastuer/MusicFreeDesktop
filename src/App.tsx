@@ -18,6 +18,7 @@ import {
 } from "./core/router";
 import {
     IPlayFailurePayload,
+    IQualitySwapFailedPayload,
     TrackPlayerEvents,
     TrackPlayerSingleton,
     loadCurrentLyric,
@@ -202,6 +203,18 @@ export default function App() {
         TrackPlayerSingleton.on(TrackPlayerEvents.PlayFailed, onPlayFailed);
         return () => {
             TrackPlayerSingleton.off(TrackPlayerEvents.PlayFailed, onPlayFailed);
+        };
+    }, []);
+
+    // 切音质失败不打断播放（旧音源继续响），说一声就好：用户选的档暂时用不上
+    useEffect(() => {
+        const onQualitySwapFailed = (payload: IQualitySwapFailedPayload) => {
+            const title = payload.musicItem?.title ?? "当前歌曲";
+            showToast(`「${title}」无法切换音质：${payload.reason}，将继续以当前音质播放`);
+        };
+        TrackPlayerSingleton.on(TrackPlayerEvents.QualitySwapFailed, onQualitySwapFailed);
+        return () => {
+            TrackPlayerSingleton.off(TrackPlayerEvents.QualitySwapFailed, onQualitySwapFailed);
         };
     }, []);
 

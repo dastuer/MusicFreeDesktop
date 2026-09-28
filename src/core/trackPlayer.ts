@@ -36,6 +36,8 @@ export const enum TrackPlayerEvents {
     StateChanged = "StateChanged",
     /** 音源解析 / 音频加载失败（payload 见 IPlayFailurePayload） */
     PlayFailed = "PlayFailed",
+    /** 切换音质失败（播放不打断，保持原音质继续播；payload 见 IQualitySwapFailedPayload） */
+    QualitySwapFailed = "QualitySwapFailed",
 }
 
 /** 播放失败事件的载荷 */
@@ -49,11 +51,31 @@ export interface IPlayFailurePayload {
     downgradedTo?: IMusic.IQualityKey;
 }
 
+/** 音质切换失败事件的载荷（切换失败时不打断播放，继续用原音源） */
+export interface IQualitySwapFailedPayload {
+    musicItem: IMusic.IMusicItem;
+    /** 失败原因（已转成可读短句） */
+    reason: string;
+}
+
 /**
  * 单次 getMediaSource 的最长等待。
  * 换歌时旧歌已经被停掉，等待期是静音的，所以不能让一个卡死的音源拖满 pluginCall 的 30s。
  */
 const MEDIA_SOURCE_TIMEOUT = 10000;
+
+/**
+ * 无缝切音质：影子 <audio> 等缓冲就绪（canplay）的最长时限。
+ * 等待期间旧音源一直在响，多等没有听感代价；超时说明新音源起不来，
+ * 与其交接过去必卡，不如放弃切换、保持现状继续播。
+ */
+const QUALITY_SWAP_READY_TIMEOUT = 15000;
+
+/**
+ * 无缝切音质：交接前把影子摆到实时位置的 seek 的最长等待。
+ * 位置落在已缓冲范围内时瞬时完成；超出范围要重新取流，等不到就放弃切换。
+ */
+const QUALITY_SWAP_SEEK_TIMEOUT = 8000;
 
 /** 连续 N 首都播不出来就停下，不再自动往后跳（否则坏音源会把整个歌单空转一圈） */
 const MAX_AUTO_SKIP = 3;
@@ -202,6 +224,10 @@ export const qualityAtom = atom<IMusic.IQualityKey>(getQuality());
  */
 export const playingQualityAtom = atom<IMusic.IQualityKey | null>(null);
 /**
+ * 正在无缝切换音质（新音质预缓冲中）：播放不间断，徽标只加个「切换中」的呼吸提示。
+ */
+export const qualitySwappingAtom = atom(false);
+/**
  * 每次有歌进入播放队列自增（追加、整队替换都算）。
  * 播放条据此在歌单入口图标上弹一次「已添加到歌单列表」，不能只比对队列长度——
  * 把 200 首的队列换成 3 首的歌单，长度是减的，却同样是「歌进了播放列表」。
@@ -252,8 +278,17 @@ class TrackPlayer extends EventEmitter {
     private autoSkipCount = 0;
     /** 标记紧跟着的这次 play() 是错误自动跳引发的（此时不重置 autoSkipCount） */
     private autoSkipping = false;
-    /** play() 调用序号，用于让过期（被后续请求取代）的解析结果失效 */
+    /**
+     * 播放 / 音质切换共用的会话序号：每次 play() 和无缝音质切换都会自增，
+     * 用于让过期（被后续请求取代）的解析结果与在途切换失效。
+     */
     private playSeq = 0;
+    /** 在途无缝音质切换的会话号：0 = 没有在途切换（见 startQualitySwap） */
+    private swapSeq = 0;
+    /** 预缓冲新音源的影子 <audio>：paused 只下载不出声，就绪后顶替 this.audio */
+    private swapAudio: HTMLAudioElement | null = null;
+    /** 摘掉影子元素上「等缓冲 / 等 seek」监听的收尾函数，取消切换时由 cancelQualitySwap 调用 */
+    private swapWaitCleanup: (() => void) | null = null;
     /** 播放停滞自救用的定时器与次数（见 onAudioStall） */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
     private stallNudges = 0;
@@ -279,6 +314,19 @@ class TrackPlayer extends EventEmitter {
         const audio = new Audio();
         audio.preload = "auto";
         audio.volume = getStoredVolume();
+        this.attachAudioListeners(audio);
+        this.audio = audio;
+
+        // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
+        this.restoreSession();
+    }
+
+    /**
+     * 给一个 <audio> 挂上播放器的全套生产监听。主元素（setup）与无缝换源的影子元素共用：
+     * 所有 handler 都以「事件源 === this.audio」为门槛，影子在交接前、旧元素在退场后
+     * 发出的事件都会被滤掉，不会污染进度 / 状态。
+     */
+    private attachAudioListeners(audio: HTMLAudioElement) {
         audio.addEventListener("ended", this.onEnded);
         audio.addEventListener("timeupdate", this.onProgress);
         audio.addEventListener("loadedmetadata", this.onProgress);
@@ -289,10 +337,26 @@ class TrackPlayer extends EventEmitter {
         // waiting / stalled：音源侧断流时浏览器会一直等下去，进度不再前进
         audio.addEventListener("waiting", this.onAudioStall);
         audio.addEventListener("stalled", this.onAudioStall);
-        this.audio = audio;
+    }
 
-        // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
-        this.restoreSession();
+    /** 摘掉全套生产监听：无缝换源交接后让旧元素彻底退场（事件再也不会找上门） */
+    private retireAudioElement(el: HTMLAudioElement) {
+        el.removeEventListener("ended", this.onEnded);
+        el.removeEventListener("timeupdate", this.onProgress);
+        el.removeEventListener("loadedmetadata", this.onProgress);
+        el.removeEventListener("pause", this.onAudioPause);
+        el.removeEventListener("play", this.onAudioPlay);
+        el.removeEventListener("playing", this.onAudioPlaying);
+        el.removeEventListener("error", this.onAudioError);
+        el.removeEventListener("waiting", this.onAudioStall);
+        el.removeEventListener("stalled", this.onAudioStall);
+        try {
+            el.pause();
+            el.removeAttribute("src");
+            el.load();
+        } catch {
+            // ignore
+        }
     }
 
     /**
@@ -385,8 +449,9 @@ class TrackPlayer extends EventEmitter {
     }
 
     /** ---------- 内部事件 ---------- */
-    private onProgress = () => {
-        if (!this.audio) {
+    private onProgress = (e: Event) => {
+        // 事件源不是当前生产元素（影子预缓冲中、旧元素退场后）一律忽略
+        if (!this.audio || e.target !== this.audio) {
             return;
         }
         // 进度还在走就说明没卡，撤掉停滞自救的定时器
@@ -416,7 +481,10 @@ class TrackPlayer extends EventEmitter {
      * Range 请求。这里把这个人工动作自动化：12 秒还没恢复就微调一点进度，
      * 强制浏览器重新取流。每首歌最多 3 次，避免对着彻底坏掉的音源空转。
      */
-    private onAudioStall = () => {
+    private onAudioStall = (e: Event) => {
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
         if (this.stallTimer) {
             return;
         }
@@ -442,7 +510,10 @@ class TrackPlayer extends EventEmitter {
         }, 12000);
     };
 
-    private onAudioPause = () => {
+    private onAudioPause = (e: Event) => {
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
         this.clearStallWatch();
         // 换歌过程中的 pause 是加载流程的一部分，不能当成"用户按了暂停"
         if (this.isLoading) {
@@ -453,11 +524,17 @@ class TrackPlayer extends EventEmitter {
         }
     };
 
-    private onAudioPlay = () => {
+    private onAudioPlay = (e: Event) => {
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
         setAtom(musicStateAtom, "playing");
     };
 
-    private onAudioPlaying = () => {
+    private onAudioPlaying = (e: Event) => {
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
         // 真正出声了：撤掉停滞自救的定时器，并清零"连续失败自动跳过"与"降级重试"的计数
         this.clearStallWatch();
         this.isLoading = false;
@@ -466,8 +543,12 @@ class TrackPlayer extends EventEmitter {
         setAtom(musicStateAtom, "playing");
     };
 
-    private onAudioError = async () => {
-        const err = this.audio?.error;
+    private onAudioError = async (e: Event) => {
+        // 事件源不是当前生产元素（影子预缓冲中、旧元素退场后）不归当前这首管
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
+        const err = this.audio.error;
         console.warn(
             `[trackPlayer] media error code=${err?.code} message=${err?.message} srcLen=${this.audio?.src?.length ?? 0} srcPrefix=${this.audio?.src?.slice(0, 40) ?? "-"}`,
         );
@@ -564,6 +645,197 @@ class TrackPlayer extends EventEmitter {
         setAtom(musicStateAtom, this._currentMusic ? "paused" : "stopped");
     }
 
+    /**
+     * 作废在途的无缝音质切换：影子元素释放、等待监听摘除。
+     * 被新的播放请求 / 新的音质选择取代时调用；没有在途切换时是无害的空操作。
+     */
+    private cancelQualitySwap() {
+        if (!this.swapAudio && !this.swapSeq) {
+            return;
+        }
+        this.swapSeq = 0;
+        this.swapWaitCleanup?.();
+        this.swapWaitCleanup = null;
+        const shadow = this.swapAudio;
+        this.swapAudio = null;
+        if (shadow) {
+            this.retireAudioElement(shadow);
+        }
+        setAtom(qualitySwappingAtom, false);
+    }
+
+    /**
+     * 等影子元素就绪：okEvents 里任意一个先到就算成功，error 或超时算失败。
+     * 超时 / 失败返回 false，调用方按「切换失败、保持旧音源继续播」收场。
+     * 清理函数登记在 swapWaitCleanup 上：被取消时由 cancelQualitySwap 摘干净，
+     * 悬置的 promise 不再有人等——后续代码靠 swapSeq 判定失效。
+     */
+    private waitForShadow(
+        shadow: HTMLAudioElement,
+        okEvents: string[],
+        timeoutMs: number,
+    ): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            let settled = false;
+            const detach = () => {
+                okEvents.forEach((ev) => shadow.removeEventListener(ev, onOk));
+                shadow.removeEventListener("error", onError);
+                clearTimeout(timer);
+            };
+            const finish = (ok: boolean) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (this.swapWaitCleanup === detach) {
+                    this.swapWaitCleanup = null;
+                }
+                detach();
+                resolve(ok);
+            };
+            const onOk = () => finish(true);
+            const onError = () => finish(false);
+            const timer = setTimeout(() => finish(false), timeoutMs);
+            this.swapWaitCleanup = detach;
+            okEvents.forEach((ev) => shadow.addEventListener(ev, onOk));
+            shadow.addEventListener("error", onError);
+        });
+    }
+
+    /**
+     * 播放中切换音质（无缝换源）：不打断当前播放。
+     *
+     * 旧音源继续响；后台按新档解析直链，并用一个影子 <audio> 从「当时的实时位置」
+     * 开始预缓冲（paused，只下载不出声）。缓冲就绪（canplay）后把交接点对到此刻的
+     * 实时位置，等 seek 落定，再在一个 tick 内完成交接：换引用、旧元素退场、影子
+     * 接着播 —— 听感无间断，进度条照常走。
+     *
+     * 作废判据沿用 playSeq：任何新的 play()（换歌、跳歌、降级重试）都会使在途切换
+     * 失效，play() 入口会顺手把影子清掉。解析不出新直链 / 影子加载失败 / 缓冲超时
+     * 时保持现状（旧音源还在播），发 QualitySwapFailed 让 UI 说一声，绝不为了换
+     * 音质打断播放。
+     */
+    private async startQualitySwap(musicItem: IMusic.IMusicItem) {
+        this.cancelQualitySwap();
+        const swapSeq = ++this.playSeq;
+        this.swapSeq = swapSeq;
+        setAtom(qualitySwappingAtom, true);
+        /** 收场：只在仍是本轮会话时清旗子（否则说明已被取代，别去碰别人的状态） */
+        const settle = () => {
+            if (this.swapSeq === swapSeq) {
+                this.swapSeq = 0;
+                setAtom(qualitySwappingAtom, false);
+            }
+        };
+        const fail = (reason: string) => {
+            this.cancelQualitySwap();
+            settle();
+            console.warn(`[trackPlayer] 切换音质失败：${reason}，继续以当前音质播放`);
+            this.emit(TrackPlayerEvents.QualitySwapFailed, {
+                musicItem,
+                reason,
+            } as IQualitySwapFailedPayload);
+        };
+        try {
+            const resolved = await this.resolveMediaUrl(musicItem);
+            if (swapSeq !== this.playSeq) {
+                // 已被换歌 / 新的切换取代（影子已由 play() / cancelQualitySwap 清掉）
+                return;
+            }
+            if (!resolved) {
+                fail("音源没有返回可播放的链接");
+                return;
+            }
+            if ((resolved.source?.url ?? null) === this.resolvedSourceUrl) {
+                // 转一圈还是同一条直链（重复点同一档、或插件对多档回同一条链）：
+                // 听不出区别，不值得折腾一次交接
+                settle();
+                return;
+            }
+            const old = this.audio;
+            if (!old) {
+                settle();
+                return;
+            }
+            // 影子从「此刻的实时位置」开始预缓冲：paused 不出声，preload=auto 只管下载。
+            // 元数据未就绪时设 currentTime 即「默认起播位置」，与 applyStartPosition 同一招。
+            const shadow = new Audio();
+            shadow.preload = "auto";
+            shadow.volume = old.volume;
+            shadow.playbackRate = this._rate;
+            this.attachAudioListeners(shadow);
+            shadow.src = resolved.src;
+            const bufferedFrom = old.currentTime || 0;
+            if (bufferedFrom > 0) {
+                try {
+                    shadow.currentTime = bufferedFrom;
+                } catch {
+                    // ignore
+                }
+            }
+            this.swapAudio = shadow;
+            // 等缓冲就绪（canplay）：等待期间旧歌一直在响，超时说明新音源起不来，放弃
+            const ready = await this.waitForShadow(shadow, ["canplay"], QUALITY_SWAP_READY_TIMEOUT);
+            if (swapSeq !== this.playSeq) {
+                return;
+            }
+            if (!ready) {
+                fail("新音源缓冲超时或加载失败");
+                return;
+            }
+            // 交接点对到此刻的实时位置：等待期间旧歌在继续走、用户也可能拖过进度。
+            // 位置在已缓冲范围内时 seek 瞬时完成；要重新取流时旧歌兜着，等不起就放弃。
+            const handoverPosition = old.currentTime || 0;
+            try {
+                shadow.currentTime = handoverPosition;
+            } catch {
+                // ignore
+            }
+            const aligned = await this.waitForShadow(
+                shadow,
+                ["seeked", "canplay"],
+                QUALITY_SWAP_SEEK_TIMEOUT,
+            );
+            if (swapSeq !== this.playSeq) {
+                return;
+            }
+            if (!aligned) {
+                fail("新音源跟不上播放进度");
+                return;
+            }
+            // ===== 交接：一个 tick 内完成 =====
+            // 位置以这一刻为准（毫秒级的漂移，仍在缓冲内，瞬时完成）
+            const finalPosition = old.currentTime || 0;
+            try {
+                shadow.currentTime = finalPosition;
+            } catch {
+                // ignore
+            }
+            this.swapWaitCleanup?.();
+            this.swapWaitCleanup = null;
+            this.swapAudio = null;
+            this.swapSeq = 0;
+            this.clearPendingSeek();
+            this.audio = shadow;
+            this.resolvedQuality = resolved.quality;
+            this.resolvedSourceUrl = resolved.source?.url ?? null;
+            setAtom(playingQualityAtom, resolved.quality);
+            setAtom(qualitySwappingAtom, false);
+            // 用户在等待期间按过暂停就别替他出声：影子已就位（停在同一位置），
+            // 下次播放直接是新音质。先记状态再退场——退场会 pause 掉旧元素。
+            const wasPlaying = !old.paused;
+            // 旧元素退场：监听已摘，随后 load() 引发的事件不会再进来
+            this.retireAudioElement(old);
+            if (wasPlaying) {
+                shadow.play().catch((err) =>
+                    console.warn("[trackPlayer] quality swap play failed", err?.name ?? err),
+                );
+            }
+        } catch (e: any) {
+            fail(e?.message ?? String(e ?? "未知原因"));
+        }
+    }
+
     /** 还能往下降的下一档音质；已在底档 / 本地文件 / 条目自带直链（无档位概念）返回 null */
     private lowerQualityForRetry(musicItem: IMusic.IMusicItem): IMusic.IQualityKey | null {
         if (musicItem.localPath) {
@@ -590,6 +862,9 @@ class TrackPlayer extends EventEmitter {
         options?: { allowQualityRetry?: boolean },
     ) {
         const reason = rawReason || "未知原因";
+        // 在途的音质切换跟着作废：旧音源已经出问题，别再把按新音质备好的影子
+        // 交接上来顶替一个已停掉的播放器（位置也会对不上）
+        this.cancelQualitySwap();
         this.isLoading = false;
         // 摘掉旧音源前先记下播到哪儿：降级重试要接着这个位置继续，别从头再来
         const retryPosition = this.audio?.currentTime || 0;
@@ -643,7 +918,11 @@ class TrackPlayer extends EventEmitter {
         }
     }
 
-    private onEnded = async () => {
+    private onEnded = async (e: Event) => {
+        // 旧元素在无缝换源交接前后播到头的事件不作数：交接已完成时由影子元素接管续播
+        if (!this.audio || e.target !== this.audio) {
+            return;
+        }
         if (!this._currentMusic) {
             return;
         }
@@ -909,6 +1188,8 @@ class TrackPlayer extends EventEmitter {
         // 任何在途的加载都要作废，否则停下后它还会把解析结果挂上来
         this.pendingPlayId = "";
         this.isLoading = false;
+        // 在途的音质切换一样作废：歌都不要了，影子交接上来只会凭空出声
+        this.cancelQualitySwap();
         this.autoSkipCount = 0;
         setAtom(currentMusicAtom, null);
         setAtom(musicStateAtom, "stopped");
@@ -1080,6 +1361,8 @@ class TrackPlayer extends EventEmitter {
         if (!musicItem && !this._currentMusic) {
             return;
         }
+        // 任何新的播放请求都取代在途的无缝音质切换：影子先撤，别让它事后把旧歌顶回来
+        this.cancelQualitySwap();
         const target = musicItem ?? this._currentMusic!;
         // playId 带自增序号：同一毫秒内的连续调用也能区分
         const playId = `${target.platform}-${target.id}-${Date.now()}-${++this.playSeq}`;
@@ -1405,6 +1688,10 @@ class TrackPlayer extends EventEmitter {
         if (this.audio) {
             this.audio.playbackRate = rate;
         }
+        // 在途音质切换的影子也要跟上：交接过去不能把倍速打回原形
+        if (this.swapAudio) {
+            this.swapAudio.playbackRate = rate;
+        }
         setAtom(rateAtom, rate);
     }
 
@@ -1412,6 +1699,10 @@ class TrackPlayer extends EventEmitter {
         const next = Math.min(Math.max(volume, 0), 1);
         if (this.audio) {
             this.audio.volume = next;
+        }
+        // 影子同步音量：交接瞬间音量不能跳
+        if (this.swapAudio) {
+            this.swapAudio.volume = next;
         }
         localStorage.setItem("volume", String(next));
         setAtom(volumeAtom, next);
@@ -1423,9 +1714,11 @@ class TrackPlayer extends EventEmitter {
 
     /**
      * 切换音质：写回配置（与设置页的「默认音质」是同一份），并让当前这首尽快用上。
-     * 正在播：记住位置重新解析音源，无缝换到新音质；暂停中：作废已解析的音源、
-     * 位置先记着，下次按播放就用新音质从这里接着播（不替用户出声）；
-     * 本地文件没有音质概念，音源解析中（src 还没挂上）也只改配置，不折腾在途请求。
+     *
+     * 正在播：走 startQualitySwap 无缝换源——旧音源不停，新音质预缓冲就绪后再交接，
+     * 全程不断声；暂停中：作废已解析的音源、位置先记着，下次按播放就用新音质从
+     * 这里接着播（不替用户出声）；本地文件没有音质概念；音源解析中（src 还没挂上）
+     * 也只改配置，不折腾在途请求。
      */
     async applyQuality(quality: IMusic.IQualityKey) {
         setQuality(quality);
@@ -1435,13 +1728,15 @@ class TrackPlayer extends EventEmitter {
         if (!music || music.localPath || !audio?.src) {
             return;
         }
-        this.pendingStartPosition = audio.currentTime || 0;
+        // 重选音质时上一次的切换可能还没就绪：先撤掉影子，按新选的来
+        this.cancelQualitySwap();
         if (audio.paused) {
+            this.pendingStartPosition = audio.currentTime || 0;
             // 作废现有音源后，togglePlay / resume 看到 src 为空会走完整解析（新音质 + 记住的位置）
             this.detachAudio();
             return;
         }
-        await this.play(music, true);
+        await this.startQualitySwap(music);
     }
 
     getProgress() {
@@ -1484,6 +1779,10 @@ export function useQuality() {
 /** 当前音源实际命中的音质档（播放栏徽标用），null = 未知 / 无档位概念 */
 export function usePlayingQuality() {
     return useAtomValue(playingQualityAtom);
+}
+/** 正在无缝切换音质（新音质预缓冲中）：徽标上给个「切换中」提示用 */
+export function useQualitySwapping() {
+    return useAtomValue(qualitySwappingAtom);
 }
 /** 只改「默认音质」配置，不动正在播的歌（设置页用；播放栏的即时切换走 applyQuality） */
 export function setDefaultQuality(quality: IMusic.IQualityKey) {

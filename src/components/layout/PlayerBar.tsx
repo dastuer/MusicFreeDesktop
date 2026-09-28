@@ -13,6 +13,7 @@ import {
     usePlayingQuality,
     useProgress,
     useQuality,
+    useQualitySwapping,
     useRepeatMode,
     useVolume,
 } from "@/core/trackPlayer";
@@ -57,6 +58,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const quality = useQuality();
     // 实际命中的音质档：请求了无损但被降级到标准时，徽标要跟着说实话
     const playingQuality = usePlayingQuality();
+    // 无缝切换音质中（新音质预缓冲）：播放不受影响，徽标给个呼吸提示
+    const qualitySwapping = useQualitySwapping();
     const muted = volume === 0;
     /**
      * 徽标显示的音质：优先用实际命中的档位（解析降级后徽标跟着实话实说）；
@@ -246,8 +249,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                 <div className="playerbar-right">
                     {badgeQuality && (
                         <button
-                            className="playerbar-quality"
-                            title="选择音质"
+                            className={`playerbar-quality${qualitySwapping ? " swapping" : ""}`}
+                            title={qualitySwapping ? "正在切换音质，缓冲完成后无缝接管" : "选择音质"}
                             onClick={showQualityMenu}
                         >
                             {qualityMeta[badgeQuality]}

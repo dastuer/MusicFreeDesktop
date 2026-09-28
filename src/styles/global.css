@@ -1487,6 +1487,23 @@ img {
     background: var(--hover-bg);
 }
 
+/* 无缝切换音质中：新音质在后台预缓冲、播放不受影响，徽标亮主题色呼吸提示 */
+.playerbar-quality.swapping {
+    color: var(--primary-color);
+    border-color: var(--primary-color);
+    animation: playerbar-quality-swapping 1.2s ease-in-out infinite;
+}
+
+@keyframes playerbar-quality-swapping {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.45;
+    }
+}
+
 /* 音量入口：悬浮图标在上方弹出竖向音量面板（参考网易云）。面板整个悬于按钮上方、
    中间留 6px 缝，靠向下的小箭头补上，鼠标从图标滑进面板不会中途丢 :hover */
 .playerbar-volume-entry {
