@@ -74,6 +74,16 @@ function createWindow() {
         mainWindow?.show();
     });
 
+    // 兜底：Windows 上 titleBarOverlay + show:false 组合下 ready-to-show 可能永不触发，
+    // 表现为进程活着但窗口一直隐藏（点了没反应）。页面加载完成后 1s 仍未显示就直接 show。
+    mainWindow.webContents.once("did-finish-load", () => {
+        setTimeout(() => {
+            if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+                mainWindow.show();
+            }
+        }, 1000);
+    });
+
     // 关窗（红点 / ⌘W）在 macOS 上等于退出应用，所以这里也要把「上次播放会话」要回来。
     // 这是**唯一**的落盘时机：播放进度只在退出前记一次（见 src/core/playProgress.ts），
     // 主进程手里没有「上一版进度」可兜底。

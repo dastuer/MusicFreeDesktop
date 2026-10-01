@@ -56,6 +56,11 @@ const pageMap: Record<string, React.ComponentType<any>> = {
     settings: SettingsPage,
 };
 
+/** Windows 的系统 caption 按钮（最小化/最大化/关闭）画在标题栏右上角，会盖住右上角入口 */
+const IS_WINDOWS = /Windows/.test(navigator.userAgent);
+/** 三个 caption 按钮约 140px，再留 8px 呼吸空隙 */
+const TITLEBAR_RIGHT_INSET = IS_WINDOWS ? 148 : 20;
+
 function MainContent(props: { onOpenDetail: () => void }) {
     const { onOpenDetail } = props;
     const route = useCurrentRoute();
@@ -162,8 +167,8 @@ function MainContent(props: { onOpenDetail: () => void }) {
                             <Icon name="settings" size={17} />
                         </button>
                     </div>
-                    {/* 设置入口右侧留 20px 边距 */}
-                    <div style={{ width: 20 }} />
+                    {/* 设置入口右侧留边距：Windows 要避开系统 caption 按钮区域 */}
+                    <div style={{ width: TITLEBAR_RIGHT_INSET }} />
                 </div>
                 <div className="page-container" key={`${route.path}-${JSON.stringify(route.params)}`}>
                     <Page {...route.params} />

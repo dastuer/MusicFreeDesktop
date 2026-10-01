@@ -235,6 +235,14 @@ function createLyricsWindow() {
         // showInactive 同样是为了不抢焦点
         lyricsWin?.showInactive();
     });
+    // 兜底：Windows 上隐藏启动时 ready-to-show 可能不触发（同 main.ts 的问题）
+    lyricsWin.webContents.once("did-finish-load", () => {
+        setTimeout(() => {
+            if (lyricsWin && !lyricsWin.isDestroyed() && !lyricsWin.isVisible()) {
+                lyricsWin.showInactive();
+            }
+        }, 1000);
+    });
     lyricsWin.on("moved", scheduleSaveBounds);
     lyricsWin.on("closed", () => {
         lyricsWin = null;
