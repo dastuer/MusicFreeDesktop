@@ -1,9 +1,11 @@
 import { SerializedPlugin, getPlugins } from "./ipc";
 
 /**
- * 页面级音源（插件）选择：
- *  - 发现音乐 / 排行榜这类聚合页默认按「默认音源优先」逐个降级尝试（自动模式）；
- *  - 用户也可以显式指定只用某个音源，选择结果按页面分别持久化到 localStorage。
+ * 浏览类页面（发现音乐 / 排行榜）的音源（插件）选择：
+ *  - 默认按「默认音源优先」逐个降级尝试（自动模式）；
+ *  - 用户也可以显式指定只用某个音源，即使失败也不回落到其他音源；
+ *  - 这些页面共用同一份偏好（同一个 localStorage 键）：页面切换即整体重挂载
+ *    （见 App.tsx 的 key），重挂载时重新读取，一处修改处处生效。
  */
 
 /** 「自动」：不指定音源，按默认音源优先顺序逐个降级尝试 */
@@ -17,18 +19,42 @@ export interface ISourceCapability {
     methods: string[];
 }
 
-const storageKey = (page: string) => `pageSource.${page}`;
+/** 两页共用的音源偏好键 */
+const STORAGE_KEY = "browseSourceHash";
+/** 旧版按页面分开存的键：首次读取时合并成一份（发现音乐优先），迁完即删 */
+const LEGACY_KEYS = ["pageSource.home", "pageSource.topList"];
 
-export function getPageSource(page: string): string {
-    return localStorage.getItem(storageKey(page)) || AUTO_SOURCE;
-}
+let migrated = false;
 
-export function setPageSource(page: string, hash: string) {
-    if (!hash || hash === AUTO_SOURCE) {
-        localStorage.removeItem(storageKey(page));
+function migrateLegacyKeys() {
+    if (migrated) {
         return;
     }
-    localStorage.setItem(storageKey(page), hash);
+    migrated = true;
+    for (const key of LEGACY_KEYS) {
+        const legacy = localStorage.getItem(key);
+        if (!legacy) {
+            continue;
+        }
+        // 新键已有值（此前迁移过或恢复过备份）时只清旧键，不能用旧值覆盖新偏好
+        if (!localStorage.getItem(STORAGE_KEY)) {
+            localStorage.setItem(STORAGE_KEY, legacy);
+        }
+        localStorage.removeItem(key);
+    }
+}
+
+export function getBrowseSource(): string {
+    migrateLegacyKeys();
+    return localStorage.getItem(STORAGE_KEY) || AUTO_SOURCE;
+}
+
+export function setBrowseSource(hash: string) {
+    if (!hash || hash === AUTO_SOURCE) {
+        localStorage.removeItem(STORAGE_KEY);
+        return;
+    }
+    localStorage.setItem(STORAGE_KEY, hash);
 }
 
 /** 全部已启用且挂载成功的插件（getPlugins 内部已把默认音源排到最前） */

@@ -8,11 +8,11 @@ import {
     AUTO_SOURCE,
     ISourceCapability,
     findSourcePlugin,
+    getBrowseSource,
     getEnabledPlugins,
-    getPageSource,
     getSourceStatus,
     pickSourcePlugins,
-    setPageSource,
+    setBrowseSource,
 } from "@/core/mediaSource";
 import { readPageSnapshot, writePageSnapshot } from "@/core/pageSnapshot";
 import { tryPluginMethod } from "@/core/pluginUtils";
@@ -31,7 +31,7 @@ const CAPABILITIES: ISourceCapability[] = [
 ];
 const TOPLIST_CAPABILITY = CAPABILITIES[0];
 
-/** 页面标识：同时用作音源偏好的键与快照的键 */
+/** 页面标识：用作快照的键；音源偏好是发现音乐/排行榜共用的一份，见 core/mediaSource */
 const PAGE_KEY = "topList";
 
 /**
@@ -49,7 +49,7 @@ interface ITopListSnapshot {
 
 /** 取当前音源下的快照；没有（首次进入或换过音源）就返回 null，按冷启动处理 */
 function readSnapshot(): ITopListSnapshot | null {
-    return readPageSnapshot<ITopListSnapshot>(PAGE_KEY, getPageSource(PAGE_KEY));
+    return readPageSnapshot<ITopListSnapshot>(PAGE_KEY, getBrowseSource());
 }
 
 function SkeletonGrid() {
@@ -71,7 +71,7 @@ export default function TopListPage() {
     const [initial] = useState(readSnapshot);
     const [hasSnapshot, setHasSnapshot] = useState(!!initial);
     const [plugins, setPlugins] = useState<SerializedPlugin[]>(initial?.plugins ?? []);
-    const [sourceHash, setSourceHash] = useState(() => getPageSource(PAGE_KEY));
+    const [sourceHash, setSourceHash] = useState(() => getBrowseSource());
     const [groups, setGroups] = useState<IMusic.IMusicSheetGroupItem[]>(initial?.groups ?? []);
     const [sourceName, setSourceName] = useState(initial?.sourceName ?? "");
     const [loading, setLoading] = useState(!initial);
@@ -80,7 +80,8 @@ export default function TopListPage() {
     const [reloadKey, setReloadKey] = useState(0);
 
     const changeSource = (hash: string) => {
-        setPageSource(PAGE_KEY, hash);
+        // 共用偏好：这里改了，发现音乐页（重挂载时）同步生效
+        setBrowseSource(hash);
         setSourceHash(hash);
         // 即将展示的是另一个音源的数据，不能沿用当前快照，照常走加载态
         setHasSnapshot(false);

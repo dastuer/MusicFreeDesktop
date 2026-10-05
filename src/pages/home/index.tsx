@@ -7,13 +7,13 @@ import { SerializedPlugin } from "@/core/ipc";
 import {
     ISourceCapability,
     findSourcePlugin,
+    getBrowseSource,
     getEnabledPlugins,
-    getPageSource,
     getSourceStatus,
     hasCapability,
     pickCapabilityPlugins,
     pickSourcePlugins,
-    setPageSource,
+    setBrowseSource,
 } from "@/core/mediaSource";
 import { readPageSnapshot, writePageSnapshot } from "@/core/pageSnapshot";
 import { tryPluginMethod } from "@/core/pluginUtils";
@@ -37,7 +37,7 @@ const CAPABILITIES: ISourceCapability[] = [
 const SHEET_CAPABILITY = CAPABILITIES[0];
 const TOPLIST_CAPABILITY = CAPABILITIES[1];
 
-/** 页面标识：同时用作音源偏好的键与快照的键 */
+/** 页面标识：用作快照的键；音源偏好是发现音乐/排行榜共用的一份，见 core/mediaSource */
 const PAGE_KEY = "home";
 
 interface ISheetCard {
@@ -67,7 +67,7 @@ interface IHomeSnapshot {
 
 /** 取当前音源下的快照；没有（首次进入或换过音源）就返回 null，按冷启动处理 */
 function readSnapshot(): IHomeSnapshot | null {
-    return readPageSnapshot<IHomeSnapshot>(PAGE_KEY, getPageSource(PAGE_KEY));
+    return readPageSnapshot<IHomeSnapshot>(PAGE_KEY, getBrowseSource());
 }
 
 /** 冷启动（无快照）时的骨架屏：结构对齐真实内容，避免切换过来先看到一大块白 */
@@ -115,7 +115,7 @@ export default function HomePage() {
     const [initial] = useState(readSnapshot);
     const [hasSnapshot, setHasSnapshot] = useState(!!initial);
     const [plugins, setPlugins] = useState<SerializedPlugin[]>(initial?.plugins ?? []);
-    const [sourceHash, setSourceHash] = useState(() => getPageSource(PAGE_KEY));
+    const [sourceHash, setSourceHash] = useState(() => getBrowseSource());
     const [tags, setTags] = useState<ICommon.IUnique[]>(initial?.tags ?? []);
     const [activeTag, setActiveTag] = useState<ICommon.IUnique | null>(
         initial?.activeTag ?? null,
@@ -133,7 +133,8 @@ export default function HomePage() {
     const [topListSource, setTopListSource] = useState(initial?.topListSource ?? "");
 
     const changeSource = (hash: string) => {
-        setPageSource(PAGE_KEY, hash);
+        // 共用偏好：这里改了，排行榜页（重挂载时）同步生效
+        setBrowseSource(hash);
         setSourceHash(hash);
         // 即将展示的是另一个音源的数据，不能沿用当前快照，照常走加载态
         setHasSnapshot(false);
@@ -330,7 +331,7 @@ export default function HomePage() {
                         <div className="page-header-title">发现音乐</div>
                         <div className="page-header-sub">
                             {sourcePlugin
-                                ? `已指定音源「${sourcePlugin.name}」，本页数据仅来自该音源`
+                                ? `已指定音源「${sourcePlugin.name}」，发现音乐与排行榜均仅使用该音源`
                                 : "推荐歌单与排行榜：按默认音源优先自动选择"}
                         </div>
                     </div>

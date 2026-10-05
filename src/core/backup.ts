@@ -149,11 +149,14 @@ const PREF_KEYS = [
     "currentMusic",
     "defaultPluginHash",
     "searchHistory",
+    // 发现音乐/排行榜共用的音源偏好（见 core/mediaSource）
+    "browseSourceHash",
     // 播放进度记忆及其开关：和播放列表/当前歌曲同属会话偏好，一起带走才完整
     "playProgress",
     "rememberProgress",
 ];
 
+/** 旧版按页面分开存的音源键：仅用于让旧备份文件仍能恢复（写入后由 mediaSource 迁移合并） */
 const PREF_PREFIXES = ["pageSource."];
 
 function collectPreferences(): Record<string, string> {
