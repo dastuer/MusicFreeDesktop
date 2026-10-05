@@ -72,10 +72,31 @@ export default function SettingsPage() {
         () => isRememberProgressEnabled(),
     );
     const [remembered, setRemembered] = useState(() => getRememberedProgress());
+    // null 表示还没从主进程读到系统登录项的真实状态
+    const [autoLaunch, setAutoLaunch] = useState<boolean | null>(null);
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
         ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
+        ipcInvoke("app:getAutoLaunch").then((s) => setAutoLaunch(!!s?.enabled));
     }, []);
+
+    const changeAutoLaunch = async (next: boolean) => {
+        const res = await ipcInvoke<{ supported: boolean; enabled: boolean }>(
+            "app:setAutoLaunch",
+            next,
+        );
+        if (!res?.supported) {
+            showToast("开发模式（未打包）下不可用，打包安装后才能开机自启动");
+            return;
+        }
+        setAutoLaunch(res.enabled);
+        if (next && !res.enabled) {
+            // macOS 13+ 首次注册要等用户在系统设置里批准，先把出路告诉用户
+            showToast("未能注册登录项，请在系统设置的「登录项」中允许 MusicFreeDesktop");
+        } else {
+            showToast(next ? "已开启开机自启动" : "已关闭开机自启动");
+        }
+    };
 
     const changeDownloadDir = async () => {
         const dir = await ipcInvoke("download:pickDir");
@@ -88,6 +109,20 @@ export default function SettingsPage() {
     return (
         <div style={{ maxWidth: 720 }}>
             <div className="section-title">设置</div>
+
+            <div className="settings-group">
+                <div className="settings-group-title">通用</div>
+                <ToggleRow
+                    label="开机自启动"
+                    desc={
+                        appInfo?.isPackaged === false
+                            ? "开发模式（未打包）下不可用，打包安装后生效"
+                            : "登录系统后自动启动 MusicFreeDesktop"
+                    }
+                    value={autoLaunch === true}
+                    onChange={changeAutoLaunch}
+                />
+            </div>
 
             <div className="settings-group">
                 <div className="settings-group-title">外观</div>

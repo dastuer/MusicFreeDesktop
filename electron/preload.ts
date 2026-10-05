@@ -35,6 +35,8 @@ const allowedChannels = [
     "download:getDir",
     "download:pickDir",
     "app:getInfo",
+    "app:getAutoLaunch",
+    "app:setAutoLaunch",
     "window:setCaptionOverlay",
     "session:save",
     "cache:info",

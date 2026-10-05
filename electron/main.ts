@@ -16,6 +16,7 @@ import mediaCache, {
 import sessionStore from "./services/sessionStore";
 import backupService, { ResumeMode } from "./services/backupService";
 import lyricsWindow from "./services/lyricsWindow";
+import { isSupported as isAutoLaunchSupported, isEnabled as isAutoLaunchEnabled, setEnabled as setAutoLaunchEnabled } from "./services/autoLaunch";
 
 const isMac = process.platform === "darwin";
 const isWin = process.platform === "win32";
@@ -544,6 +545,17 @@ ipcMain.handle("app:getInfo", () => ({
     userDataPath: app.getPath("userData"),
     platform: process.platform,
     isMac,
+    isPackaged: app.isPackaged,
+}));
+
+// 开机自启动（见 services/autoLaunch.ts）
+ipcMain.handle("app:getAutoLaunch", () => ({
+    supported: isAutoLaunchSupported(),
+    enabled: isAutoLaunchEnabled(),
+}));
+ipcMain.handle("app:setAutoLaunch", (_e, enabled: boolean) => ({
+    supported: isAutoLaunchSupported(),
+    enabled: setAutoLaunchEnabled(!!enabled),
 }));
 
 // Windows 的 caption 按钮直接叠在标题栏上：底色不跟主题走会在右上角留一块白
