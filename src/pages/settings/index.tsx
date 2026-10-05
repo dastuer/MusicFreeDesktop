@@ -4,7 +4,9 @@ import { setDefaultQuality, useQuality } from "@/core/trackPlayer";
 import {
     clearAllProgress,
     getRememberedProgress,
+    isAutoPlayOnLaunchEnabled,
     isRememberProgressEnabled,
+    setAutoPlayOnLaunchEnabled,
     setRememberProgressEnabled,
 } from "@/core/playProgress";
 import { ipcInvoke } from "@/core/ipc";
@@ -70,6 +72,9 @@ export default function SettingsPage() {
     const [downloadDir, setDownloadDir] = useState("");
     const [rememberProgress, setRememberProgressState] = useState(
         () => isRememberProgressEnabled(),
+    );
+    const [autoPlayOnLaunch, setAutoPlayOnLaunchState] = useState(
+        () => isAutoPlayOnLaunchEnabled(),
     );
     const [remembered, setRemembered] = useState(() => getRememberedProgress());
     // null 表示还没从主进程读到系统登录项的真实状态
@@ -169,7 +174,11 @@ export default function SettingsPage() {
 
                 <ToggleRow
                     label="记忆播放进度"
-                    desc="退出应用时记住当前歌曲听到的位置。下次启动进度条停在这个位置，按播放接着听（不会自动出声）"
+                    desc={
+                        autoPlayOnLaunch
+                            ? "退出应用时记住当前歌曲听到的位置。下次启动自动播放时从这个位置接着听"
+                            : "退出应用时记住当前歌曲听到的位置。下次启动进度条停在这个位置，按播放接着听（不会自动出声）"
+                    }
                     value={rememberProgress}
                     onChange={(next) => {
                         setRememberProgressEnabled(next);
@@ -205,6 +214,16 @@ export default function SettingsPage() {
                         </button>
                     </div>
                 )}
+
+                <ToggleRow
+                    label="程序启动时自动播放"
+                    desc="打开应用后自动接着播放上次退出时在听的歌；没有在听的歌时，自动播放播放队列的第一首。关闭时启动不出声，要不要播放由你按播放决定"
+                    value={autoPlayOnLaunch}
+                    onChange={(next) => {
+                        setAutoPlayOnLaunchEnabled(next);
+                        setAutoPlayOnLaunchState(next);
+                    }}
+                />
             </div>
 
             <div className="settings-group">

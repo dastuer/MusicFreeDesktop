@@ -154,6 +154,7 @@ const PREF_KEYS = [
     // 播放进度记忆及其开关：和播放列表/当前歌曲同属会话偏好，一起带走才完整
     "playProgress",
     "rememberProgress",
+    "autoPlayOnLaunch",
 ];
 
 /** 旧版按页面分开存的音源键：仅用于让旧备份文件仍能恢复（写入后由 mediaSource 迁移合并） */

@@ -56,6 +56,7 @@ const END_GAP = 5;
 const MAX_SESSION_ARTWORK = 64 * 1024;
 
 export const REMEMBER_PROGRESS_KEY = "rememberProgress";
+export const AUTO_PLAY_ON_LAUNCH_KEY = "autoPlayOnLaunch";
 
 /** 收集器由播放器注册：退出时才知道当时在听哪首、听到哪儿 */
 let collector: (() => IProgressSnapshot | null) | null = null;
@@ -92,6 +93,18 @@ export function isRememberProgressEnabled(): boolean {
 
 export function setRememberProgressEnabled(enabled: boolean) {
     setConfig(REMEMBER_PROGRESS_KEY, !!enabled);
+}
+
+/**
+ * 「程序启动时自动播放」：默认关。
+ * 默认开着会在更新完应用的第一次启动突然出声，这种变化该由用户主动选。
+ */
+export function isAutoPlayOnLaunchEnabled(): boolean {
+    return getConfig(AUTO_PLAY_ON_LAUNCH_KEY, false) === true;
+}
+
+export function setAutoPlayOnLaunchEnabled(enabled: boolean) {
+    setConfig(AUTO_PLAY_ON_LAUNCH_KEY, !!enabled);
 }
 
 /** ---------- 会话文件（主进程 data/session.json） ---------- */

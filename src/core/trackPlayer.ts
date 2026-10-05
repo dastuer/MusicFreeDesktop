@@ -16,6 +16,7 @@ import {
     getInitialSession,
     getRestoredSession,
     getStoredPlayList,
+    isAutoPlayOnLaunchEnabled,
     saveSessionPlayList,
 } from "./playProgress";
 
@@ -319,6 +320,13 @@ class TrackPlayer extends EventEmitter {
 
         // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
         this.restoreSession();
+
+        // 「程序启动时自动播放」：开关开着且确实恢复了内容时，走与按播放键完全相同的路径
+        // （togglePlay：有恢复的当前曲就解析并从记忆位置续播，没有就放队列第一首；
+        // 两者都没有时它自己什么都不做）。解析失败照常走 PlayFailed 提示，不静默死循环。
+        if (isAutoPlayOnLaunchEnabled()) {
+            void this.togglePlay();
+        }
     }
 
     /**

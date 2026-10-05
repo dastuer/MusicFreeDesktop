@@ -311,7 +311,7 @@ sequenceDiagram
 
 | 存储 | 位置 | 存放内容 | 访问方式 |
 | --- | --- | --- | --- |
-| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲（会话文件缺失时的兜底）、`rememberProgress` 开关、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>`、`searchHistory` | `appConfig.ts` 或直接 `localStorage` |
+| `localStorage` | 渲染进程 Chromium 存储 | 播放列表、当前歌曲（会话文件缺失时的兜底）、`rememberProgress` / `autoPlayOnLaunch` 开关、循环模式、音量、主题、默认音质、`defaultPluginHash`、`pageSource.<page>`、`searchHistory` | `appConfig.ts` 或直接 `localStorage` |
 | `configStore` | `~/Library/Application Support/musicfree-desktop/data/store.json` | 插件元信息 `plugin.meta`、用户歌单 `userSheets`、播放历史 `musicHistory`、本地音乐列表 `localMusic.list`、下载任务 `download.tasks` / `download.dir`、备份设置 `backup.*` | `ipcInvoke("config:get"/"config:set")` |
 | `sessionStore` | `~/Library/Application Support/musicfree-desktop/data/session.json` | **上次播放会话的唯一来源**：当前歌曲（完整条目）+ 听到哪儿 + 播放队列 | `ipcInvoke("session:save")`；启动时 preload 用 `sendSync` 同步取 |
 
@@ -552,7 +552,7 @@ if (this.pendingPlayId === playId) { setAtom(musicStateAtom, "playing"); }
 
 #### 上次播放的歌曲与进度（`src/core/playProgress.ts` + `electron/services/sessionStore.ts`）
 
-**只记退出时在听的那一首**听到哪儿，且**只在退出前记一次**（一条 `{music, position, duration, updatedAt}`，写进主进程的 `data/session.json`）。**重启不自动播放**：`restoreSession()` 只把播放栏和进度条摆回去，用户按播放时再从那里接着听。
+**只记退出时在听的那一首**听到哪儿，且**只在退出前记一次**（一条 `{music, position, duration, updatedAt}`，写进主进程的 `data/session.json`）。默认**重启不自动播放**：`restoreSession()` 只把播放栏和进度条摆回去，用户按播放时再从那里接着听；开着「程序启动时自动播放」（`autoPlayOnLaunch`）时 `setup()` 在恢复会话后走一遍 `togglePlay()`，与按播放键完全同路径（有恢复的当前曲就从记忆位置续播，没有就放队列第一首）。
 
 | 位置 | 职责 |
 | --- | --- |
@@ -561,10 +561,10 @@ if (this.pendingPlayId === playId) { setAtom(musicStateAtom, "playing"); }
 | `TrackPlayer.restoreSession()` / `play()` | 启动时 `getRestoredSession()` 拿到「上次那首歌 + 位置」，写进 `currentMusicAtom` / `progressAtom`（首帧就是记忆位置，不是 00:00），并把位置存进 `pendingStartPosition`；`play()` 用它做 `applyStartPosition()`，**挂上音源后即清零**（失败重试仍能用，暂停再播不会重复跳回去） |
 | `sessionStore` + preload | 启动时 `sendSync` 同步取快照（几百字节，主进程随取随回）；退出时由主进程反向索要，见 §4.3 |
 
-- **启动绝不自动出声**：曾经实现过「启动续播」（靠一个 `lastMusicState` 闸门 + `autoResumeOnLaunch` 开关），已按要求移除。重启后「有位置但不出声」是刻意行为，别再顺手加回去。
+- **默认不自动出声**：「有位置但不出声」是默认行为；唯一的自动起播入口是设置页「程序启动时自动播放」（`autoPlayOnLaunch`，默认关，在 `setup()` 末尾消费）。开关开着时启动即解析音源并播放，解析失败照常走 PlayFailed 提示链路。
 - **退出时的握手顺序**：主进程先 `preventDefault` 挂起退出，渲染进程**必须等 `session:save` 的 Promise resolve 之后**才回执 `session:saved` —— 早回执等于最后一段进度没写进文件。
 - **播放器没起来 / 当前没有歌时什么都不写**：那种「没有进度」是假象（比如页面刚加载完就被关掉），写 null 会把上次退出时记的好记录清掉。要作废记录只有 `clearAllProgress()`（设置页「清除」/ `clearPlayListAndStop()`；注意**只清空队列不会**——当前那首要接着播，退出时仍该记住听到哪儿）。
-- **设置项**（设置页「播放」组）：`rememberProgress` 关掉后既不记也不续（仍还原歌曲，位置归 0）；另有一行显示「已记忆的播放进度」并可清除（清除会清掉会话文件里的歌曲/进度，但**不动队列**）。
+- **设置项**（设置页「播放」组）：`rememberProgress` 关掉后既不记也不续（仍还原歌曲，位置归 0）；`autoPlayOnLaunch` 控制启动是否自动接着播（关掉时描述里「不会自动出声」，开着时「记忆播放进度」的描述跟着改为「自动播放时从这个位置接着听」）；另有一行显示「已记忆的播放进度」并可清除（清除会清掉会话文件里的歌曲/进度，但**不动队列**）。
 - **`session.json` 坏了丢了只会丢「回到上次播放」这一个功能**，`setup()` 里一律 try/catch 并降级。
 
 #### 歌词

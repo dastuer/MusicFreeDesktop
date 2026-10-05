@@ -184,8 +184,8 @@ export default function App() {
     const [musicDetailVisible, setMusicDetailVisible] = useState(false);
 
     useEffect(() => {
-        // setup() 只还原播放列表 / 当前歌曲，并把进度条摆到上次听到的位置，
-        // 不会自动出声：重启后要不要接着听，由用户按播放决定。
+        // setup() 还原播放列表 / 当前歌曲，并把进度条摆到上次听到的位置，默认不出声：
+        // 要不要接着听由用户按播放决定；仅当「程序启动时自动播放」开着才自动起播。
         TrackPlayerSingleton.setup();
         // 桌面歌词：接好「状态推送 → 歌词窗」与「歌词窗遥控 → 播放器」两条链路
         setupDesktopLyrics();
