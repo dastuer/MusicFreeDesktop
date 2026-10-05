@@ -297,6 +297,7 @@ export default function Sidebar() {
                         return (
                             <SheetDraggable
                                 key={sheet.id}
+                                active={isActiveSheet(sheet.id)}
                                 offsetY={drag?.id === sheet.id ? drag.y : 0}
                                 dragging={!!draggingSelf}
                                 shiftY={shiftY}
@@ -344,6 +345,7 @@ export default function Sidebar() {
  * 两者必须分层，否则 Draggable 写入的 translate 会把让位位移覆盖掉。
  */
 function SheetDraggable(props: {
+    active: boolean;
     offsetY: number;
     dragging: boolean;
     shiftY: number;
@@ -369,7 +371,7 @@ function SheetDraggable(props: {
                 style={{ position: "relative", zIndex: props.dragging ? 10 : undefined }}
             >
                 <div
-                    className={`sidebar-item${props.dragging ? " dragging" : ""}`}
+                    className={`sidebar-item${props.active ? " active" : ""}${props.dragging ? " dragging" : ""}`}
                     style={{
                         transform:
                             !props.dragging && props.shiftY
