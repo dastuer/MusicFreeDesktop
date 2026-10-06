@@ -26,6 +26,10 @@ import {
     startPlaylistMatchSession,
     useMatchSession,
 } from "@/core/neteaseMatchSession";
+import {
+    readPageSnapshot,
+    writePageSnapshot,
+} from "@/core/pageSnapshot";
 import { navigate } from "@/core/router";
 
 /**
@@ -34,21 +38,36 @@ import { navigate } from "@/core/router";
  *  - 推荐歌单（每日推荐 + 个性化网格）：点进详情页整单匹配，离开页面匹配在后台继续。
  *
  * 匹配都跑在模块级会话（core/neteaseMatchSession）里，本页只负责拉数据、触发和订阅进度。
+ *
+ * 重挂载不白屏：匹配结果在会话里、推荐歌单网格在页面快照里（按日期分键，跨天自然失效），
+ * 切回本页先用它们渲染首帧，网易云接口在后台静默刷新。只有当天首次进入才看到「正在连接」。
  */
+
+const PAGE_KEY = "neteaseDaily";
 
 function dateStr(d = new Date()) {
     const p = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+interface INeteaseDailySnapshot {
+    playlists: INeteasePlaylistCard[];
+}
+
 type Phase = "loading" | "anonymous" | "ready";
 
 export default function NeteaseDailyPage() {
-    const [phase, setPhase] = useState<Phase>("loading");
+    // 快照/会话任一存在就能立即出内容：phase 初值据此跳过「正在连接」
+    const [initialSnapshot] = useState(() =>
+        readPageSnapshot<INeteaseDailySnapshot>(PAGE_KEY, dateStr()),
+    );
+    const [phase, setPhase] = useState<Phase>(initialSnapshot ? "ready" : "loading");
     const [expired, setExpired] = useState(false);
     const [songs, setSongs] = useState<INeteaseSong[]>([]);
     const [dailyError, setDailyError] = useState("");
-    const [playlists, setPlaylists] = useState<INeteasePlaylistCard[]>([]);
+    const [playlists, setPlaylists] = useState<INeteasePlaylistCard[]>(
+        initialSnapshot?.playlists ?? [],
+    );
     const [playlistsError, setPlaylistsError] = useState("");
     const [reloadKey, setReloadKey] = useState(0);
     // 刷新按钮带来的「本次不走缓存」标记：从点击处传到异步加载完成后的 startMatchSession
@@ -60,12 +79,9 @@ export default function NeteaseDailyPage() {
 
     useEffect(() => {
         let cancelled = false;
-        setPhase("loading");
-        setExpired(false);
-        setSongs([]);
-        setPlaylists([]);
         setDailyError("");
         setPlaylistsError("");
+        // 刻意不清 songs/playlists：有内容时这一轮是后台静默刷新，新数据到了再替换
         (async () => {
             try {
                 const status = await getNeteaseStatus();
@@ -117,16 +133,22 @@ export default function NeteaseDailyPage() {
             if (cancelled) {
                 return;
             }
-            if (needLogin && !dailySongs.length) {
-                setDailyError("网易云登录已过期，请重新扫码登录");
-            }
-            if (needLogin && !dailySongs.length && !cards.length) {
+            if (needLogin) {
+                // 登录过期：旧内容即使还在也拉不动新数据了，引导重新扫码
                 setExpired(true);
                 setPhase("anonymous");
                 return;
             }
-            setSongs(dailySongs);
-            setPlaylists(cards);
+            if (dailySongs.length) {
+                setSongs(dailySongs);
+            }
+            if (cards.length) {
+                setPlaylists(cards);
+                // 只在拿到有效数据时写快照（约定：失败/空态不写，避免覆盖好数据）
+                writePageSnapshot<INeteaseDailySnapshot>(PAGE_KEY, dateStr(), {
+                    playlists: cards,
+                });
+            }
             setPhase("ready");
             if (dailySongs.length) {
                 // 同 key 会话在跑/已完成时内部会复用；刷新按钮已先 reset 并带上不走缓存标记
@@ -186,23 +208,25 @@ export default function NeteaseDailyPage() {
     };
 
     const headerSub = (() => {
-        if (phase !== "ready" || !session) {
-            return "网易云账号的个性化推荐，匹配后可直接播放、一键入库";
+        if (session) {
+            if (session.status === "running") {
+                return `正在匹配 ${session.done}/${session.total}，命中 ${session.matchedCount}${
+                    session.cachedCount ? `（缓存 ${session.cachedCount}）` : ""
+                }`;
+            }
+            if (session.status === "error") {
+                return session.error ?? "匹配失败";
+            }
+            if (session.status === "done") {
+                return `命中 ${session.matchedCount}/${session.total}${
+                    session.lowCount ? `（低置信 ${session.lowCount}）` : ""
+                }${session.missedCount ? `，未匹配 ${session.missedCount}` : ""}`;
+            }
         }
-        if (session.status === "running") {
-            return `正在匹配 ${session.done}/${session.total}，命中 ${session.matchedCount}${
-                session.cachedCount ? `（缓存 ${session.cachedCount}）` : ""
-            }`;
+        if (phase === "loading") {
+            return "正在连接网易云账号…";
         }
-        if (session.status === "error") {
-            return session.error ?? "匹配失败";
-        }
-        if (session.status === "loading") {
-            return "正在获取曲目…";
-        }
-        return `命中 ${session.matchedCount}/${session.total}${
-            session.lowCount ? `（低置信 ${session.lowCount}）` : ""
-        }${session.missedCount ? `，未匹配 ${session.missedCount}` : ""}`;
+        return "网易云账号的个性化推荐，匹配后可直接播放、一键入库";
     })();
 
     return (
@@ -229,8 +253,6 @@ export default function NeteaseDailyPage() {
                 </div>
             </div>
 
-            {phase === "loading" && <div className="empty-hint">正在连接网易云账号…</div>}
-
             {phase === "anonymous" && (
                 <div className="empty-hint">
                     {expired
@@ -244,12 +266,11 @@ export default function NeteaseDailyPage() {
                 </div>
             )}
 
-            {phase === "ready" && (
+            {phase !== "anonymous" && (
                 <>
-                    {songs.length > 0 ? (
-                        !session ? (
-                            <div className="empty-hint">正在准备匹配…</div>
-                        ) : session.status === "running" || session.status === "loading" ? (
+                    {/* 歌曲区：会话存在就直接用会话渲染（重挂载不重跑），否则按冷启动兜底 */}
+                    {session ? (
+                        session.status === "running" || session.status === "loading" ? (
                             <NeteaseMatchingPanel view={session} />
                         ) : session.status === "error" ? (
                             <div className="source-note">{session.error}</div>
@@ -290,6 +311,10 @@ export default function NeteaseDailyPage() {
                                 />
                             </>
                         )
+                    ) : phase === "loading" ? (
+                        <div className="empty-hint">正在连接网易云账号…</div>
+                    ) : songs.length > 0 ? (
+                        <div className="empty-hint">正在准备匹配…</div>
                     ) : (
                         !dailyError && <div className="empty-hint">今天暂时没有推荐歌曲</div>
                     )}
@@ -297,6 +322,7 @@ export default function NeteaseDailyPage() {
                         <div className="source-note">每日推荐歌曲获取失败：{dailyError}</div>
                     )}
 
+                    {/* 歌单区：快照/已有数据直接展示，后台刷新静默替换 */}
                     {(playlists.length > 0 || playlistsError) && (
                         <section className="home-section">
                             <div className="section-title">推荐歌单</div>
