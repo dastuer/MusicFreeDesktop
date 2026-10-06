@@ -19,6 +19,7 @@ import { TrackPlayerSingleton } from "@/core/trackPlayer";
 
 const mainNavItems = [
     { path: "home", title: "发现音乐", icon: "home" },
+    { path: "neteaseDaily", title: "每日推荐", icon: "netease" },
     { path: "topList", title: "排行榜", icon: "toplist" },
     { path: "history", title: "最近播放", icon: "history" },
     { path: "localMusic", title: "本地音乐", icon: "localMusic" },

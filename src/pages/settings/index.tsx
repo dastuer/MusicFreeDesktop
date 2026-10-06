@@ -13,6 +13,7 @@ import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
 import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
+import NeteaseSection from "./NeteaseSection";
 
 /**
  * 设置页：外观 / 播放 / 下载 / 存储与缓存 / 关于
@@ -128,6 +129,8 @@ export default function SettingsPage() {
                     onChange={changeAutoLaunch}
                 />
             </div>
+
+            <NeteaseSection />
 
             <div className="settings-group">
                 <div className="settings-group-title">外观</div>

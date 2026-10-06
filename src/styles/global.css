@@ -2842,3 +2842,115 @@ body.in-desktop-lyrics-window {
     opacity: 1;
     background: rgba(255, 255, 255, 0.14);
 }
+
+/* ---------- 网易云每日推荐 ---------- */
+
+.netease-header-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.netease-missed {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.netease-missed > summary {
+    cursor: pointer;
+    user-select: none;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--hover-bg);
+    width: fit-content;
+}
+
+.netease-missed > summary:hover {
+    color: var(--text-color);
+}
+
+.netease-missed-list {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: var(--hover-bg);
+    border-radius: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.9;
+    color: var(--text-secondary);
+}
+
+/* 歌单导入弹窗 */
+.netease-modal-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--mask);
+    z-index: 260;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fade-in 0.18s ease;
+    -webkit-app-region: no-drag;
+}
+
+.netease-modal {
+    background: var(--page-bg);
+    border-radius: 12px;
+    width: 560px;
+    max-width: calc(100vw - 80px);
+    max-height: 72vh;
+    padding: 20px 24px;
+    overflow-y: auto;
+    animation: fade-in 0.18s ease;
+}
+
+.netease-modal-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-color);
+    margin-bottom: 12px;
+}
+
+.netease-modal-hint {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin: 8px 0;
+    line-height: 1.6;
+}
+
+.netease-modal-error {
+    color: var(--primary-color);
+    font-size: 13px;
+    margin: 8px 0;
+    line-height: 1.6;
+}
+
+.netease-summary {
+    font-size: 13px;
+    color: var(--text-color);
+    margin: 10px 0 4px;
+}
+
+.netease-progress {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--hover-bg);
+    overflow: hidden;
+    margin: 12px 0;
+}
+
+.netease-progress > div {
+    height: 100%;
+    background: var(--primary-color);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.netease-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 16px;
+}

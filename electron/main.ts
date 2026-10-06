@@ -16,6 +16,7 @@ import mediaCache, {
 import sessionStore from "./services/sessionStore";
 import backupService, { ResumeMode } from "./services/backupService";
 import lyricsWindow from "./services/lyricsWindow";
+import neteaseService from "./services/neteaseService";
 import { isSupported as isAutoLaunchSupported, isEnabled as isAutoLaunchEnabled, setEnabled as setAutoLaunchEnabled } from "./services/autoLaunch";
 
 const isMac = process.platform === "darwin";
@@ -160,6 +161,8 @@ app.whenReady().then(() => {
         configStore,
         getMainWindow: () => mainWindow,
     });
+    // 网易云账号（扫码登录）与每日推荐
+    neteaseService.setup();
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
@@ -547,6 +550,34 @@ ipcMain.handle("app:getInfo", () => ({
     isMac,
     isPackaged: app.isPackaged,
 }));
+
+/** ---------- 网易云账号与每日推荐（见 services/neteaseService.ts） ---------- */
+
+// 数据类接口统一包 {success, data | message, needLogin}：needLogin=true 时渲染层引导重新扫码
+async function wrapNetease<T>(fn: () => Promise<T>) {
+    try {
+        return { success: true, data: await fn() };
+    } catch (e: any) {
+        const needLogin = e instanceof neteaseService.NeedLoginError;
+        console.warn(`[netease] ${needLogin ? "需要登录" : "请求失败"}:`, e?.message);
+        return {
+            success: false,
+            needLogin,
+            message: e?.message ?? String(e),
+        };
+    }
+}
+
+ipcMain.handle("netease:getStatus", () => neteaseService.getStatus());
+ipcMain.handle("netease:login", () => neteaseService.openLoginWindow());
+ipcMain.handle("netease:logout", () => neteaseService.logout());
+ipcMain.handle("netease:getDailySongs", () => wrapNetease(() => neteaseService.getDailySongs()));
+ipcMain.handle("netease:getRecommendPlaylists", () =>
+    wrapNetease(() => neteaseService.getRecommendPlaylists()));
+ipcMain.handle("netease:getPersonalizedPlaylists", () =>
+    wrapNetease(() => neteaseService.getPersonalizedPlaylists()));
+ipcMain.handle("netease:getPlaylistDetail", (_e, id: string) =>
+    wrapNetease(() => neteaseService.getPlaylistDetail(String(id))));
 
 // 开机自启动（见 services/autoLaunch.ts）
 ipcMain.handle("app:getAutoLaunch", () => ({

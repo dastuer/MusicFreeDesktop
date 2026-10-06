@@ -29,6 +29,7 @@ import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
 
 import HomePage from "./pages/home";
+import NeteaseDailyPage from "./pages/neteaseDaily";
 import SearchPage from "./pages/search";
 import SheetDetailPage from "./pages/sheetDetail";
 import AlbumDetailPage from "./pages/albumDetail";
@@ -43,6 +44,7 @@ import SettingsPage from "./pages/settings";
 
 const pageMap: Record<string, React.ComponentType<any>> = {
     home: HomePage,
+    neteaseDaily: NeteaseDailyPage,
     search: SearchPage,
     sheetDetail: SheetDetailPage,
     albumDetail: AlbumDetailPage,
