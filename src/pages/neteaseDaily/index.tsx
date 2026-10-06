@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
-import MusicList from "@/components/base/MusicList";
+import MusicList, { IMusicListPendingItem } from "@/components/base/MusicList";
 import { showToast } from "@/components/base/Toast";
 import {
     addMusicToSheetMany,
@@ -181,6 +181,37 @@ export default function NeteaseDailyPage() {
     );
     const matching = matchTotal > 0 && matchDone < matchTotal;
 
+    /**
+     * 占位行：还没出结果的歌按原顺序铺在列表里带匹配动效；
+     * 出了结果的（含未命中/重复）定格为置灰占位，命中的被真实行替换。
+     * 全程 30 行数量不变，只是逐行「点亮」。
+     */
+    const pendingItems = useMemo(() => {
+        if (phase !== "ready") {
+            return [];
+        }
+        return songs
+            .map((s, i) => {
+                const m = matches[s.id];
+                if (m && m.status === "matched" && !m.duplicate) {
+                    return null;
+                }
+                return {
+                    key: s.id,
+                    index: i + 1,
+                    title: s.name,
+                    artist: s.artists.join("/"),
+                    album: s.album,
+                    artwork: s.artwork,
+                    state: (!m ? "pending" : m.duplicate ? "duplicate" : "missed") as
+                        | "pending"
+                        | "missed"
+                        | "duplicate",
+                };
+            })
+            .filter(Boolean) as IMusicListPendingItem[];
+    }, [phase, songs, matches]);
+
     const saveDailyAsSheet = async () => {
         if (!matchedItems.length) {
             return;
@@ -295,6 +326,8 @@ export default function NeteaseDailyPage() {
                             listId={`netease-daily-${dateStr()}`}
                             searchable
                             selectable={false}
+                            pendingItems={pendingItems}
+                            className={matching ? "list-matching" : undefined}
                         />
                     ) : (
                         !dailyError && <div className="empty-hint">今天暂时没有推荐歌曲</div>

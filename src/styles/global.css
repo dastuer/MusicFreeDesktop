@@ -2954,3 +2954,72 @@ body.in-desktop-lyrics-window {
     gap: 10px;
     margin-top: 16px;
 }
+
+/* ---------- 每日推荐：列表匹配动效 ---------- */
+
+@keyframes netease-spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes netease-shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+}
+
+@keyframes netease-row-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+}
+
+/* 匹配进行中：新落地的行带一次轻微入场（key 稳定的行不会重复播放） */
+.music-list.list-matching .music-row {
+    animation: netease-row-in 0.28s ease;
+}
+
+.music-row.pending-row {
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+}
+
+/* 还在匹配的占位行：一道微光周期性扫过 */
+.music-row.pending-row:not(.resolved)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+        100deg,
+        transparent 35%,
+        var(--hover-bg) 50%,
+        transparent 65%
+    );
+    animation: netease-shimmer 1.8s ease-in-out infinite;
+}
+
+/* 已定论的占位行（未命中/重复）：置灰定格，不再有动效 */
+.music-row.pending-row.resolved {
+    opacity: 0.55;
+}
+
+.pending-spin {
+    animation: netease-spin 1.4s linear infinite;
+}
+
+.pending-index {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+.pending-state-tag {
+    font-size: 11px;
+    color: var(--primary-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 100%;
+}
+
+.pending-state-tag.resolved {
+    color: var(--text-tertiary);
+}

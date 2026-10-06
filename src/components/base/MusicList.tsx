@@ -139,6 +139,8 @@ interface IMusicListProps {
      */
     selectMode?: boolean;
     onSelectModeChange?: (selectMode: boolean) => void;
+    /** 占位行（匹配中/未命中等），渲染在真实行之后、搜索过滤时隐藏 */
+    pendingItems?: IMusicListPendingItem[];
 }
 
 export interface IMusicListPagination {
@@ -161,6 +163,22 @@ export interface IMusicListPagination {
     onPageSizeChange: (size: number) => void;
 }
 
+/**
+ * 占位行（渲染在真实行之后）：列表内容还没就绪、但元数据已知的场景，
+ * 比如每日推荐逐首匹配——pending 态带旋转音符 + 微光扫过动效，
+ * 结果落地（matched）后该行被同位置的真实行替换，missed/duplicate 置灰定格。
+ */
+export interface IMusicListPendingItem {
+    key: string;
+    /** 原列表序号（从 1 计），已定论的占位行显示它 */
+    index: number;
+    title: string;
+    artist?: string;
+    album?: string;
+    artwork?: string;
+    state: "pending" | "missed" | "duplicate";
+}
+
 export default function MusicList(props: IMusicListProps) {
     const {
         musicList,
@@ -180,6 +198,7 @@ export default function MusicList(props: IMusicListProps) {
         searchable = false,
         selectMode: selectModeProp,
         onSelectModeChange,
+        pendingItems,
     } = props;
     const currentMusic = useCurrentMusic();
     const likesVersion = useAtomValue(likesVersionAtom);
@@ -793,6 +812,49 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 );
             })}
+            {/* 占位行：结构与真实行同构（含多选列），搜索过滤时隐藏避免「过滤后的结果挂着占位尾巴」 */}
+            {!isSearching &&
+                pendingItems?.map((p) => (
+                    <div
+                        key={`pending-${p.key}`}
+                        className={`music-row pending-row${p.state !== "pending" ? " resolved" : ""}`}
+                    >
+                        {selectable && selectMode && <div />}
+                        <div className="music-row-index">
+                            {p.state === "pending" ? (
+                                <Icon
+                                    name="musicNote"
+                                    size={14}
+                                    className="pending-spin"
+                                    style={{ color: "var(--primary-color)" }}
+                                />
+                            ) : (
+                                <span className="pending-index">{p.index}</span>
+                            )}
+                        </div>
+                        <div className="music-row-main">
+                            <Cover src={p.artwork} size={40} borderRadius={5} />
+                            <div className="music-row-info">
+                                <span className="music-row-title">{p.title}</span>
+                                <div className="music-row-sub">
+                                    <span className="music-row-artist">{p.artist}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="music-row-album">{p.album}</div>
+                        <div className="music-row-actions">
+                            <span
+                                className={`pending-state-tag${p.state !== "pending" ? " resolved" : ""}`}
+                            >
+                                {p.state === "pending"
+                                    ? "匹配中"
+                                    : p.state === "duplicate"
+                                      ? "重复"
+                                      : "未命中"}
+                            </span>
+                        </div>
+                    </div>
+                ))}
             {showSkeleton && (
                 <div className="music-skeleton" aria-hidden>
                     {SKELETON_WIDTHS.map((w, i) => (
@@ -943,7 +1005,7 @@ export default function MusicList(props: IMusicListProps) {
                     </div>
                 </div>
             )}
-            {!loading && !isSearching && !musicList.length && (
+            {!loading && !isSearching && !musicList.length && !pendingItems?.length && (
                 <div className="empty-hint">这里空空如也</div>
             )}
             {selectable && selectMode && (
