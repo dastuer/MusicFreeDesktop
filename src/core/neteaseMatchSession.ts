@@ -32,6 +32,8 @@ export interface IMatchSessionView {
     lowCount: number;
     /** 本次是否跳过了缓存（刷新按钮的强制重配） */
     ignoreCache?: boolean;
+    /** 会话对应的网易云曲目原列表（展示编号/对照用；loading 阶段曲目未拉到，为空） */
+    songs: INeteaseSong[];
     /** 按歌曲原顺序排列的全部已落地结果（running 时是实时快照） */
     matches: ISongMatch[];
 }
@@ -69,6 +71,7 @@ function viewOf(s: ISession): IMatchSessionView {
         missedCount: matches.filter((m) => m.status === "missed" || m.duplicate).length,
         lowCount: matched.filter((m) => m.viaDetail || m.low).length,
         ignoreCache: s.ignoreCache,
+        songs: s.songs,
         matches,
     };
 }

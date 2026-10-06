@@ -24,6 +24,7 @@ import {
     openNeteaseLogin,
 } from "@/core/netease";
 import {
+    getMatchSession,
     resetAllMatchSessions,
     resetMatchSession,
     startMatchSession,
@@ -31,9 +32,9 @@ import {
     useMatchSession,
 } from "@/core/neteaseMatchSession";
 import {
-    readPageSnapshot,
-    writePageSnapshot,
-} from "@/core/pageSnapshot";
+    readGridCache,
+    writeGridCache,
+} from "@/core/neteaseGridCache";
 import { navigate } from "@/core/router";
 
 /**
@@ -43,51 +44,55 @@ import { navigate } from "@/core/router";
  *
  * 匹配都跑在模块级会话（core/neteaseMatchSession）里，本页只负责拉数据、触发和订阅进度。
  *
- * 重挂载不白屏：匹配结果在会话里、推荐歌单网格在页面快照里（按日期分键，跨天自然失效），
- * 切回本页先用它们渲染首帧，网易云接口在后台静默刷新。只有当天首次进入才看到「正在连接」。
+ * 数据刷新时机（刻意收紧，防止自动刷新把正在看/正在播放的歌单卡片从网格里挤掉）：
+ *  - 推荐歌单网格只在三种情况下重新拉取：手动点刷新、跨天后的首次加载、更换网易云账号
+ *    （含重启后当天首次进入但缓存缺失）。其余情况——反复进出页面、同一天内重启应用——
+ *    一律用 localStorage 网格缓存（core/neteaseGridCache），页面怎么切网格都不动。
+ *  - 歌曲区完全由模块级会话驱动：会话在跑/已完成时重挂载不重拉；只有无会话
+ *    （当天首次、重启后、或上次匹配出错）才拉取并起会话。
  */
-
-const PAGE_KEY = "neteaseDaily";
 
 function dateStr(d = new Date()) {
     const p = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** 快照按「日期@账号」分键：换账号不会拿到上个账号的推荐网格 */
-function snapshotSourceKey(profile?: INeteaseProfile | null) {
-    return `${dateStr()}@${profile?.userId ?? ""}`;
-}
-
-interface INeteaseDailySnapshot {
-    playlists: INeteasePlaylistCard[];
-}
-
 type Phase = "loading" | "anonymous" | "ready";
 
 export default function NeteaseDailyPage() {
-    // 快照/会话任一存在就能立即出内容：phase 初值据此跳过「正在连接」
-    const [initialSnapshot] = useState(() =>
-        readPageSnapshot<INeteaseDailySnapshot>(
-            PAGE_KEY,
-            snapshotSourceKey(getCachedNeteaseProfile()),
-        ),
-    );
-    const [phase, setPhase] = useState<Phase>(initialSnapshot ? "ready" : "loading");
+    // 当天的网格缓存（今天 + 同账号才可用；重启后账号还未知，effect 里再校验一次）：
+    // 有它本页首帧就直接出网格，且当次挂载不会后台重拉
+    const [cachedGrid] = useState(() => {
+        const cache = readGridCache();
+        if (!cache || cache.date !== dateStr() || !cache.playlists.length) {
+            return null;
+        }
+        const known = getCachedNeteaseProfile();
+        if (known && cache.userId && cache.userId !== known.userId) {
+            return null;
+        }
+        return cache;
+    });
+    const [phase, setPhase] = useState<Phase>(cachedGrid ? "ready" : "loading");
     const [expired, setExpired] = useState(false);
     const [songs, setSongs] = useState<INeteaseSong[]>([]);
     const [dailyError, setDailyError] = useState("");
     const [playlists, setPlaylists] = useState<INeteasePlaylistCard[]>(
-        initialSnapshot?.playlists ?? [],
+        cachedGrid?.playlists ?? [],
     );
     const [playlistsError, setPlaylistsError] = useState("");
     const [reloadKey, setReloadKey] = useState(0);
+    // 歌曲区是否在等拉取/起会话：有会话时展示全归会话，不该闪「今天暂时没有推荐歌曲」
+    const [songsPending, setSongsPending] = useState(() => {
+        const s = getMatchSession(`daily:${dateStr()}`);
+        return !s || s.status === "error";
+    });
     /** 当前账号：换号时要把旧账号的会话与页面数据全部作废（见下方 effect） */
     const [profile, setProfile] = useState<INeteaseProfile | null>(() =>
         getCachedNeteaseProfile(),
     );
     const profileRef = useRef<INeteaseProfile | null>(profile);
-    // 刷新按钮带来的「本次不走缓存」标记：从点击处传到异步加载完成后的 startMatchSession
+    // 刷新按钮带来的「本次不走缓存」标记：effect 开头消费一次，只作用于这一轮
     const ignoreCacheRef = useRef(false);
 
     // 会话按日期隔离：跨天自然失效重跑；页面重挂载复用进行中/已完成的会话
@@ -98,7 +103,12 @@ export default function NeteaseDailyPage() {
         let cancelled = false;
         setDailyError("");
         setPlaylistsError("");
-        // 刻意不清 songs/playlists：有内容时这一轮是后台静默刷新，新数据到了再替换
+        // 手动刷新标记在 effect 开头消费一次：只作用于这一轮，之后恢复「缓存优先」
+        const forceRefresh = ignoreCacheRef.current;
+        ignoreCacheRef.current = false;
+        // 与 songsPending 初值同一套判断（刷新按钮会先 reset 会话，这里要重新置起）
+        const currentSession = getMatchSession(dailyKey);
+        setSongsPending(!currentSession || currentSession.status === "error");
         (async () => {
             try {
                 const status = await getNeteaseStatus();
@@ -120,13 +130,27 @@ export default function NeteaseDailyPage() {
             let dailySongs: INeteaseSong[] = [];
             let cards: INeteasePlaylistCard[] = [];
 
-            // 登录了，但可能换了账号（退出重登/扫码登了另一个号）：私人雷达等歌单
-            // 内容按账号生成，旧账号的匹配会话和页面残留数据对新人来说是错的，全部作废重走
             const account = await getNeteaseAccountInfo();
             if (cancelled) {
                 return;
             }
-            if (account && account.userId !== profileRef.current?.userId) {
+            const today = dateStr();
+            const cache = readGridCache();
+            // 网格缓存对「今天 + 当前账号」有效（账号资料暂时拿不到时姑且信缓存）
+            const cacheValid =
+                !forceRefresh &&
+                !!cache &&
+                cache.date === today &&
+                !!cache.playlists.length &&
+                (!account || !cache.userId || cache.userId === account.userId);
+            // 换号：私人雷达等歌单内容按账号生成，旧账号的会话与页面数据全部作废。
+            // 重启后 profileRef 还是空，靠缓存里记的 userId 识别是不是换了人登录。
+            const isAccountSwitch =
+                !!account &&
+                (profileRef.current
+                    ? account.userId !== profileRef.current.userId
+                    : !!cache?.userId && cache.userId !== account.userId);
+            if (isAccountSwitch) {
                 profileRef.current = account;
                 setProfile(account);
                 setSongs([]);
@@ -135,34 +159,50 @@ export default function NeteaseDailyPage() {
                 resetAllMatchSessions();
             }
 
-            try {
-                dailySongs = await fetchNeteaseDailySongs();
-            } catch (e: any) {
-                if (e instanceof NeteaseNeedLoginError) {
-                    needLogin = true;
-                } else if (!cancelled) {
-                    setDailyError(e?.message ?? "每日推荐歌曲获取失败");
-                }
-            }
-            try {
-                const dailyCards = await fetchNeteaseRecommendPlaylists();
-                const personalized = await fetchNeteasePersonalizedPlaylists();
-                // 每日推荐在前，按歌单 id 去重合并个性化网格
-                const seen = new Set<string>();
-                cards = [];
-                for (const c of [...dailyCards, ...personalized]) {
-                    if (!seen.has(c.id)) {
-                        seen.add(c.id);
-                        cards.push(c);
+            // 歌曲区：会话在跑/已完成时整块交给会话，重挂载不重拉；
+            // 只有没会话（当天首次/重启后/上次出错）才拉曲目并起会话
+            const existingSession = getMatchSession(dailyKey);
+            const needSongsFetch = !existingSession || existingSession.status === "error";
+            if (needSongsFetch) {
+                try {
+                    dailySongs = await fetchNeteaseDailySongs();
+                } catch (e: any) {
+                    if (e instanceof NeteaseNeedLoginError) {
+                        needLogin = true;
+                    } else if (!cancelled) {
+                        setDailyError(e?.message ?? "每日推荐歌曲获取失败");
                     }
                 }
-            } catch (e: any) {
-                if (e instanceof NeteaseNeedLoginError) {
-                    needLogin = true;
-                } else if (!cancelled) {
-                    setPlaylistsError(e?.message ?? "推荐歌单获取失败");
+                if (!cancelled) {
+                    setSongsPending(false);
                 }
             }
+
+            // 歌单网格：仅手动刷新/跨天/换号（缓存缺失或失效）时重新拉取，
+            // 其余情况一律用缓存——个性化接口每次返回有出入，自动重拉会把
+            // 正在看/正在播放的歌单卡片从网格里挤掉
+            if (!cacheValid) {
+                try {
+                    const dailyCards = await fetchNeteaseRecommendPlaylists();
+                    const personalized = await fetchNeteasePersonalizedPlaylists();
+                    // 每日推荐在前，按歌单 id 去重合并个性化网格
+                    const seen = new Set<string>();
+                    cards = [];
+                    for (const c of [...dailyCards, ...personalized]) {
+                        if (!seen.has(c.id)) {
+                            seen.add(c.id);
+                            cards.push(c);
+                        }
+                    }
+                } catch (e: any) {
+                    if (e instanceof NeteaseNeedLoginError) {
+                        needLogin = true;
+                    } else if (!cancelled) {
+                        setPlaylistsError(e?.message ?? "推荐歌单获取失败");
+                    }
+                }
+            }
+
             if (cancelled) {
                 return;
             }
@@ -177,20 +217,21 @@ export default function NeteaseDailyPage() {
             }
             if (cards.length) {
                 setPlaylists(cards);
-                // 只在拿到有效数据时写快照（约定：失败/空态不写，避免覆盖好数据）
-                writePageSnapshot<INeteaseDailySnapshot>(
-                    PAGE_KEY,
-                    snapshotSourceKey(account ?? profileRef.current),
-                    { playlists: cards },
-                );
+                writeGridCache({
+                    date: today,
+                    userId: account?.userId ?? "",
+                    playlists: cards,
+                });
+            } else if (cacheValid && cache) {
+                // 防御：缓存有效但 state 是空的（正常路径初始化时已用上）
+                setPlaylists(cache.playlists);
             }
             setPhase("ready");
-            if (dailySongs.length) {
-                // 同 key 会话在跑/已完成时内部会复用；刷新按钮已先 reset 并带上不走缓存标记
+            if (needSongsFetch && dailySongs.length) {
+                // 同 key 会话在跑/已完成时内部会复用；手动刷新已先 reset 并带不走缓存标记
                 startMatchSession(dailyKey, "每日推荐", dailySongs, {
-                    ignoreCache: ignoreCacheRef.current,
+                    ignoreCache: forceRefresh,
                 });
-                ignoreCacheRef.current = false;
             }
         })();
         return () => {
@@ -320,8 +361,11 @@ export default function NeteaseDailyPage() {
                                             {(session.matches ?? [])
                                                 .filter((m) => m.status === "missed" || m.duplicate)
                                                 .map((m) => {
+                                                    // 编号取会话自带的曲目表：重挂载不重拉时页面 songs state 是空的
                                                     const idx =
-                                                        songs.findIndex((s) => s.id === m.song.id) + 1;
+                                                        session.songs.findIndex(
+                                                            (s) => s.id === m.song.id,
+                                                        ) + 1;
                                                     return (
                                                         <div key={m.song.id}>
                                                             #{idx} {m.song.name} -{" "}
@@ -348,6 +392,8 @@ export default function NeteaseDailyPage() {
                         )
                     ) : phase === "loading" ? (
                         <div className="empty-hint">正在连接网易云账号…</div>
+                    ) : songsPending ? (
+                        <div className="empty-hint">正在获取今日推荐歌曲…</div>
                     ) : songs.length > 0 ? (
                         <div className="empty-hint">正在准备匹配…</div>
                     ) : (
