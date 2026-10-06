@@ -242,7 +242,7 @@ export default function NeteaseDailyPage() {
                             title="重新加载"
                             onClick={() => setReloadKey((k) => k + 1)}
                         >
-                            <Icon name="forward" size={14} />
+                            <Icon name="refresh" size={15} />
                         </button>
                     </div>
                 </div>

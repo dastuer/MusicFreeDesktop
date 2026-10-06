@@ -124,6 +124,13 @@ const iconPaths: Record<string, React.ReactNode> = {
             <path d="m12 9.6 1.02 2.06 2.28.33-1.65 1.6.39 2.27L12 14.79l-2.04 1.07.39-2.27-1.65-1.6 2.28-.33z" fill="currentColor" />
         </>
     ),
+    /** 刷新：顺时针循环箭头 */
+    refresh: (
+        <>
+            <path d="M23 4v6h-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+    ),
 };
 
 interface IIconProps {

@@ -319,6 +319,11 @@ img {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    /*
+     * 滚动条随内容高度出现/消失，内容区宽窄会抖一下（右上角钉在边缘的按钮跟着横移）。
+     * 常驻占位滚动条槽位，宽度恒定。
+     */
+    scrollbar-gutter: stable;
     padding: 0 24px 24px;
     /*
      * 切页时这个容器会按 key 整体重建（见 App.tsx），新旧页面之间没有过渡帧，
