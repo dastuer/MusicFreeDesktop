@@ -5,6 +5,10 @@ import {
     neteaseLogout,
     openNeteaseLogin,
 } from "@/core/netease";
+import {
+    clearMatchCache,
+    getMatchCacheCount,
+} from "@/core/neteaseMatchCache";
 
 /**
  * 设置页「网易云账号」分组：扫码登录 / 退出登录。
@@ -13,11 +17,13 @@ import {
 export default function NeteaseSection() {
     const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
     const [loggingIn, setLoggingIn] = useState(false);
+    const [cacheCount, setCacheCount] = useState(0);
 
     useEffect(() => {
         getNeteaseStatus()
             .then((s) => setLoggedIn(!!s.loggedIn))
             .catch(() => setLoggedIn(false));
+        setCacheCount(getMatchCacheCount());
     }, []);
 
     const login = async () => {
@@ -71,6 +77,27 @@ export default function NeteaseSection() {
                         {loggingIn ? "等待扫码…" : loggedIn ? "重新登录" : "扫码登录"}
                     </button>
                 </div>
+            </div>
+            <div className="settings-item">
+                <div>
+                    <div className="settings-item-label">匹配缓存</div>
+                    <div className="settings-item-desc">
+                        网易云歌曲与音源曲目的匹配结果（当前 {cacheCount} 条）。再次匹配时命中缓存的直接使用、
+                        不再逐首搜索；音源插件变更后对应条目自动失效重配。缓存可随时清除，不影响歌单数据
+                    </div>
+                </div>
+                <button
+                    className="btn-ghost"
+                    style={{ flexShrink: 0 }}
+                    disabled={!cacheCount}
+                    onClick={() => {
+                        clearMatchCache();
+                        setCacheCount(0);
+                        showToast("已清除匹配缓存");
+                    }}
+                >
+                    清除
+                </button>
             </div>
         </div>
     );

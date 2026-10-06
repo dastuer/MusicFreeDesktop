@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
-import MusicList, { IMusicListPendingItem } from "@/components/base/MusicList";
+import MusicList from "@/components/base/MusicList";
 import { showToast } from "@/components/base/Toast";
 import {
     addMusicToSheetMany,
@@ -180,37 +180,10 @@ export default function NeteaseDailyPage() {
         [matches],
     );
     const matching = matchTotal > 0 && matchDone < matchTotal;
-
-    /**
-     * 占位行：还没出结果的歌按原顺序铺在列表里带匹配动效；
-     * 出了结果的（含未命中/重复）定格为置灰占位，命中的被真实行替换。
-     * 全程 30 行数量不变，只是逐行「点亮」。
-     */
-    const pendingItems = useMemo(() => {
-        if (phase !== "ready") {
-            return [];
-        }
-        return songs
-            .map((s, i) => {
-                const m = matches[s.id];
-                if (m && m.status === "matched" && !m.duplicate) {
-                    return null;
-                }
-                return {
-                    key: s.id,
-                    index: i + 1,
-                    title: s.name,
-                    artist: s.artists.join("/"),
-                    album: s.album,
-                    artwork: s.artwork,
-                    state: (!m ? "pending" : m.duplicate ? "duplicate" : "missed") as
-                        | "pending"
-                        | "missed"
-                        | "duplicate",
-                };
-            })
-            .filter(Boolean) as IMusicListPendingItem[];
-    }, [phase, songs, matches]);
+    const cachedCount = useMemo(
+        () => Object.values(matches).filter((m) => m.fromCache).length,
+        [matches],
+    );
 
     const saveDailyAsSheet = async () => {
         if (!matchedItems.length) {
@@ -321,14 +294,23 @@ export default function NeteaseDailyPage() {
                     )}
 
                     {songs.length > 0 ? (
-                        <MusicList
-                            musicList={matchedItems}
-                            listId={`netease-daily-${dateStr()}`}
-                            searchable
-                            selectable={false}
-                            pendingItems={pendingItems}
-                            className={matching ? "list-matching" : undefined}
-                        />
+                        matching ? (
+                            // 匹配期间列表区域整体显示动效面板，完成后一次性替换为完整列表
+                            <MatchingPanel
+                                done={matchDone}
+                                total={matchTotal}
+                                matchedCount={matchedItems.length}
+                                cachedCount={cachedCount}
+                            />
+                        ) : (
+                            <MusicList
+                                musicList={matchedItems}
+                                listId={`netease-daily-${dateStr()}`}
+                                searchable
+                                selectable={false}
+                                className="netease-list-in"
+                            />
+                        )
                     ) : (
                         !dailyError && <div className="empty-hint">今天暂时没有推荐歌曲</div>
                     )}
@@ -389,6 +371,34 @@ export default function NeteaseDailyPage() {
                     onClose={() => setImportCard(null)}
                 />
             )}
+        </div>
+    );
+}
+
+/**
+ * 匹配进行中的整体动效面板：与单曲无关，占住列表区域转唱片 + 走进度条，
+ * 匹配完成后整个列表一次性替换进来（列表侧用 netease-list-in 淡入）。
+ */
+function MatchingPanel(props: {
+    done: number;
+    total: number;
+    matchedCount: number;
+    cachedCount: number;
+}) {
+    const pct = props.total ? Math.round((props.done / props.total) * 100) : 0;
+    return (
+        <div className="netease-matching-panel">
+            <div className="netease-matching-disc">
+                <Icon name="musicNote" size={26} />
+            </div>
+            <div className="netease-matching-title">正在用已启用的音源逐首匹配</div>
+            <div className="netease-matching-sub">
+                {props.cachedCount > 0 ? `缓存命中 ${props.cachedCount} · ` : ""}
+                已处理 {props.done}/{props.total}，命中 {props.matchedCount}
+            </div>
+            <div className="netease-progress">
+                <div style={{ width: `${pct}%` }} />
+            </div>
         </div>
     );
 }

@@ -1,5 +1,11 @@
 import { pluginCall, SerializedPlugin, getSortedSearchablePlugins } from "./ipc";
 import { INeteaseSong } from "./netease";
+import {
+    flushMatchCache,
+    getCachedMatch,
+    isCachedMatchValid,
+    putCachedMatch,
+} from "./neteaseMatchCache";
 
 /**
  * 网易云推荐歌曲 → 本地音源插件 匹配器。
@@ -142,6 +148,8 @@ export function scoreOf(song: INeteaseSong, cand: any): IScored {
 export interface ISongMatch {
     song: INeteaseSong;
     status: "matched" | "missed";
+    /** 命中来自映射缓存（未走插件搜索） */
+    fromCache?: boolean;
     /** 靠详情复核才采信（低置信，导入后建议试听确认） */
     viaDetail?: boolean;
     /** 得分刚过线（低置信） */
@@ -210,11 +218,9 @@ export async function matchNeteaseSongs(
     if (!plugins.length) {
         throw new NoMatchSourceError();
     }
-    const pluginByPlatform = new Map(plugins.map((p) => [p.platform, p]));
 
     const results: ISongMatch[] = [];
     const seenKeys = new Map<string, number>(); // 音源+id → 首次命中的序号
-    const queue = songs.map((song, index) => ({ song, index }));
     let done = 0;
 
     const report = (result: ISongMatch) => {
@@ -223,6 +229,36 @@ export async function matchNeteaseSongs(
         onProgress?.(done, songs.length);
         onResult?.(result);
     };
+
+    /**
+     * 缓存优先：命中映射缓存的直接出结果（该曲目所属音源插件仍在启用列表才有效，
+     * 插件被卸载/禁用后视为失效重新匹配），只有没缓存的才进队列做完整匹配。
+     */
+    const queue: { song: INeteaseSong; index: number }[] = [];
+    for (const [index, song] of songs.entries()) {
+        const cached = getCachedMatch(song.id);
+        if (cached && isCachedMatchValid(cached, plugins)) {
+            if (!shouldContinue || shouldContinue()) {
+                report(
+                    finalize(
+                        {
+                            song,
+                            status: "matched",
+                            fromCache: true,
+                            item: cached.item,
+                            matchedPlatform: cached.item.platform,
+                            score: cached.score,
+                            viaDetail: cached.viaDetail,
+                            low: cached.score < MIN_SCORE + 0.07,
+                        },
+                        index,
+                    ),
+                );
+            }
+        } else {
+            queue.push({ song, index });
+        }
+    }
 
     async function matchOne(song: INeteaseSong, index: number): Promise<ISongMatch> {
         const query = `${song.name} ${song.artists[0] ?? ""}`.trim();
@@ -317,7 +353,7 @@ export async function matchNeteaseSongs(
         };
     }
 
-    /** 命中后统一处理源内重复：与更早的歌命中了同一首时只保留第一条 */
+    /** 命中后统一处理源内重复：与更早的歌命中了同一首时只保留第一条；全新命中回写映射缓存 */
     function finalize(match: ISongMatch, index: number): ISongMatch {
         if (match.item) {
             const key = `${match.item.platform}-${match.item.id}`;
@@ -325,6 +361,9 @@ export async function matchNeteaseSongs(
                 match.duplicate = true;
             } else {
                 seenKeys.set(key, index);
+                if (!match.fromCache) {
+                    putCachedMatch(match.song.id, match.item, match.score ?? 0, match.viaDetail);
+                }
             }
         }
         return match;
@@ -341,6 +380,8 @@ export async function matchNeteaseSongs(
         }
     }
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+    // 把本次新写入的映射落盘（防抖兜底）
+    flushMatchCache();
 
     return results;
 }
