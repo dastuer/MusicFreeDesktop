@@ -1,4 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, {
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import SourceSwitcher from "@/components/base/SourceSwitcher";
@@ -48,6 +53,12 @@ interface ISheetCard {
     playCount?: number;
 }
 
+/** 推荐歌单的分类是两级的：分组标题（热门/语种/风格…）+ 组内一串标签 */
+interface ITagGroup {
+    title: string;
+    data: ICommon.IUnique[];
+}
+
 /**
  * 本页要留到模块作用域的展示数据（见 core/pageSnapshot）。
  *
@@ -57,7 +68,7 @@ interface ISheetCard {
  */
 interface IHomeSnapshot {
     plugins: SerializedPlugin[];
-    tags: ICommon.IUnique[];
+    tagGroups: ITagGroup[];
     activeTag: ICommon.IUnique | null;
     sheets: ISheetCard[];
     topLists: IMusic.IMusicSheetGroupItem[];
@@ -87,12 +98,19 @@ function HomeSkeleton() {
         <>
             <section className="home-section">
                 <div className="skeleton-line" style={{ width: 96, height: 20, marginTop: 28 }} />
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "14px 0 16px" }}>
+                {/* 分类是顶部一行胶囊 + 「更多分类」，骨架屏照着摆 */}
+                <div className="sheet-tagbar" style={{ margin: "14px 0 16px" }}>
                     {Array.from({ length: 8 }).map((_, i) => (
                         <div
                             key={i}
                             className="skeleton-line"
-                            style={{ width: 52, height: 26, borderRadius: 13, marginTop: 0 }}
+                            style={{
+                                width: 72,
+                                height: 32,
+                                borderRadius: 16,
+                                marginTop: 0,
+                                flexShrink: 0,
+                            }}
                         />
                     ))}
                 </div>
@@ -116,7 +134,10 @@ export default function HomePage() {
     const [hasSnapshot, setHasSnapshot] = useState(!!initial);
     const [plugins, setPlugins] = useState<SerializedPlugin[]>(initial?.plugins ?? []);
     const [sourceHash, setSourceHash] = useState(() => getBrowseSource());
-    const [tags, setTags] = useState<ICommon.IUnique[]>(initial?.tags ?? []);
+    const [tagGroups, setTagGroups] = useState<ITagGroup[]>(initial?.tagGroups ?? []);
+    // 「更多分类」浮窗：打开状态 + 当前看的是哪个一级分组（浮窗是临时的，不进快照）
+    const [moreOpen, setMoreOpen] = useState(false);
+    const [moreTabIdx, setMoreTabIdx] = useState(0);
     const [activeTag, setActiveTag] = useState<ICommon.IUnique | null>(
         initial?.activeTag ?? null,
     );
@@ -142,12 +163,14 @@ export default function HomePage() {
          * 这一帧必须就把 loading 打上，不能等下面那个 effect 去做。
          * 两个理由：一是少一帧「新音源已选中、屏幕上还是旧音源内容」；
          * 二是快照 effect 在同一个提交里紧接着执行，它读到的 loading 是本次渲染的
-         * 闭包值——不为 true 的话它会拿着旧的 tags/topLists/sheets 写进新音源的
+         * 闭包值——不为 true 的话它会拿着旧的 tagGroups/topLists/sheets 写进新音源的
          * 快照里，等于串源。
          */
         setLoading(true);
         // 歌单是另一个 effect 拉的，会一直留到新请求返回；不清掉同样会被写进新音源快照
         setSheets([]);
+        // 新音源的分组结构完全不同，开着的浮窗直接收掉
+        setMoreOpen(false);
     };
 
     useEffect(() => {
@@ -187,19 +210,35 @@ export default function HomePage() {
 
             if (tagResult) {
                 setTagSource(tagResult.pluginName);
-                const data = tagResult.data?.data ?? [];
+                const groups = tagResult.data?.data ?? [];
                 const pinned = tagResult.data?.pinned ?? [];
-                // pinned 与首个分组常有重叠（见 uniqueById 注释），必须去重后再用
-                const merged = uniqueById([...pinned, ...(data[0]?.data ?? [])]).slice(0, 12);
-                setTags(merged);
-                setActiveTag(merged.length ? merged[0] : null);
-                if (!merged.length) {
+                // 分类是两级结构：每个分组的 title 是一级（热门/语种/风格…），组内
+                // 标签是二级。以前只取 data[0] 并截到 12 个，后面的分组全部丢失。
+                // pinned 与首个分组常有重叠（见 uniqueById 注释），去重后并入首组展示。
+                const normalized = groups
+                    .filter((g: any) => Array.isArray(g?.data) && g.data.length)
+                    .map((g: any, i: number) => ({
+                        title: g.title || "热门",
+                        // 每组各自去重：组内重复 id 会让 React 报重复 key
+                        data:
+                            i === 0
+                                ? uniqueById([...pinned, ...g.data])
+                                : uniqueById(g.data),
+                    }));
+                // 插件只给了 pinned、没给分组时，pinned 自己成一组，别弄丢
+                if (!normalized.length && pinned.length) {
+                    normalized.push({ title: "热门", data: uniqueById(pinned) });
+                }
+                setTagGroups(normalized);
+                const firstTag = normalized[0]?.data[0] ?? null;
+                setActiveTag(firstTag);
+                if (!firstTag) {
                     setSheets([]);
                 }
             } else if (!hasSnapshot) {
                 // 切换音源后必须清空旧数据，否则会残留上一个音源的结果
                 setTagSource("");
-                setTags([]);
+                setTagGroups([]);
                 setActiveTag(null);
                 setSheets([]);
             }
@@ -280,7 +319,7 @@ export default function HomePage() {
         }
         writePageSnapshot<IHomeSnapshot>(PAGE_KEY, sourceHash, {
             plugins,
-            tags,
+            tagGroups,
             activeTag,
             sheets,
             topLists,
@@ -292,7 +331,7 @@ export default function HomePage() {
         failed,
         sourceHash,
         plugins,
-        tags,
+        tagGroups,
         activeTag,
         sheets,
         topLists,
@@ -307,6 +346,68 @@ export default function HomePage() {
     const sheetCapableCount = plugins.filter((p) => hasCapability(p, SHEET_CAPABILITY)).length;
     const topListCapableCount = plugins.filter((p) => hasCapability(p, TOPLIST_CAPABILITY)).length;
     const noSource = !loading && !sheetCapableCount && !topListCapableCount;
+    // 只有一个标签时没有可切换的余地，整块连着歌单一起藏起来（与旧版一致）
+    const totalTagCount = tagGroups.reduce((acc, g) => acc + g.data.length, 0);
+    // 顶部一行：每个分组固定取第一个子类作代表（网易云风格），选中标签恰好是
+    // 某组代表时该胶囊高亮。代表之间按 id 去重：不同分组的首个标签可能撞车。
+    const topPills = (() => {
+        const seen = new Set<string>();
+        const pills: ICommon.IUnique[] = [];
+        for (const g of tagGroups) {
+            const rep = g.data[0];
+            if (rep && !seen.has(String(rep.id))) {
+                seen.add(String(rep.id));
+                pills.push(rep);
+            }
+        }
+        return pills;
+    })();
+    const topTagIds = new Set(topPills.map((t) => String(t.id)));
+    // 浮窗只放没上过顶部行的标签，与顶部互不重复；整组都是代表的分组不出现。
+    // sourceIdx 记着它在 tagGroups 里的原位置，打开浮窗时用来落 tab。
+    const popoverGroups = tagGroups
+        .map((g, gi) => ({
+            title: g.title,
+            sourceIdx: gi,
+            data: g.data.filter((t) => !topTagIds.has(String(t.id))),
+        }))
+        .filter((g) => g.data.length > 0);
+    // 选中的标签不在顶部行 = 它是从浮窗里选的，此时更多分类按钮呈激活态
+    const activeOnTop = !!activeTag && topTagIds.has(String(activeTag.id));
+    const openMore = () => {
+        const gi = tagGroups.findIndex((g) => g.data.some((t) => t.id === activeTag?.id));
+        const pi = popoverGroups.findIndex((g) => g.sourceIdx === gi);
+        setMoreTabIdx(pi >= 0 ? pi : 0);
+        setMoreOpen(true);
+    };
+    const moreGroup = popoverGroups[Math.min(moreTabIdx, popoverGroups.length - 1)];
+    // 浮窗右缘对齐「更多分类」按钮右缘：打开时量按钮位置算出 right 偏移与宽度
+    //（左缘顶到内容区左边）。按钮位置只取决于它前面的胶囊数量，开着的期间不变，
+    // 只有窗口缩放需要重算。
+    const moreBtnRef = useRef<HTMLButtonElement>(null);
+    const tagbarWrapRef = useRef<HTMLDivElement>(null);
+    const [morePos, setMorePos] = useState<{ right: number; width: number } | null>(null);
+    useLayoutEffect(() => {
+        if (!moreOpen) {
+            return;
+        }
+        const measure = () => {
+            const btn = moreBtnRef.current;
+            const wrap = tagbarWrapRef.current;
+            if (!btn || !wrap) {
+                return;
+            }
+            const btnRect = btn.getBoundingClientRect();
+            const wrapRect = wrap.getBoundingClientRect();
+            setMorePos({
+                right: wrapRect.right - btnRect.right,
+                width: Math.max(420, Math.round(btnRect.right - wrapRect.left)),
+            });
+        };
+        measure();
+        window.addEventListener("resize", measure);
+        return () => window.removeEventListener("resize", measure);
+    }, [moreOpen]);
     // 有快照时音源可能刚好被卸载：这时不能把旧内容和「没有音源」的提示一起渲染
     const showContent = !loading && !failed && !noSource;
 
@@ -377,7 +478,7 @@ export default function HomePage() {
                 </div>
             )}
 
-            {showContent && (tags.length > 1 || sheetNote) && (
+            {showContent && (totalTagCount > 1 || sheetNote) && (
                 <section className="home-section">
                     <div className="section-title">
                         推荐歌单
@@ -389,23 +490,82 @@ export default function HomePage() {
                         <SourceNote>{sheetNote}</SourceNote>
                     ) : (
                         <>
-                            <div
-                                style={{
-                                    display: "flex",
-                                    gap: 8,
-                                    flexWrap: "wrap",
-                                    margin: "0 0 16px",
-                                }}
-                            >
-                                {tags.map((tag) => (
-                                    <button
-                                        key={tag.id}
-                                        className={`search-tab${activeTag?.id === tag.id ? " active" : ""}`}
-                                        onClick={() => setActiveTag(tag)}
-                                    >
-                                        {(tag as any).title}
-                                    </button>
-                                ))}
+                            {/* 顶部一行：每个分组固定一个代表标签（组内第一个），
+                                行尾「更多分类」打开浮窗——一级分组做 tab，组内除代表
+                                外的全部标签平铺（与顶部不重复），点选即换歌单并收起。
+                                选中标签不在顶部行时（从浮窗选的），按钮呈激活态 */}
+                            <div className="sheet-tagbar-wrap" ref={tagbarWrapRef}>
+                                <div className="sheet-tagbar">
+                                    {topPills.map((tag) => (
+                                        <button
+                                            key={tag.id}
+                                            className={`sheet-tag-pill${activeTag?.id === tag.id ? " active" : ""}`}
+                                            onClick={() => setActiveTag(tag)}
+                                        >
+                                            {(tag as any).title}
+                                        </button>
+                                    ))}
+                                    {popoverGroups.length > 0 && (
+                                        <button
+                                            ref={moreBtnRef}
+                                            className={`sheet-tag-pill sheet-tag-more${activeTag && !activeOnTop ? " active" : ""}`}
+                                            onClick={openMore}
+                                        >
+                                            更多分类
+                                            <Icon
+                                                name="chevronDown"
+                                                size={14}
+                                                style={
+                                                    moreOpen
+                                                      ? { transform: "rotate(180deg)" }
+                                                      : undefined
+                                                }
+                                            />
+                                        </button>
+                                    )}
+                                </div>
+                                {moreOpen && (
+                                    <>
+                                        <div
+                                            className="sheet-tag-popover-mask"
+                                            onClick={() => setMoreOpen(false)}
+                                        />
+                                        <div
+                                            className="sheet-tag-popover"
+                                            style={
+                                                morePos
+                                                  ? { right: morePos.right, width: morePos.width }
+                                                  : undefined
+                                            }
+                                        >
+                                            <div className="sheet-tag-popover-tabs">
+                                                {popoverGroups.map((group, gi) => (
+                                                    <button
+                                                        key={`${group.title}-${group.sourceIdx}`}
+                                                        className={`sheet-tag-popover-tab${gi === moreTabIdx ? " active" : ""}`}
+                                                        onClick={() => setMoreTabIdx(gi)}
+                                                    >
+                                                        {group.title}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <div className="sheet-tag-popover-pills">
+                                                {(moreGroup?.data ?? []).map((tag) => (
+                                                    <button
+                                                        key={tag.id}
+                                                        className={`sheet-tag-popover-pill${activeTag?.id === tag.id ? " active" : ""}`}
+                                                        onClick={() => {
+                                                            setActiveTag(tag);
+                                                            setMoreOpen(false);
+                                                        }}
+                                                    >
+                                                        {(tag as any).title}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                             {sheets.length > 0 && (
                                 <div className="card-grid">

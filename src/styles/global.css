@@ -342,6 +342,140 @@ img {
     margin-bottom: 12px;
 }
 
+/* 推荐歌单分类（网易云风格）：顶部一行代表标签 + 「更多分类」浮窗 */
+.sheet-tagbar-wrap {
+    position: relative;
+    margin-bottom: 16px;
+}
+
+.sheet-tagbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    /* 溢出滚动时给胶囊阴影/焦点留点余地 */
+    padding: 2px;
+}
+
+.sheet-tag-pill {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 7px 20px;
+    border-radius: 999px;
+    border: 1px solid var(--divider);
+    background: transparent;
+    color: var(--text-color);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sheet-tag-pill:hover {
+    background: var(--hover-bg);
+}
+
+.sheet-tag-pill.active {
+    /* 主题色固定 #ec4141，直接写 rgba（见 2446 行同款做法） */
+    border-color: rgba(236, 65, 65, 0.55);
+    background: rgba(236, 65, 65, 0.12);
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+/* 透明遮罩：点浮窗外任意处收起 */
+.sheet-tag-popover-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 240;
+}
+
+/* 浮窗本体：挂在「更多分类」按钮右缘下方（right/width 由打开时测量内联写入，
+   右缘对齐按钮、左缘顶到内容区左边），分层样式沿用 search-history-panel 的做法 */
+.sheet-tag-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    z-index: 250;
+    background: var(--page-bg);
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    padding: 18px 22px 22px;
+    animation: fade-in 0.14s ease;
+}
+
+html[data-theme="dark"] .sheet-tag-popover {
+    background: #242424;
+}
+
+.sheet-tag-popover-tabs {
+    display: flex;
+    align-items: baseline;
+    gap: 28px;
+    margin-bottom: 16px;
+}
+
+.sheet-tag-popover-tab {
+    position: relative;
+    border: none;
+    background: transparent;
+    padding: 0 0 8px;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.sheet-tag-popover-tab.active {
+    color: var(--text-color);
+}
+
+/* 选中 tab 的主题色短下划线 */
+.sheet-tag-popover-tab.active::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 0;
+    width: 24px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--primary-color);
+}
+
+.sheet-tag-popover-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 14px;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+/* 浮窗里的二级标签：尺寸与顶部胶囊保持一致（padding/字号同 .sheet-tag-pill） */
+.sheet-tag-popover-pill {
+    /* 透明描边占位：激活时才上主题色描边，避免加边框导致尺寸跳动 */
+    border: 1px solid transparent;
+    padding: 7px 20px;
+    border-radius: 999px;
+    background: var(--hover-bg);
+    color: var(--text-color);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.sheet-tag-popover-pill:hover {
+    background: var(--active-bg);
+}
+
+/* 激活态与顶部胶囊同款：主题色浅底 + 主题色描边 + 主题色文字 */
+.sheet-tag-popover-pill.active {
+    border-color: rgba(236, 65, 65, 0.55);
+    background: rgba(236, 65, 65, 0.12);
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
 /* 横向滑动行（网易云风格的单行推荐位） */
 .hscroll-row {
     display: flex;
