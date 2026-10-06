@@ -403,7 +403,7 @@ export default function NeteaseDailyPage() {
                         <div className="source-note">每日推荐歌曲获取失败：{dailyError}</div>
                     )}
 
-                    {/* 歌单区：快照/已有数据直接展示，后台刷新静默替换 */}
+                    {/* 歌单区：仅手动刷新/跨天/换号时重新拉取，其余一律用网格缓存 */}
                     {(playlists.length > 0 || playlistsError) && (
                         <section className="home-section">
                             <div className="section-title">推荐歌单</div>
@@ -413,43 +413,38 @@ export default function NeteaseDailyPage() {
                                 </div>
                             )}
                             {playlists.length > 0 && (
-                                <>
-                                    <div className="source-note">
-                                        点进歌单自动用已启用的音源逐首匹配（离开页面也在后台继续），完成后可整单入库
-                                    </div>
-                                    <div className="card-grid">
-                                        {playlists.map((card) => (
-                                            <div
-                                                key={card.id}
-                                                className="media-card"
-                                                onClick={() => {
-                                                    startPlaylistMatchSession(card);
-                                                    navigate("neteasePlaylistDetail", { card });
-                                                }}
-                                            >
-                                                <div className="square-cover">
-                                                    <Cover
-                                                        src={card.artwork}
-                                                        size="100%"
-                                                        borderRadius={8}
-                                                        style={{ width: "100%", height: "100%" }}
-                                                    />
-                                                </div>
-                                                <div className="media-card-title">{card.title}</div>
-                                                <div className="media-card-subtitle">
-                                                    {[
-                                                        formatPlayCount(card.playCount)
-                                                            ? `${formatPlayCount(card.playCount)}次播放`
-                                                            : "",
-                                                        card.trackCount ? `${card.trackCount}首` : "",
-                                                    ]
-                                                        .filter(Boolean)
-                                                        .join(" · ")}
-                                                </div>
+                                <div className="card-grid">
+                                    {playlists.map((card) => (
+                                        <div
+                                            key={card.id}
+                                            className="media-card"
+                                            onClick={() => {
+                                                startPlaylistMatchSession(card);
+                                                navigate("neteasePlaylistDetail", { card });
+                                            }}
+                                        >
+                                            <div className="square-cover">
+                                                <Cover
+                                                    src={card.artwork}
+                                                    size="100%"
+                                                    borderRadius={8}
+                                                    style={{ width: "100%", height: "100%" }}
+                                                />
                                             </div>
-                                        ))}
-                                    </div>
-                                </>
+                                            <div className="media-card-title">{card.title}</div>
+                                            <div className="media-card-subtitle">
+                                                {[
+                                                    formatPlayCount(card.playCount)
+                                                        ? `${formatPlayCount(card.playCount)}次播放`
+                                                        : "",
+                                                    card.trackCount ? `${card.trackCount}首` : "",
+                                                ]
+                                                    .filter(Boolean)
+                                                    .join(" · ")}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                         </section>
                     )}
