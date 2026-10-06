@@ -2979,11 +2979,11 @@ body.in-desktop-lyrics-window {
 .netease-matching-sub {
     font-size: 12px;
     color: var(--text-tertiary);
-    margin: 6px 0 16px;
 }
 
 .netease-matching-panel .netease-progress {
     width: 280px;
+    margin-bottom: 10px;
 }
 
 /* 匹配完成后列表整体淡入 */

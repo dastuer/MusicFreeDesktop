@@ -20,13 +20,13 @@ export default function NeteaseMatchingPanel(props: { view: IMatchSessionView })
                     ? "正在获取歌单全量曲目…"
                     : "正在用已启用的音源逐首匹配"}
             </div>
+            <div className="netease-progress">
+                <div style={{ width: `${pct}%` }} />
+            </div>
             <div className="netease-matching-sub">
                 {view.status === "loading"
                     ? "曲目就绪后自动开始匹配"
                     : `${view.cachedCount > 0 ? `缓存命中 ${view.cachedCount} · ` : ""}已处理 ${view.done}/${view.total}，命中 ${view.matchedCount}`}
-            </div>
-            <div className="netease-progress">
-                <div style={{ width: `${pct}%` }} />
             </div>
         </div>
     );
