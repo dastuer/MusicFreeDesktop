@@ -3014,9 +3014,3 @@ body.in-desktop-lyrics-window {
     );
     animation: netease-shimmer 1.4s linear infinite;
 }
-
-.netease-matching-note {
-    font-size: 11px;
-    color: var(--text-placeholder);
-    margin-top: 12px;
-}
