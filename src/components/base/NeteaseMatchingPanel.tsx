@@ -28,7 +28,10 @@ export default function NeteaseMatchingPanel(props: { view: IMatchSessionView })
             <div className="netease-progress">
                 <div style={{ width: `${pct}%` }} />
             </div>
-            <div className="netease-matching-note">离开本页匹配也在后台继续</div>
+            <div className="netease-matching-note">
+                {view.ignoreCache ? "本次不走缓存，全部重新匹配 · " : ""}
+                离开本页匹配也在后台继续
+            </div>
         </div>
     );
 }

@@ -202,6 +202,8 @@ async function recheckViaDetail(
 export interface IMatchOptions {
     /** 并发数（每路串行按歌消费） */
     concurrency?: number;
+    /** 跳过映射缓存，全部重新匹配（刷新按钮语义）；新命中仍会回写缓存 */
+    ignoreCache?: boolean;
     /** 每完成一首回调一次（含未命中），页面据此渐进渲染 */
     onResult?: (result: ISongMatch) => void;
     onProgress?: (done: number, total: number) => void;
@@ -213,7 +215,7 @@ export async function matchNeteaseSongs(
     songs: INeteaseSong[],
     options: IMatchOptions = {},
 ): Promise<ISongMatch[]> {
-    const { concurrency = 4, onResult, onProgress, shouldContinue } = options;
+    const { concurrency = 4, onResult, onProgress, shouldContinue, ignoreCache } = options;
     const plugins = await getMatchableSourcePlugins();
     if (!plugins.length) {
         throw new NoMatchSourceError();
@@ -233,30 +235,35 @@ export async function matchNeteaseSongs(
     /**
      * 缓存优先：命中映射缓存的直接出结果（该曲目所属音源插件仍在启用列表才有效，
      * 插件被卸载/禁用后视为失效重新匹配），只有没缓存的才进队列做完整匹配。
+     * ignoreCache（刷新按钮）时全部进队列。
      */
     const queue: { song: INeteaseSong; index: number }[] = [];
-    for (const [index, song] of songs.entries()) {
-        const cached = getCachedMatch(song.id);
-        if (cached && isCachedMatchValid(cached, plugins)) {
-            if (!shouldContinue || shouldContinue()) {
-                report(
-                    finalize(
-                        {
-                            song,
-                            status: "matched",
-                            fromCache: true,
-                            item: cached.item,
-                            matchedPlatform: cached.item.platform,
-                            score: cached.score,
-                            viaDetail: cached.viaDetail,
-                            low: cached.score < MIN_SCORE + 0.07,
-                        },
-                        index,
-                    ),
-                );
+    if (ignoreCache) {
+        queue.push(...songs.map((song, index) => ({ song, index })));
+    } else {
+        for (const [index, song] of songs.entries()) {
+            const cached = getCachedMatch(song.id);
+            if (cached && isCachedMatchValid(cached, plugins)) {
+                if (!shouldContinue || shouldContinue()) {
+                    report(
+                        finalize(
+                            {
+                                song,
+                                status: "matched",
+                                fromCache: true,
+                                item: cached.item,
+                                matchedPlatform: cached.item.platform,
+                                score: cached.score,
+                                viaDetail: cached.viaDetail,
+                                low: cached.score < MIN_SCORE + 0.07,
+                            },
+                            index,
+                        ),
+                    );
+                }
+            } else {
+                queue.push({ song, index });
             }
-        } else {
-            queue.push({ song, index });
         }
     }
 

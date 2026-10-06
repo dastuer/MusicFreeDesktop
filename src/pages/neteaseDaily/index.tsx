@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import MusicList from "@/components/base/MusicList";
@@ -51,6 +51,8 @@ export default function NeteaseDailyPage() {
     const [playlists, setPlaylists] = useState<INeteasePlaylistCard[]>([]);
     const [playlistsError, setPlaylistsError] = useState("");
     const [reloadKey, setReloadKey] = useState(0);
+    // 刷新按钮带来的「本次不走缓存」标记：从点击处传到异步加载完成后的 startMatchSession
+    const ignoreCacheRef = useRef(false);
 
     // 会话按日期隔离：跨天自然失效重跑；页面重挂载复用进行中/已完成的会话
     const dailyKey = `daily:${dateStr()}`;
@@ -127,8 +129,11 @@ export default function NeteaseDailyPage() {
             setPlaylists(cards);
             setPhase("ready");
             if (dailySongs.length) {
-                // 同 key 会话在跑/已完成时内部会复用；刷新按钮已先 reset 过
-                startMatchSession(dailyKey, "每日推荐", dailySongs);
+                // 同 key 会话在跑/已完成时内部会复用；刷新按钮已先 reset 并带上不走缓存标记
+                startMatchSession(dailyKey, "每日推荐", dailySongs, {
+                    ignoreCache: ignoreCacheRef.current,
+                });
+                ignoreCacheRef.current = false;
             }
         })();
         return () => {
@@ -144,9 +149,10 @@ export default function NeteaseDailyPage() {
         [session],
     );
 
-    /** 显式刷新：丢掉当前会话重新拉取重跑（匹配仍优先走映射缓存） */
+    /** 显式刷新：丢掉当前会话重新拉取，强制不走缓存完整重配（新结果仍回写缓存） */
     const refresh = () => {
         resetMatchSession(dailyKey);
+        ignoreCacheRef.current = true;
         setReloadKey((k) => k + 1);
     };
 

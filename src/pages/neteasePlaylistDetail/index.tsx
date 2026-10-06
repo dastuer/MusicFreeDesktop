@@ -80,7 +80,8 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
 
     const rematch = () => {
         resetMatchSession(sessionKey);
-        startPlaylistMatchSession(card);
+        // 刷新语义：强制不走缓存完整重配（新结果仍回写缓存）
+        startPlaylistMatchSession(card, { ignoreCache: true });
     };
 
     const headerSub = (() => {

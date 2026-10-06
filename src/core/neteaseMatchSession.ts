@@ -30,6 +30,8 @@ export interface IMatchSessionView {
     missedCount: number;
     /** 低置信命中（详情复核才采信或分数刚过线） */
     lowCount: number;
+    /** 本次是否跳过了缓存（刷新按钮的强制重配） */
+    ignoreCache?: boolean;
     /** 按歌曲原顺序排列的全部已落地结果（running 时是实时快照） */
     matches: ISongMatch[];
 }
@@ -43,6 +45,7 @@ interface ISession {
     /** 结果按网易云歌曲 id 索引，展示时按 songs 原顺序重排 */
     results: Map<string, ISongMatch>;
     done: number;
+    ignoreCache?: boolean;
 }
 
 const sessions = new Map<string, ISession>();
@@ -65,6 +68,7 @@ function viewOf(s: ISession): IMatchSessionView {
         cachedCount: matches.filter((m) => m.fromCache).length,
         missedCount: matches.filter((m) => m.status === "missed" || m.duplicate).length,
         lowCount: matched.filter((m) => m.viaDetail || m.low).length,
+        ignoreCache: s.ignoreCache,
         matches,
     };
 }
@@ -95,6 +99,7 @@ function runMatcher(session: ISession) {
     session.status = "running";
     notify();
     matchNeteaseSongs(session.songs, {
+        ignoreCache: session.ignoreCache,
         onProgress: (done) => {
             if (sessions.get(session.key) === session) {
                 session.done = done;
@@ -126,7 +131,12 @@ function runMatcher(session: ISession) {
 }
 
 /** 曲目已在手上（每日推荐）：创建会话并开始匹配；同 key 已在跑/已完成时复用 */
-export function startMatchSession(key: string, title: string, songs: INeteaseSong[]) {
+export function startMatchSession(
+    key: string,
+    title: string,
+    songs: INeteaseSong[],
+    opts: { ignoreCache?: boolean } = {},
+) {
     const existing = sessions.get(key);
     if (existing && existing.status !== "error") {
         return;
@@ -138,6 +148,7 @@ export function startMatchSession(key: string, title: string, songs: INeteaseSon
         songs,
         results: new Map(),
         done: 0,
+        ignoreCache: !!opts.ignoreCache,
     };
     sessions.set(key, session);
     notify();
@@ -148,7 +159,10 @@ export function startMatchSession(key: string, title: string, songs: INeteaseSon
  * 推荐歌单：先拉全量曲目再匹配，整条流水线都在会话里跑——
  * 页面点开只是触发 + 订阅，立即退出拉取和匹配也照样完成。
  */
-export function startPlaylistMatchSession(card: { id: string; title: string }) {
+export function startPlaylistMatchSession(
+    card: { id: string; title: string },
+    opts: { ignoreCache?: boolean } = {},
+) {
     const key = `playlist:${card.id}`;
     const existing = sessions.get(key);
     if (existing && existing.status !== "error") {
@@ -161,6 +175,7 @@ export function startPlaylistMatchSession(card: { id: string; title: string }) {
         songs: [],
         results: new Map(),
         done: 0,
+        ignoreCache: !!opts.ignoreCache,
     };
     sessions.set(key, session);
     notify();
