@@ -38,6 +38,7 @@ const allowedChannels = [
     "app:getAutoLaunch",
     "app:setAutoLaunch",
     "netease:getStatus",
+    "netease:getAccountInfo",
     "netease:login",
     "netease:logout",
     "netease:getDailySongs",

@@ -4,7 +4,8 @@ import Icon from "../base/Icon";
 import { showContextMenu } from "../base/ContextMenu";
 import { showPrompt } from "../base/PromptDialog";
 import { showToast } from "../base/Toast";
-import { navigate, useCurrentRoute } from "@/core/router";
+import { navigate, useCurrentRoute, useNearestRoute } from "@/core/router";
+import type { RoutePath } from "@/core/router";
 import {
     IUserSheet,
     LIKES_SHEET_ID,
@@ -25,6 +26,20 @@ const mainNavItems = [
     { path: "localMusic", title: "本地音乐", icon: "localMusic" },
     { path: "downloading", title: "下载管理", icon: "download" },
 ] as const;
+
+const MAIN_NAV_PATHS: readonly RoutePath[] = mainNavItems.map((it) => it.path);
+
+/**
+ * 详情类页面：侧边栏没有自己的条目，激活态认「来源分区」——
+ * 从哪个主导航页点进来就亮哪个（沿路由栈往回找）。
+ */
+const DETAIL_ROUTE_PATHS: readonly RoutePath[] = [
+    "neteasePlaylistDetail",
+    "topListDetail",
+    "sheetDetail",
+    "albumDetail",
+    "artistDetail",
+];
 
 /** 「我的歌单」分组收起状态落在这里，下次启动还原 */
 const SHEETS_COLLAPSED_KEY = "sidebar.sheetsCollapsed";
@@ -73,10 +88,18 @@ export default function Sidebar() {
     const likesSheet = sheets.find((it) => it.id === LIKES_SHEET_ID);
     const userSheets = sheets.filter((it) => it.id !== LIKES_SHEET_ID);
 
+    // 详情页的侧边栏高亮归属来源分区；我的歌单详情（userSheetId）有自己的高亮行，不算
+    const sourceSectionPath = useNearestRoute((p) => MAIN_NAV_PATHS.includes(p))?.path;
+    const activeNavPath =
+        DETAIL_ROUTE_PATHS.includes(route.path) &&
+        !(route.path === "sheetDetail" && route.params?.userSheetId)
+            ? sourceSectionPath
+            : route.path;
+
     const renderItem = (item: { path: string; title: string; icon: string }) => (
         <div
             key={item.path}
-            className={`sidebar-item${route.path === item.path ? " active" : ""}`}
+            className={`sidebar-item${activeNavPath === item.path ? " active" : ""}`}
             onClick={() => navigate(item.path as any)}
         >
             <span className="sidebar-item-icon">

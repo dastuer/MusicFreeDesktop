@@ -114,10 +114,18 @@ function watchLoginCookie(win: BrowserWindow): Promise<string | null> {
 }
 
 /**
- * 打开官方登录窗（独立内存 partition，每次都是干净的登录态，不污染主窗口 session）。
+ * 打开官方登录窗（独立内存 partition，不污染主窗口 session）。
  * 扫码成功后自动关窗并保存 cookie；重复调用时聚焦已开的窗口并复用同一个 Promise。
+ *
+ * 每次开窗都先清空该 partition 的 cookie/存储：同名的内存 session 在一次运行内
+ * 会被复用，上个账号登录留下的 MUSIC_U 会让官方页直接进入已登录态——二维码
+ * 出不来，还可能被当成「重新登录」把旧账号又登回去。
  */
-function openLoginWindow(): Promise<{ success: boolean; canceled?: boolean; message?: string }> {
+async function openLoginWindow(): Promise<{
+    success: boolean;
+    canceled?: boolean;
+    message?: string;
+}> {
     if (loginWindow && !loginWindow.isDestroyed() && loginPromise) {
         loginWindow.focus();
         return loginPromise;
@@ -136,7 +144,18 @@ function openLoginWindow(): Promise<{ success: boolean; canceled?: boolean; mess
             },
         });
         loginWindow = win;
-        win.loadURL(LOGIN_URL);
+        (async () => {
+            const ses = win.webContents.session;
+            try {
+                await ses.clearStorageData();
+                await ses.clearCache();
+            } catch (e) {
+                console.warn("[netease] 清理登录窗 session 失败（继续打开）:", e);
+            }
+            if (!win.isDestroyed()) {
+                win.loadURL(LOGIN_URL);
+            }
+        })();
         watchLoginCookie(win).then((value) => {
             loginWindow = null;
             loginPromise = null;
@@ -253,6 +272,12 @@ async function apiRequest(
 
 /** ---------- 对外能力 ---------- */
 
+export interface INeteaseProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string;
+}
+
 export interface INeteaseStatus {
     loggedIn: boolean;
 }
@@ -263,6 +288,36 @@ function getStatus(): INeteaseStatus {
 
 function logout() {
     clearCookie();
+    cachedProfile = null;
+}
+
+/**
+ * 当前账号资料（设置页展示、每日推荐页识别换号用），按 cookie 值缓存——
+ * 同一登录态重复取不发请求；退出/换号后 cookie 变化自然失效。
+ * 拿不到（接口抖动等）返回 null，不阻塞登录态判断。
+ */
+let cachedProfile: { cookie: string; profile: INeteaseProfile } | null = null;
+
+async function getAccountInfo(): Promise<INeteaseProfile | null> {
+    const cookie = readCookie();
+    if (!cookie) {
+        return null;
+    }
+    if (cachedProfile?.cookie === cookie) {
+        return cachedProfile.profile;
+    }
+    const j = await apiRequest("/api/nuser/account/get");
+    const p = j?.profile;
+    if (!p?.userId) {
+        return null;
+    }
+    const profile: INeteaseProfile = {
+        userId: String(p.userId),
+        nickname: p.nickname ?? "",
+        avatarUrl: p.avatarUrl ?? "",
+    };
+    cachedProfile = { cookie, profile };
+    return profile;
 }
 
 /** 每日推荐歌曲（账号个性化；返回原始 dailySongs 数组，字段交给渲染层归一化） */
@@ -332,6 +387,7 @@ export default {
     openLoginWindow,
     getStatus,
     logout,
+    getAccountInfo,
     getDailySongs,
     getRecommendPlaylists,
     getPersonalizedPlaylists,

@@ -94,6 +94,17 @@ export function resetMatchSession(key: string) {
     }
 }
 
+/**
+ * 清空全部会话。退出/更换网易云账号时调用：私人雷达等歌单的内容按账号生成，
+ * 旧账号拉到的曲目与匹配结果对下一个账号来说是错的，全部作废重走。
+ */
+export function resetAllMatchSessions() {
+    if (sessions.size) {
+        sessions.clear();
+        notify();
+    }
+}
+
 /** 启动会话的匹配阶段（曲目已在手上） */
 function runMatcher(session: ISession) {
     session.status = "running";

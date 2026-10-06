@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import Draggable from "react-draggable";
 import Icon from "@/components/base/Icon";
 import {
     SerializedPlugin,
@@ -48,6 +49,19 @@ function formatCheckTime(ts: number) {
     })}`;
 }
 
+/** 一次拖动会话的状态；dragRef 是权威，drag state 只是渲染镜像 */
+interface DragState {
+    id: string;
+    startIndex: number;
+    /** 自拖拽起点累计的指针位移（px） */
+    y: number;
+    targetIndex: number;
+    /** 超过 3px 才算真拖了，普通按下不触发换位 */
+    moved: boolean;
+    /** 被拖卡片的档位（自身高度 + 下边距）：其余卡片让位一格的位移量 */
+    pitch: number;
+}
+
 export default function PluginManagePage() {
     const [plugins, setPlugins] = useState<SerializedPlugin[]>([]);
     const [subscriptions, setSubscriptions] = useState<SerializedSubscription[]>([]);
@@ -56,6 +70,14 @@ export default function PluginManagePage() {
     const [installUrl, setInstallUrl] = useState("");
     const [editingVars, setEditingVars] = useState<string | null>(null);
     const [varDraft, setVarDraft] = useState<Record<string, string>>({});
+    // ---------- 拖动排序（react-draggable，与侧边栏「我的歌单」同一套交互） ----------
+    // 整张卡片任意位置按住即可拖（按钮/链接除外，见 PluginDraggable 的 cancel）；
+    // 被拖卡片跟随指针，其余卡片按被拖卡片的档位整格让位；松手一次性换位落盘。
+    const dragRef = useRef<DragState | null>(null);
+    const [drag, setDrag] = useState<DragState | null>(null);
+    /** 各卡片的布局快照（拖动开始时测一次；transform 不影响 offsetTop/Height，拖动期间有效） */
+    const cardMetricsRef = useRef<{ hash: string; top: number; height: number }[]>([]);
+    const cardRefs = useRef(new Map<string, HTMLDivElement>());
 
     const refresh = async () => {
         invalidatePluginCache();
@@ -257,6 +279,68 @@ export default function PluginManagePage() {
 
     const currentEditing = plugins.find((p) => p.hash === editingVars);
 
+    // ---------- 拖动排序 ----------
+    // 卡片高度不一，让位幅度统一取「被拖卡片的档位」（自身高度 + 下边距）：
+    // 被拖卡片从原位抽走、插到新位，中间的卡片各让出这一格空间。
+
+    const handleDragStart = (pluginHash: string, startIndex: number) => {
+        const el = cardRefs.current.get(pluginHash);
+        const marginBottom = el ? parseFloat(getComputedStyle(el).marginBottom || "0") : 0;
+        cardMetricsRef.current = plugins.map((p) => {
+            const card = cardRefs.current.get(p.hash);
+            return { hash: p.hash, top: card?.offsetTop ?? 0, height: card?.offsetHeight ?? 0 };
+        });
+        dragRef.current = {
+            id: pluginHash,
+            startIndex,
+            y: 0,
+            targetIndex: startIndex,
+            moved: false,
+            pitch: (el?.offsetHeight ?? 0) + marginBottom,
+        };
+        setDrag(dragRef.current);
+    };
+
+    const handleDragMove = (deltaY: number) => {
+        const cur = dragRef.current;
+        if (!cur) {
+            return;
+        }
+        const y = cur.y + deltaY;
+        // 目标位 = 被拖卡片中线扫过了几张其他卡片的中线；静止时恰好等于 startIndex
+        const dragged = cardMetricsRef.current.find((m) => m.hash === cur.id);
+        let targetIndex = cur.startIndex;
+        if (dragged) {
+            const center = dragged.top + dragged.height / 2 + y;
+            targetIndex = cardMetricsRef.current.filter(
+                (m, i) => i !== cur.startIndex && m.top + m.height / 2 < center,
+            ).length;
+        }
+        dragRef.current = {
+            ...cur,
+            y,
+            targetIndex: Math.max(0, Math.min(plugins.length - 1, targetIndex)),
+            moved: cur.moved || Math.abs(y) > 3,
+        };
+        setDrag(dragRef.current);
+    };
+
+    const handleDragStop = () => {
+        const d = dragRef.current;
+        dragRef.current = null;
+        setDrag(null);
+        cardMetricsRef.current = [];
+        if (!d || !d.moved || d.targetIndex === d.startIndex) {
+            return;
+        }
+        // 本地先换位（乐观更新），再落盘对齐（plugin:list 本身按 order 排序）
+        const ordered = [...plugins];
+        const [moved] = ordered.splice(d.startIndex, 1);
+        ordered.splice(d.targetIndex, 0, moved);
+        setPlugins(ordered);
+        ipcInvoke("plugin:setOrder", ordered.map((p) => p.hash)).then(() => refresh());
+    };
+
     return (
         <div style={{ maxWidth: 720 }}>
             <div className="section-title">音源插件</div>
@@ -402,60 +486,94 @@ export default function PluginManagePage() {
                 </div>
             )}
 
-            {plugins.map((plugin) => (
-                <div className="plugin-card" key={plugin.hash} onContextMenu={(e) => openMenu(e, plugin)}>
-                    <div className="plugin-card-icon">
-                        {plugin.name.slice(0, 1).toUpperCase()}
-                    </div>
-                    <div className="plugin-card-info">
-                        <div className="plugin-card-name">
-                            {plugin.name}
-                            {localStorage.getItem("defaultPluginHash") === plugin.hash && (
-                                <span className="tag enabled">默认音源</span>
-                            )}
-                            <span className={`tag ${plugin.enabled ? "enabled" : "disabled"}`}>
-                                {plugin.enabled ? "已启用" : "已禁用"}
-                            </span>
-                        </div>
-                        <div className="plugin-card-meta">
-                            {plugin.version && `v${plugin.version}`}
-                            {plugin.author && ` · ${plugin.author}`}
-                            {plugin.srcUrl && (
-                                <>
-                                    {" · "}
-                                    <a
-                                        href={plugin.srcUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        style={{ color: "var(--primary-color)" }}
-                                    >
-                                        项目主页
-                                    </a>
-                                </>
-                            )}
-                        </div>
-                        <div
-                            className="plugin-card-desc"
-                            style={{ maxHeight: 40, overflow: "hidden" }}
-                            dangerouslySetInnerHTML={{ __html: plugin.description ?? "" }}
-                        />
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                        <button
-                            className={plugin.enabled ? "btn-ghost" : "btn-primary"}
-                            onClick={async () => {
-                                await ipcInvoke("plugin:setEnabled", plugin.hash, !plugin.enabled);
-                                refresh();
-                            }}
-                        >
-                            {plugin.enabled ? "禁用" : "启用"}
-                        </button>
-                        <button className="btn-ghost" onClick={(e) => openMenu(e as any, plugin)}>
-                            更多
-                        </button>
-                    </div>
+            {plugins.length > 1 && (
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)", margin: "4px 0 10px" }}>
+                    按住插件卡片上下拖动即可调整音源顺序（默认音源始终置顶）
                 </div>
-            ))}
+            )}
+            {plugins.map((plugin, index) => {
+                const draggingSelf = drag?.id === plugin.hash && drag.moved;
+                // 其余卡片给被拖卡片让位：跨过一个档位就补上过渡位移
+                let shiftY = 0;
+                if (drag?.moved && drag.id !== plugin.hash) {
+                    if (index > drag.startIndex && index <= drag.targetIndex) {
+                        shiftY = -drag.pitch;
+                    } else if (index < drag.startIndex && index >= drag.targetIndex) {
+                        shiftY = drag.pitch;
+                    }
+                }
+                return (
+                    <PluginDraggable
+                        key={plugin.hash}
+                        offsetY={drag?.id === plugin.hash ? drag.y : 0}
+                        dragging={!!draggingSelf}
+                        shiftY={shiftY}
+                        disabled={plugins.length < 2}
+                        onStart={() => handleDragStart(plugin.hash, index)}
+                        onMove={handleDragMove}
+                        onStop={handleDragStop}
+                        onContextMenu={(e) => openMenu(e, plugin)}
+                        registerRef={(el) => {
+                            if (el) {
+                                cardRefs.current.set(plugin.hash, el);
+                            } else {
+                                cardRefs.current.delete(plugin.hash);
+                            }
+                        }}
+                    >
+                        <div className="plugin-card-icon">
+                            {plugin.name.slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="plugin-card-info">
+                            <div className="plugin-card-name">
+                                {plugin.name}
+                                {localStorage.getItem("defaultPluginHash") === plugin.hash && (
+                                    <span className="tag enabled">默认音源</span>
+                                )}
+                                <span className={`tag ${plugin.enabled ? "enabled" : "disabled"}`}>
+                                    {plugin.enabled ? "已启用" : "已禁用"}
+                                </span>
+                            </div>
+                            <div className="plugin-card-meta">
+                                {plugin.version && `v${plugin.version}`}
+                                {plugin.author && ` · ${plugin.author}`}
+                                {plugin.srcUrl && (
+                                    <>
+                                        {" · "}
+                                        <a
+                                            href={plugin.srcUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            style={{ color: "var(--primary-color)" }}
+                                        >
+                                            项目主页
+                                        </a>
+                                    </>
+                                )}
+                            </div>
+                            <div
+                                className="plugin-card-desc"
+                                style={{ maxHeight: 40, overflow: "hidden" }}
+                                dangerouslySetInnerHTML={{ __html: plugin.description ?? "" }}
+                            />
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            <button
+                                className={plugin.enabled ? "btn-ghost" : "btn-primary"}
+                                onClick={async () => {
+                                    await ipcInvoke("plugin:setEnabled", plugin.hash, !plugin.enabled);
+                                    refresh();
+                                }}
+                            >
+                                {plugin.enabled ? "禁用" : "启用"}
+                            </button>
+                            <button className="btn-ghost" onClick={(e) => openMenu(e as any, plugin)}>
+                                更多
+                            </button>
+                        </div>
+                    </PluginDraggable>
+                );
+            })}
 
             {!plugins.length && (
                 <div className="empty-hint">
@@ -465,5 +583,60 @@ export default function PluginManagePage() {
                 </div>
             )}
         </div>
+    );
+}
+
+/**
+ * 插件卡片的拖拽外壳（与侧边栏歌单行同一套分层）：
+ * 外层 div 的 transform 由 Draggable 接管（被拖卡片跟随指针），
+ * 内层 .plugin-card 的 transform 留给「让位」过渡动画——
+ * 两者必须分层，否则 Draggable 写入的 translate 会把让位位移覆盖掉。
+ * 整张卡片任意位置按下即可拖；按钮/链接上按下不拖（cancel），保持点击行为。
+ */
+function PluginDraggable(props: {
+    offsetY: number;
+    dragging: boolean;
+    shiftY: number;
+    disabled: boolean;
+    onStart: () => void;
+    onMove: (deltaY: number) => void;
+    onStop: () => void;
+    onContextMenu: (e: React.MouseEvent) => void;
+    /** 注册内层卡片元素：拖动开始时测 offsetTop/Height 用 */
+    registerRef: (el: HTMLDivElement | null) => void;
+    children: React.ReactNode;
+}) {
+    const nodeRef = useRef<HTMLDivElement>(null);
+    return (
+        <Draggable
+            nodeRef={nodeRef}
+            axis="y"
+            position={{ x: 0, y: props.offsetY }}
+            onStart={props.onStart}
+            onDrag={(_, data) => props.onMove(data.deltaY)}
+            onStop={props.onStop}
+            disabled={props.disabled}
+            cancel="button, a, input, textarea, select"
+        >
+            <div
+                ref={nodeRef}
+                style={{ position: "relative", zIndex: props.dragging ? 10 : undefined }}
+            >
+                <div
+                    ref={props.registerRef}
+                    className={`plugin-card${props.dragging ? " dragging" : ""}`}
+                    style={{
+                        transform:
+                            !props.dragging && props.shiftY
+                                ? `translateY(${props.shiftY}px)`
+                                : undefined,
+                        transition: props.dragging ? "none" : "transform 160ms ease",
+                    }}
+                    onContextMenu={props.onContextMenu}
+                >
+                    {props.children}
+                </div>
+            </div>
+        </Draggable>
     );
 }

@@ -52,6 +52,33 @@ export async function getNeteaseStatus(): Promise<{ loggedIn: boolean }> {
     return ipcInvoke("netease:getStatus");
 }
 
+/** 当前登录的网易云账号资料（未登录/获取失败为 null） */
+export interface INeteaseProfile {
+    userId: string;
+    nickname: string;
+    avatarUrl: string;
+}
+
+/**
+ * 模块级缓存的账号资料：页面挂载初始化时（还没发异步请求）就要用它决定
+ * 快照/会话归属哪个账号，只能靠上一轮请求留下的这份缓存同步取。
+ */
+let cachedProfile: INeteaseProfile | null = null;
+
+export function getCachedNeteaseProfile(): INeteaseProfile | null {
+    return cachedProfile;
+}
+
+export async function getNeteaseAccountInfo(): Promise<INeteaseProfile | null> {
+    const res = await ipcInvoke("netease:getAccountInfo");
+    if (!res?.success) {
+        // 拿不到资料不抛错：只影响「识别换号」与设置页展示，不当成登录失败
+        return null;
+    }
+    cachedProfile = (res.data as INeteaseProfile | null) ?? null;
+    return cachedProfile;
+}
+
 export async function openNeteaseLogin(): Promise<{
     success: boolean;
     canceled?: boolean;
@@ -61,6 +88,7 @@ export async function openNeteaseLogin(): Promise<{
 }
 
 export async function neteaseLogout(): Promise<void> {
+    cachedProfile = null;
     await ipcInvoke("netease:logout");
 }
 

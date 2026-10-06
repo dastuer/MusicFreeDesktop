@@ -569,6 +569,7 @@ async function wrapNetease<T>(fn: () => Promise<T>) {
 }
 
 ipcMain.handle("netease:getStatus", () => neteaseService.getStatus());
+ipcMain.handle("netease:getAccountInfo", () => wrapNetease(() => neteaseService.getAccountInfo()));
 ipcMain.handle("netease:login", () => neteaseService.openLoginWindow());
 ipcMain.handle("netease:logout", () => neteaseService.logout());
 ipcMain.handle("netease:getDailySongs", () => wrapNetease(() => neteaseService.getDailySongs()));

@@ -10,8 +10,11 @@ import {
     getUserSheets,
 } from "@/core/musicSheet";
 import {
+    getCachedNeteaseProfile,
     INeteasePlaylistCard,
+    INeteaseProfile,
     INeteaseSong,
+    getNeteaseAccountInfo,
     NeteaseNeedLoginError,
     fetchNeteaseDailySongs,
     fetchNeteasePersonalizedPlaylists,
@@ -21,6 +24,7 @@ import {
     openNeteaseLogin,
 } from "@/core/netease";
 import {
+    resetAllMatchSessions,
     resetMatchSession,
     startMatchSession,
     startPlaylistMatchSession,
@@ -50,6 +54,11 @@ function dateStr(d = new Date()) {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** 快照按「日期@账号」分键：换账号不会拿到上个账号的推荐网格 */
+function snapshotSourceKey(profile?: INeteaseProfile | null) {
+    return `${dateStr()}@${profile?.userId ?? ""}`;
+}
+
 interface INeteaseDailySnapshot {
     playlists: INeteasePlaylistCard[];
 }
@@ -59,7 +68,10 @@ type Phase = "loading" | "anonymous" | "ready";
 export default function NeteaseDailyPage() {
     // 快照/会话任一存在就能立即出内容：phase 初值据此跳过「正在连接」
     const [initialSnapshot] = useState(() =>
-        readPageSnapshot<INeteaseDailySnapshot>(PAGE_KEY, dateStr()),
+        readPageSnapshot<INeteaseDailySnapshot>(
+            PAGE_KEY,
+            snapshotSourceKey(getCachedNeteaseProfile()),
+        ),
     );
     const [phase, setPhase] = useState<Phase>(initialSnapshot ? "ready" : "loading");
     const [expired, setExpired] = useState(false);
@@ -70,6 +82,11 @@ export default function NeteaseDailyPage() {
     );
     const [playlistsError, setPlaylistsError] = useState("");
     const [reloadKey, setReloadKey] = useState(0);
+    /** 当前账号：换号时要把旧账号的会话与页面数据全部作废（见下方 effect） */
+    const [profile, setProfile] = useState<INeteaseProfile | null>(() =>
+        getCachedNeteaseProfile(),
+    );
+    const profileRef = useRef<INeteaseProfile | null>(profile);
     // 刷新按钮带来的「本次不走缓存」标记：从点击处传到异步加载完成后的 startMatchSession
     const ignoreCacheRef = useRef(false);
 
@@ -102,6 +119,22 @@ export default function NeteaseDailyPage() {
             let needLogin = false;
             let dailySongs: INeteaseSong[] = [];
             let cards: INeteasePlaylistCard[] = [];
+
+            // 登录了，但可能换了账号（退出重登/扫码登了另一个号）：私人雷达等歌单
+            // 内容按账号生成，旧账号的匹配会话和页面残留数据对新人来说是错的，全部作废重走
+            const account = await getNeteaseAccountInfo();
+            if (cancelled) {
+                return;
+            }
+            if (account && account.userId !== profileRef.current?.userId) {
+                profileRef.current = account;
+                setProfile(account);
+                setSongs([]);
+                setPlaylists([]);
+                setPhase("loading");
+                resetAllMatchSessions();
+            }
+
             try {
                 dailySongs = await fetchNeteaseDailySongs();
             } catch (e: any) {
@@ -145,9 +178,11 @@ export default function NeteaseDailyPage() {
             if (cards.length) {
                 setPlaylists(cards);
                 // 只在拿到有效数据时写快照（约定：失败/空态不写，避免覆盖好数据）
-                writePageSnapshot<INeteaseDailySnapshot>(PAGE_KEY, dateStr(), {
-                    playlists: cards,
-                });
+                writePageSnapshot<INeteaseDailySnapshot>(
+                    PAGE_KEY,
+                    snapshotSourceKey(account ?? profileRef.current),
+                    { playlists: cards },
+                );
             }
             setPhase("ready");
             if (dailySongs.length) {
@@ -304,7 +339,7 @@ export default function NeteaseDailyPage() {
                                 )}
                                 <MusicList
                                     musicList={matchedItems}
-                                    listId={`netease-daily-${dateStr()}`}
+                                    listId={`netease-daily-${dateStr()}-${profile?.userId ?? ""}`}
                                     searchable
                                     selectable={false}
                                     className="netease-list-in"

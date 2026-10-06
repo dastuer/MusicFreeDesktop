@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Sidebar from "./components/layout/Sidebar";
 import PlayerBar from "./components/layout/PlayerBar";
 import MusicDetailOverlay from "./components/layout/MusicDetailOverlay";
@@ -12,10 +12,12 @@ import SearchHistoryPanel from "./components/base/SearchHistoryPanel";
 import Icon from "./components/base/Icon";
 import {
     goBack,
+    getLastNavKind,
     navigate,
     useCanGoBack,
     useCurrentRoute,
 } from "./core/router";
+import { recallScroll, rememberScroll } from "./core/scrollMemory";
 import {
     IPlayFailurePayload,
     IQualitySwapFailedPayload,
@@ -76,6 +78,20 @@ function MainContent(props: { onOpenDetail: () => void }) {
     const searchBoxRef = useRef<HTMLDivElement>(null);
 
     const Page = pageMap[route.path] ?? HomePage;
+
+    /** 滚动容器：页面实例（路由条目）切换时按导航方向恢复/重置滚动位置 */
+    const pageScrollRef = useRef<HTMLDivElement>(null);
+
+    // 返回/前进时恢复该页面实例离开时的滚动位置；新进的页面从顶部开始。
+    // 用 useLayoutEffect 在首帧绘制前设置 scrollTop，避免先画顶部再跳回去。
+    useLayoutEffect(() => {
+        const el = pageScrollRef.current;
+        if (!el) {
+            return;
+        }
+        const kind = getLastNavKind();
+        el.scrollTop = kind === "back" || kind === "forward" ? recallScroll(route.id) : 0;
+    }, [route.id]);
 
     /** 发起一次搜索：回填输入框、记历史、跳转。回车和点历史都走这里 */
     const runSearch = useCallback((raw: string) => {
@@ -174,7 +190,17 @@ function MainContent(props: { onOpenDetail: () => void }) {
                     {/* 设置入口右侧留边距：Windows 要避开系统 caption 按钮区域 */}
                     <div style={{ width: TITLEBAR_RIGHT_INSET }} />
                 </div>
-                <div className="page-container" key={`${route.path}-${JSON.stringify(route.params)}`}>
+                <div
+                    className="page-container"
+                    key={`${route.path}-${JSON.stringify(route.params)}`}
+                    ref={pageScrollRef}
+                    onScroll={() => {
+                        const el = pageScrollRef.current;
+                        if (el) {
+                            rememberScroll(route.id, el.scrollTop);
+                        }
+                    }}
+                >
                     <Page {...route.params} />
                 </div>
             </main>

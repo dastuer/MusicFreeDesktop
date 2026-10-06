@@ -2615,6 +2615,14 @@ html[data-theme="dark"] .search-history-panel {
     display: flex;
     gap: 14px;
     align-items: flex-start;
+    cursor: grab;
+}
+
+/* 拖动中的卡片：抬起感（与侧边栏歌单行一致） */
+.plugin-card.dragging {
+    background: var(--hover-bg);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    cursor: grabbing;
 }
 
 .plugin-card-icon {
