@@ -8,6 +8,7 @@ import { atom, getDefaultStore, useAtomValue } from "jotai";
 export type RoutePath =
     | "home"
     | "neteaseDaily"
+    | "neteasePlaylistDetail"
     | "search"
     | "sheetDetail"
     | "albumDetail"

@@ -1058,6 +1058,8 @@ html[data-theme="dark"] .sheet-tag-popover {
     background: var(--hover-bg);
     border-radius: 8px;
     padding: 16px;
+    /* 与下方内容（如歌单卡片网格）保持呼吸间距 */
+    margin-bottom: 16px;
 }
 
 /* 榜单卡片角标（更新周期） */
@@ -2887,57 +2889,6 @@ body.in-desktop-lyrics-window {
     color: var(--text-secondary);
 }
 
-/* 歌单导入弹窗 */
-.netease-modal-mask {
-    position: fixed;
-    inset: 0;
-    background: var(--mask);
-    z-index: 260;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    animation: fade-in 0.18s ease;
-    -webkit-app-region: no-drag;
-}
-
-.netease-modal {
-    background: var(--page-bg);
-    border-radius: 12px;
-    width: 560px;
-    max-width: calc(100vw - 80px);
-    max-height: 72vh;
-    padding: 20px 24px;
-    overflow-y: auto;
-    animation: fade-in 0.18s ease;
-}
-
-.netease-modal-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-color);
-    margin-bottom: 12px;
-}
-
-.netease-modal-hint {
-    color: var(--text-secondary);
-    font-size: 13px;
-    margin: 8px 0;
-    line-height: 1.6;
-}
-
-.netease-modal-error {
-    color: var(--primary-color);
-    font-size: 13px;
-    margin: 8px 0;
-    line-height: 1.6;
-}
-
-.netease-summary {
-    font-size: 13px;
-    color: var(--text-color);
-    margin: 10px 0 4px;
-}
-
 .netease-progress {
     height: 6px;
     border-radius: 3px;
@@ -3038,4 +2989,34 @@ body.in-desktop-lyrics-window {
 /* 匹配完成后列表整体淡入 */
 .netease-list-in {
     animation: fade-in 0.3s ease;
+}
+
+/* 匹配进度条：填充条上一道流光扫过，增强「正在推进」的观感 */
+@keyframes netease-shimmer {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(100%); }
+}
+
+.netease-progress > div {
+    position: relative;
+    overflow: hidden;
+}
+
+.netease-progress > div::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        100deg,
+        transparent 30%,
+        rgba(255, 255, 255, 0.35) 50%,
+        transparent 70%
+    );
+    animation: netease-shimmer 1.4s linear infinite;
+}
+
+.netease-matching-note {
+    font-size: 11px;
+    color: var(--text-placeholder);
+    margin-top: 12px;
 }
