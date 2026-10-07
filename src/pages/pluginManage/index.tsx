@@ -442,11 +442,6 @@ export default function PluginManagePage() {
                     {currentEditing.supportedMethods.length === 0 && (
                         <div className="empty-hint">该插件未定义变量</div>
                     )}
-                    {(currentEditing as any).userVariables &&
-                    Object.keys(varDraft).length === 0 &&
-                    !(currentEditing as any).userVariablesDef?.length
-                        ? null
-                        : null}
                     {Object.keys(varDraft).map((key) => (
                         <div key={key} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                             <input

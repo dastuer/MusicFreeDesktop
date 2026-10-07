@@ -24,7 +24,33 @@ const isWin = process.platform === "win32";
 /** 与前端 --titlebar-height 对齐：Windows 的 caption 按钮要压在标题栏拖拽区上 */
 const TITLEBAR_HEIGHT = 64;
 
+/**
+ * 单实例锁：第二实例必须让位，否则两份进程各起各的播放、
+ * 写同一份 store.json/session.json（双份音频 + 数据竞争）。
+ * 抢不到锁的进程直接退出。
+ */
+if (!app.requestSingleInstanceLock()) {
+    app.quit();
+} else {
+    app.on("second-instance", () => {
+        // 第二个实例被拉起（快捷方式双击 / win 任务栏再开）：把已有窗口带到用户面前
+        focusMainWindow();
+    });
+}
+
 let mainWindow: BrowserWindow | null = null;
+
+/** 把主窗口带到前台：最小化先还原；macOS 隐藏时 show 不保证回前台，补一次 focus */
+function focusMainWindow() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+    if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+}
 
 protocol.registerSchemesAsPrivileged([
     {

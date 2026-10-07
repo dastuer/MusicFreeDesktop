@@ -6,6 +6,9 @@ import { SerializedPlugin, getPlugins } from "./ipc";
  *  - 用户也可以显式指定只用某个音源，即使失败也不回落到其他音源；
  *  - 这些页面共用同一份偏好（同一个 localStorage 键）：页面切换即整体重挂载
  *    （见 App.tsx 的 key），重挂载时重新读取，一处修改处处生效。
+ *
+ * 搜索页的音源选择也在这里持久化（独立一份）：它没有「自动」模式，
+ * 只记录用户最后选用的插件，应用重启后仍然选中。
  */
 
 /** 「自动」：不指定音源，按默认音源优先顺序逐个降级尝试 */
@@ -55,6 +58,22 @@ export function setBrowseSource(hash: string) {
         return;
     }
     localStorage.setItem(STORAGE_KEY, hash);
+}
+
+/** 搜索页的音源偏好键：记录用户最后选用的搜索音源，重启后仍选中它 */
+const SEARCH_STORAGE_KEY = "searchSourceHash";
+
+/** 搜索页上次选用的插件 hash；没有记录（从未选过）时返回空串 */
+export function getSearchSource(): string {
+    return localStorage.getItem(SEARCH_STORAGE_KEY) || "";
+}
+
+export function setSearchSource(hash: string) {
+    if (!hash) {
+        localStorage.removeItem(SEARCH_STORAGE_KEY);
+        return;
+    }
+    localStorage.setItem(SEARCH_STORAGE_KEY, hash);
 }
 
 /** 全部已启用且挂载成功的插件（getPlugins 内部已把默认音源排到最前） */

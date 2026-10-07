@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import { showContextMenu } from "@/components/base/ContextMenu";
-import { showDownloadPanel } from "@/components/base/DownloadPanel";
 import { showToast } from "@/components/base/Toast";
 import {
     IDownloadTask,
@@ -146,7 +145,6 @@ export default function DownloadingPage() {
                 count={tasks.length}
                 activeCount={activeCount}
                 downloadDir={downloadDir}
-                onDownloadMore={() => showDownloadPanel([])}
                 onClearCompleted={async () => {
                     await clearCompletedDownloads();
                     setTasks(await refreshDownloadTasks());
@@ -298,7 +296,6 @@ function MediaHeaderBar(props: {
     count: number;
     activeCount: number;
     downloadDir: string;
-    onDownloadMore: () => void;
     onClearCompleted: () => void;
 }) {
     return (

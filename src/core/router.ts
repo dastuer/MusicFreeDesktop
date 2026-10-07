@@ -1,5 +1,4 @@
 import { atom, getDefaultStore, useAtomValue } from "jotai";
-import { forgetScroll } from "./scrollMemory";
 
 /**
  * 简单栈式路由：与移动端 ROUTE_PATH 概念一致
@@ -62,12 +61,33 @@ export function getLastNavKind(): NavKind {
     return lastNavKind;
 }
 
-/** 路由栈被截断时，把丢弃条目的附属数据（滚动位置）一起清掉 */
+/**
+ * 路由条目被丢弃（栈截断 / 被替换）时执行的清理回调。
+ * 「按页面实例存」的附属数据（滚动位置、搜索页快照等）在这里注册销毁逻辑，
+ * 跟着条目一起清掉，避免长时间使用后无限增长；router 本身不关心具体存了什么。
+ */
+const discardHooks: ((routeId: number) => void)[] = [];
+
+export function onRouteDiscarded(hook: (routeId: number) => void): () => void {
+    discardHooks.push(hook);
+    return () => {
+        const index = discardHooks.indexOf(hook);
+        if (index >= 0) {
+            discardHooks.splice(index, 1);
+        }
+    };
+}
+
+function discardRoute(routeId: number) {
+    discardHooks.forEach((hook) => hook(routeId));
+}
+
+/** 路由栈被截断时，把丢弃条目的附属数据（滚动位置、页面快照）一起清掉 */
 function pruneRemovedRoutes(kept: IRoute[]) {
     const keptIds = new Set(kept.map((r) => r.id));
     for (const route of store.get(routeStackAtom)) {
         if (!keptIds.has(route.id)) {
-            forgetScroll(route.id);
+            discardRoute(route.id);
         }
     }
 }
@@ -89,7 +109,7 @@ export function replaceCurrent(path: RoutePath, params: Record<string, any> = {}
     const stack = store.get(routeStackAtom);
     const index = store.get(routeIndexAtom);
     const newStack = [...stack];
-    forgetScroll(newStack[index].id);
+    discardRoute(newStack[index].id);
     newStack[index] = makeRoute(path, params);
     store.set(routeStackAtom, newStack);
     lastNavKind = "replace";

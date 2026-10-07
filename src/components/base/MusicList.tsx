@@ -21,6 +21,7 @@ import {
     useDownloadSetup,
 } from "@/core/downloadManager";
 import { ipcInvoke } from "@/core/ipc";
+import { navigateToArtist } from "@/utils/artistNav";
 import { showToast } from "./Toast";
 
 /**
@@ -96,8 +97,22 @@ interface IMusicListProps {
     /** 是否显示封面列（网格行样式） */
     showIndex?: boolean;
     onLoadMore?: () => void;
+    /** 没有更多了：无限滚动下停止续拉，并在尾部显示「没有更多了」 */
     isEnd?: boolean;
+    /** 续拉被「卡住」：插件原地踏步或连续失败熔断。autoLoad 下显示手动重试入口 */
+    stalled?: boolean;
+    /** stalled 时点击重试（不传则按「没有更多了」收尾） */
+    onRetry?: () => void;
+    /** 首屏 / 重置加载（配合骨架屏） */
     loading?: boolean;
+    /** 追加加载中：列表尾部显示转圈 +「加载中…」 */
+    loadingMore?: boolean;
+    /**
+     * 无限滚动：滚到底部（提前 600px）自动调用 onLoadMore 续拉数据，
+     * 尾部显示加载中动画，拉完接着判断是否还在视口内。
+     * 不传时保持老行为：底部显示可点的「加载更多」文字。
+     */
+    autoLoad?: boolean;
     className?: string;
     renderHeader?: React.ReactNode;
     /** 是否启用多选（默认启用） */
@@ -166,7 +181,11 @@ export default function MusicList(props: IMusicListProps) {
         musicList,
         onLoadMore,
         isEnd = true,
+        stalled = false,
+        onRetry,
         loading = false,
+        loadingMore = false,
+        autoLoad = false,
         className,
         selectable = true,
         localMode = false,
@@ -233,11 +252,23 @@ export default function MusicList(props: IMusicListProps) {
      */
     const [visibleCount, setVisibleCount] = useState(INITIAL_ROWS);
     const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+    const loadSentinelRef = React.useRef<HTMLDivElement | null>(null);
 
-    // 换了列表或改了搜索词就回到首屏行数（按长度判断，避免父组件每次渲染传新数组导致反复重置）
+    // 换搜索词回到首屏行数。分片渲染的重置只在「列表变短」（重置/清空后重来）时执行：
+    // 无限滚动是往尾部追加，若按 length 变化无脑回 150，会把用户已滚出的行塌回去，
+    // 内容高度骤减、加载哨兵立刻又进视口 -> 连环触发。按上一次长度判断增删。
+    const prevLengthRef = React.useRef(musicList.length);
+    useEffect(() => {
+        const prev = prevLengthRef.current;
+        prevLengthRef.current = musicList.length;
+        if (musicList.length >= prev) {
+            return;
+        }
+        setVisibleCount(INITIAL_ROWS);
+    }, [musicList.length]);
     useEffect(() => {
         setVisibleCount(INITIAL_ROWS);
-    }, [musicList.length, appliedKeyword]);
+    }, [appliedKeyword]);
 
     // 哨兵进入视口 → 追加一批
     useEffect(() => {
@@ -299,6 +330,41 @@ export default function MusicList(props: IMusicListProps) {
         !isSearching &&
         rowList.length === 0 &&
         (loading || (!!pagination && pagination.loadingMore));
+
+    /**
+     * 无限滚动：数据哨兵进入视口 → 向数据源续拉。
+     * 只在「空闲、还没有到底/卡住、已加载的行全部渲染完」时挂载——加载中撤掉哨兵，
+     * 一轮结束重新挂载时 IntersectionObserver 的初始检测会接着触发：
+     * 内容不满一屏就自动续拉直到铺满视口或到底，也不会并发重复请求。
+     */
+    const allRowsRendered = visibleCount >= musicList.length;
+    const canAutoLoad =
+        autoLoad &&
+        !pagination &&
+        !isSearching &&
+        !!onLoadMore &&
+        !loading &&
+        !loadingMore &&
+        !isEnd &&
+        !stalled &&
+        allRowsRendered;
+    useEffect(() => {
+        const el = loadSentinelRef.current;
+        if (!el) {
+            return;
+        }
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries.some((entry) => entry.isIntersecting)) {
+                    onLoadMore?.();
+                }
+            },
+            // 与分片哨兵同口径：提前 600px 开始拉，滚到真正底部时数据通常已就位
+            { rootMargin: "600px 0px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [canAutoLoad, onLoadMore, visibleCount, musicList.length]);
 
     const keyOf = (musicItem: IMusic.IMusicItem, index?: number) =>
         musicItem.id != null ? musicKey(musicItem) : `row-${index}`;
@@ -570,6 +636,13 @@ export default function MusicList(props: IMusicListProps) {
                     navigate("albumDetail", { albumItem: musicItem as any }),
             });
         }
+        if (!localMode && musicItem.artist) {
+            items.push({
+                title: "查看歌手",
+                icon: "search",
+                onClick: () => void navigateToArtist(musicItem),
+            });
+        }
         if (musicItem.localPath) {
             items.push({
                 title: "复制文件路径",
@@ -744,11 +817,37 @@ export default function MusicList(props: IMusicListProps) {
                                             {musicItem.platform}
                                         </span>
                                     )}
-                                    <span className="music-row-artist">{musicItem.artist}</span>
+                                    {/* 歌手可点：本地文件没有对应音源，navigateToArtist 会退回任意搜索音源 */}
+                                    <span
+                                        className="music-row-artist clickable"
+                                        title="查看歌手"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            void navigateToArtist(musicItem);
+                                        }}
+                                    >
+                                        {musicItem.artist}
+                                    </span>
                                 </div>
                             </div>
                         </div>
-                        <div className="music-row-album">{musicItem.album}</div>
+                        {/* 专辑列可点进专辑详情（与右键「查看专辑」同一跳转口径） */}
+                        <div
+                            className={`music-row-album${
+                                !localMode && musicItem.album ? " clickable" : ""
+                            }`}
+                            title={!localMode && musicItem.album ? "查看专辑" : undefined}
+                            onClick={
+                                !localMode && musicItem.album
+                                    ? (e) => {
+                                          e.stopPropagation();
+                                          navigate("albumDetail", { albumItem: musicItem as any });
+                                      }
+                                    : undefined
+                            }
+                        >
+                            {musicItem.album}
+                        </div>
                         <div className="music-row-actions">
                             <span
                                 className={`music-action-btn like${liked ? " liked" : ""}`}
@@ -823,18 +922,57 @@ export default function MusicList(props: IMusicListProps) {
             {!pagination && visibleCount < (isSearching ? filteredList.length : musicList.length) && (
                 <div ref={sentinelRef} className="music-list-sentinel" />
             )}
-            {!pagination && loading && rowList.length > 0 && (
-                <div className="loading-hint">加载中…</div>
-            )}
-            {!pagination && !loading && !isEnd && onLoadMore && (
-                <div
-                    className="loading-hint"
-                    style={{ cursor: "pointer" }}
-                    onClick={onLoadMore}
-                >
-                    加载更多
+            {/* 无限滚动数据哨兵：已加载行全部渲染完、且还能续拉时挂在尾部，进视口即触发续拉 */}
+            {canAutoLoad && <div ref={loadSentinelRef} className="music-list-sentinel" />}
+            {/* 加载中（续拉，或首屏后仍有内容的加载）：转圈 + 文案 */}
+            {!pagination && (loadingMore || (loading && rowList.length > 0)) && (
+                <div className="loading-hint music-list-loading">
+                    <span className="music-list-spinner" aria-hidden />
+                    加载中…
                 </div>
             )}
+            {/* 老式手动「加载更多」（非无限滚动、非自动加载中） */}
+            {!pagination &&
+                !autoLoad &&
+                !loading &&
+                !loadingMore &&
+                !isEnd &&
+                onLoadMore && (
+                    <div
+                        className="loading-hint"
+                        style={{ cursor: "pointer" }}
+                        onClick={onLoadMore}
+                    >
+                        加载更多
+                    </div>
+                )}
+            {/* 无限滚动续拉被卡住（插件原地踏步 / 连续失败）：手动重试入口 */}
+            {!pagination &&
+                autoLoad &&
+                !loading &&
+                !loadingMore &&
+                stalled &&
+                !isEnd &&
+                onRetry && (
+                    <div
+                        className="loading-hint"
+                        style={{ cursor: "pointer" }}
+                        onClick={onRetry}
+                    >
+                        加载中断，点击重试
+                    </div>
+                )}
+            {/* 无限滚动到底：所有已加载行渲染完 + 音源报 isEnd，收尾提示 */}
+            {!pagination &&
+                autoLoad &&
+                !isSearching &&
+                !loading &&
+                !loadingMore &&
+                isEnd &&
+                musicList.length > 0 &&
+                allRowsRendered && (
+                    <div className="music-list-end">没有更多了</div>
+                )}
             {isSearching && (
                 <div className="music-search-result">
                     {filteredList.length

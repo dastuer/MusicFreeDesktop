@@ -360,6 +360,12 @@ img {
     overflow-x: auto;
     /* 溢出滚动时给胶囊阴影/焦点留点余地 */
     padding: 2px;
+    /* 不展示横向滚动条：溢出时滚轮即左右滑动分类（wheel 换算见发现音乐页 tagbar） */
+    scrollbar-width: none;
+}
+
+.sheet-tagbar::-webkit-scrollbar {
+    display: none;
 }
 
 .sheet-tag-pill {
@@ -726,6 +732,12 @@ html[data-theme="dark"] .sheet-tag-popover {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* 歌手 / 专辑可点进详情页（本地音乐除外：没有对应音源，点了也搜不到） */
+.music-row-artist.clickable,
+.music-row-album.clickable {
+    cursor: pointer;
 }
 
 .music-row-artist:hover,
@@ -1959,6 +1971,19 @@ html[data-theme="dark"] .sheet-tag-popover {
     cursor: default;
 }
 
+/* 译文行：只有插件返回了翻译歌词才有，字号小一档弱化显示 */
+.lyric-translation {
+    font-size: 13px;
+    line-height: 18px;
+    margin-top: 2px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+}
+
+.lyric-line.active .lyric-translation {
+    color: var(--text-secondary);
+}
+
 .lyric-line.active {
     color: var(--text-color);
     font-size: 20px;
@@ -1970,6 +1995,13 @@ html[data-theme="dark"] .sheet-tag-popover {
 .lyric-line.playing {
     color: var(--primary-color);
     font-weight: 600;
+}
+
+/* 译文跟随原文的激活态：字号保持小一档不抢焦点，颜色跟上。
+   playing 规则排在 active 之后，两态重合时主题色胜出 */
+.lyric-line.playing .lyric-translation {
+    color: color-mix(in srgb, var(--primary-color) 75%, transparent);
+    font-weight: 500;
 }
 
 /* 滑动歌词时钉在歌词区右侧：滚动位置那行的起始时间（网易云样式），点击跳到该句 */
@@ -2220,7 +2252,9 @@ html[data-theme="dark"] .search-history-panel {
     position: fixed;
     inset: 0;
     background: var(--mask);
-    z-index: 200;
+    /* 高于播放列表面板（210）：在队列面板里点收藏/下载，弹窗必须压在队列之上，
+       否则面板盖住遮罩、弹窗只露半截。队列面板自己的遮罩单独按 inline 压低 */
+    z-index: 220;
     display: flex;
     align-items: flex-end;
     justify-content: center;
@@ -2233,6 +2267,79 @@ html[data-theme="dark"] .search-history-panel {
 /* 播放列表面板：top:0 起、右上角关闭按钮正落在标题栏拖拽区内，同样需要 no-drag */
 .play-queue-panel {
     -webkit-app-region: no-drag;
+}
+
+/* 队列行：序号 / 封面 / 标题+歌手 / 时长 / 移除。整行可拖（与侧边栏歌单同交互），
+   行距由列表容器 gap 固定（48px 档位 = 40 封面 + 8 上下 padding） */
+.queue-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
+    padding: 4px 6px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.queue-row:hover {
+    background: var(--hover-bg);
+}
+
+.queue-row:hover .music-action-btn {
+    opacity: 1;
+}
+
+/* 拖动中：抬起浮起 + 抓取光标（与 .sidebar-item.dragging 同视觉） */
+.queue-row.dragging {
+    background: var(--hover-bg);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    cursor: grabbing;
+}
+
+.queue-row-index {
+    flex-shrink: 0;
+    width: 22px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.queue-row.playing .queue-row-title {
+    color: var(--primary-color);
+}
+
+.queue-row-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.queue-row-title {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queue-row-artist {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queue-row-duration {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
 }
 
 .play-queue-close {
@@ -2604,6 +2711,30 @@ html[data-theme="dark"] .search-history-panel {
     color: var(--text-tertiary);
     padding: 24px 0;
     font-size: 13px;
+}
+
+/* 列表尾部加载：转圈图标 + 文案同排（无限滚动续拉中） */
+.music-list-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.music-list-spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--text-tertiary);
+    border-top-color: transparent;
+    animation: playerbar-spin 0.7s linear infinite;
+}
+
+.music-list-end {
+    text-align: center;
+    color: var(--text-tertiary);
+    padding: 18px 0 24px;
+    font-size: 12px;
 }
 
 /* 插件卡片 */

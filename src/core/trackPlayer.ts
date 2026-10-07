@@ -203,6 +203,21 @@ function getStoredVolume(): number {
     return Number.isFinite(stored) ? Math.min(Math.max(stored, 0), 1) : DEFAULT_VOLUME;
 }
 
+/** 倍速可调范围，与播放栏的倍速菜单一致 */
+export const RATE_RANGE = { min: 0.5, max: 2 };
+
+/** 读回存过的倍速：没存过 / 存了范围外的值都回 1.0 */
+function getStoredRate(): number {
+    const raw = localStorage.getItem("rate");
+    if (raw === null) {
+        return 1;
+    }
+    const stored = Number(raw);
+    return Number.isFinite(stored) && stored >= RATE_RANGE.min && stored <= RATE_RANGE.max
+        ? stored
+        : 1;
+}
+
 export const playListAtom = atom<IMusic.IMusicItem[]>([]);
 export const currentMusicAtom = atom<IMusic.IMusicItem | null>(null);
 export const musicStateAtom = atom<MusicState>("stopped");
@@ -211,7 +226,7 @@ export const progressAtom = atom<{ position: number; duration: number }>({
     position: 0,
     duration: 0,
 });
-export const rateAtom = atom<number>(1);
+export const rateAtom = atom<number>(getStoredRate());
 export const volumeAtom = atom<number>(getStoredVolume());
 /**
  * 选中的音质：appConfig 里那份「默认音质」的响应式视图。
@@ -271,7 +286,8 @@ class TrackPlayer extends EventEmitter {
      */
     private _pendingNext: string[] = [];
     private _currentMusic: IMusic.IMusicItem | null = null;
-    private _rate = 1;
+    /** 倍速：构造时读回上次的选择（与 rateAtom 同源），setup 时挂到 audio 上 */
+    private _rate = getStoredRate();
     private pendingPlayId = "";
     /** 换歌时正在解析音源：期间播放器静音、状态为 loading */
     private isLoading = false;
@@ -315,6 +331,7 @@ class TrackPlayer extends EventEmitter {
         const audio = new Audio();
         audio.preload = "auto";
         audio.volume = getStoredVolume();
+        audio.playbackRate = this._rate;
         this.attachAudioListeners(audio);
         this.audio = audio;
 
@@ -1172,6 +1189,28 @@ class TrackPlayer extends EventEmitter {
     }
 
     /**
+     * 队列内拖拽排序：把 from 位置的歌挪到 to 位置。
+     * 只改顺序：当前歌曲跟着条目走、待播登记按 platform+id 认歌与位置无关、历史不动。
+     */
+    reorderInQueue(from: number, to: number) {
+        if (
+            from === to ||
+            from < 0 ||
+            to < 0 ||
+            from >= this._playList.length ||
+            to >= this._playList.length
+        ) {
+            return;
+        }
+        const list = [...this._playList];
+        const [moved] = list.splice(from, 1);
+        list.splice(to, 0, moved);
+        this._playList = list;
+        setAtom(playListAtom, this._playList);
+        this.persistPlayList();
+    }
+
+    /**
      * 清空播放队列，**正在播的这首继续播**。
      *
      * 队列空了以后 `_currentMusic` 是个不在队列里的"孤儿"，几处下游都靠
@@ -1692,15 +1731,17 @@ class TrackPlayer extends EventEmitter {
     }
 
     async setRate(rate: number) {
-        this._rate = rate;
+        const next = Math.min(Math.max(rate, RATE_RANGE.min), RATE_RANGE.max);
+        this._rate = next;
         if (this.audio) {
-            this.audio.playbackRate = rate;
+            this.audio.playbackRate = next;
         }
         // 在途音质切换的影子也要跟上：交接过去不能把倍速打回原形
         if (this.swapAudio) {
-            this.swapAudio.playbackRate = rate;
+            this.swapAudio.playbackRate = next;
         }
-        setAtom(rateAtom, rate);
+        localStorage.setItem("rate", String(next));
+        setAtom(rateAtom, next);
     }
 
     setVolume(volume: number) {
@@ -1781,6 +1822,9 @@ export function useRepeatMode() {
 export function useVolume() {
     return useAtomValue(volumeAtom);
 }
+export function useRate() {
+    return useAtomValue(rateAtom);
+}
 export function useQuality() {
     return useAtomValue(qualityAtom);
 }
@@ -1806,6 +1850,22 @@ export function useCurrentLyric() {
 
 export const currentLyricAtom = atom<ILyric.IParsedLrc>([]);
 
+/**
+ * 歌词翻译显示开关（播放栏「文」按钮）：默认关闭。
+ * 只管译文**显示**——解析时始终带着 translation 数据，打开即见，不用重拉歌词。
+ */
+export const lyricTranslationOnAtom = atom(localStorage.getItem("lyricTranslation") === "1");
+
+export function toggleLyricTranslation() {
+    const next = !store.get(lyricTranslationOnAtom);
+    store.set(lyricTranslationOnAtom, next);
+    localStorage.setItem("lyricTranslation", next ? "1" : "0");
+}
+
+export function useLyricTranslationOn() {
+    return useAtomValue(lyricTranslationOnAtom);
+}
+
 /** 加载当前歌曲歌词 */
 export async function loadCurrentLyric(musicItem: IMusic.IMusicItem) {
     let lyricSource: ILyric.ILyricSource | null = musicItem.lyric ?? null;
@@ -1827,25 +1887,59 @@ export async function loadCurrentLyric(musicItem: IMusic.IMusicItem) {
             // ignore
         }
     }
-    store.set(currentLyricAtom, rawLrc ? parseLrc(rawLrc) : []);
+    store.set(currentLyricAtom, rawLrc ? parseLrc(rawLrc, lyricSource?.translation) : []);
 }
 
-function parseLrc(rawLrc: string): ILyric.IParsedLrc {
+/** LRC 时间标签：[mm:ss] / [mm:ss.xx] / [mm:ss,xx]，一行可以挂多个 */
+const LRC_TIME_REG = /\[(\d+):(\d+)(?:[.:](\d+))?\]/g;
+
+/** 抽一行 LRC 里全部时间标签对应的秒数 */
+function extractLrcTimes(line: string): number[] {
+    const times: number[] = [];
+    let match: RegExpExecArray | null;
+    LRC_TIME_REG.lastIndex = 0;
+    while ((match = LRC_TIME_REG.exec(line)) !== null) {
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        const fraction = match[3] ? parseInt(match[3], 10) / Math.pow(10, match[3].length) : 0;
+        times.push(minutes * 60 + seconds + fraction);
+    }
+    return times;
+}
+
+/** 一行 LRC 去掉时间标签后的正文 */
+function lrcText(line: string) {
+    return line.replace(LRC_TIME_REG, "").trim();
+}
+
+function parseLrc(rawLrc: string, translation?: string): ILyric.IParsedLrc {
     const result: ILyric.IParsedLrc = [];
-    const lines = rawLrc.split("\n");
-    const timeReg = /\[(\d+):(\d+)(?:[.:](\d+))?\]/g;
-    lines.forEach((line) => {
-        const text = line.replace(timeReg, "").trim();
-        let match: RegExpExecArray | null;
-        timeReg.lastIndex = 0;
-        while ((match = timeReg.exec(line)) !== null) {
-            const minutes = parseInt(match[1], 10);
-            const seconds = parseInt(match[2], 10);
-            const fraction = match[3] ? parseInt(match[3], 10) / Math.pow(10, match[3].length) : 0;
-            const time = minutes * 60 + seconds + fraction;
+    rawLrc.split("\n").forEach((line) => {
+        const text = lrcText(line);
+        for (const time of extractLrcTimes(line)) {
             result.push({ time, lrc: text, index: result.length });
         }
     });
     result.sort((a, b) => a.time - b.time);
+    // 译文与原文共用同一套时间轴，按时间戳对齐回原文行。
+    // 两侧都经过同样的 分数→浮点 计算，toFixed(2) 后必然同键；精度超过百分秒的
+    // 差异（极罕见）宁可丢译文也不错行。
+    if (translation) {
+        const transMap = new Map<string, string>();
+        translation.split("\n").forEach((line) => {
+            const text = lrcText(line);
+            if (!text) {
+                return;
+            }
+            for (const time of extractLrcTimes(line)) {
+                transMap.set(time.toFixed(2), text);
+            }
+        });
+        if (transMap.size) {
+            for (const item of result) {
+                item.translation = transMap.get(item.time.toFixed(2));
+            }
+        }
+    }
     return result;
 }

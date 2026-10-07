@@ -6,8 +6,10 @@
  * 新进的页面（push/replace）仍从顶部开始。
  *
  * 位置由 App.tsx 在 page-container 滚动时持续写入；条目从路由栈里被截断丢弃时，
- * 对应的记录也一并清掉（见 router.ts），避免长时间使用后 map 无限增长。
+ * 对应的记录也一并清掉（onRouteDiscarded 注册），避免长时间使用后 map 无限增长。
  */
+
+import { onRouteDiscarded } from "./router";
 
 const positions = new Map<number, number>();
 
@@ -23,3 +25,5 @@ export function recallScroll(routeId: number): number {
 export function forgetScroll(routeId: number) {
     positions.delete(routeId);
 }
+
+onRouteDiscarded(forgetScroll);

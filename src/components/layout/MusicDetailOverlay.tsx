@@ -6,10 +6,12 @@ import {
     TrackPlayerSingleton,
     useCurrentMusic,
     useCurrentLyric,
+    useLyricTranslationOn,
     loadCurrentLyric,
     useMusicState,
 } from "@/core/trackPlayer";
 import { useProgress } from "@/core/trackPlayer";
+import { navigateToArtist } from "@/utils/artistNav";
 
 /**
  * 正在播放页：左侧大封面 / 右侧滚动歌词（网易云风格）
@@ -29,6 +31,7 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
     const playing = musicState === "playing";
     const progress = useProgress();
     const lyric = useCurrentLyric();
+    const translationOn = useLyricTranslationOn();
     const lyricRef = useRef<HTMLDivElement>(null);
     const [userScrolled, setUserScrolled] = useState(false);
     const [scrollIndex, setScrollIndex] = useState(-1);
@@ -154,7 +157,15 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                 </div>
                 <div className="music-detail-info">
                     <div className="music-detail-title">{currentMusic.title}</div>
-                    <div className="music-detail-artist">
+                    <div
+                        className="music-detail-artist"
+                        title="查看歌手"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => {
+                            void navigateToArtist(currentMusic);
+                            onClose();
+                        }}
+                    >
                         {currentMusic.artist}
                         {currentMusic.album ? ` - ${currentMusic.album}` : ""}
                     </div>
@@ -189,7 +200,12 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                                             userScrolled && index === activeIndex ? " playing" : ""
                                         }`}
                                     >
-                                        {item.lrc || "·"}
+                                        <div className="lyric-original">{item.lrc || "·"}</div>
+                                        {translationOn && item.translation && (
+                                            <div className="lyric-translation">
+                                                {item.translation}
+                                            </div>
+                                        )}
                                     </div>
                                 ))
                             ) : (

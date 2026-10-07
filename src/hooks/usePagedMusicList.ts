@@ -20,6 +20,20 @@ export interface IPagedFetchResult<T> {
     isEnd: boolean;
 }
 
+/**
+ * 供「返回页面还原现场」用的最小快照：把内部进度（音源拉到第几页等）一起存下来，
+ * 挂载时从 `initial` 传入即可跳过首次拉取、原样呈现，翻页也能无缝续拉。
+ */
+export interface IPagedSnapshot<T> {
+    items: T[];
+    currentPage: number;
+    pageSize: number;
+    isEnd: boolean;
+    stalled: boolean;
+    /** 音源已拉到的页码：还原后从这里继续；若归零重拉，重复数据会被误判成「原地踏步」 */
+    sourcePage: number;
+}
+
 export interface IUsePagedMusicListOptions<T> {
     /** 拉取音源第 page 页（从 1 开始）；失败请直接 throw，调用方会保留上一页状态 */
     fetchPage: (page: number) => Promise<IPagedFetchResult<T>>;
@@ -28,6 +42,11 @@ export interface IUsePagedMusicListOptions<T> {
     storageKey: string;
     /** 变化即清空并重新从第 1 页拉（切换音源 / 歌单 / 搜索条件） */
     resetKey: string;
+    /**
+     * 挂载时的恢复快照（页面返回还原用）。只在挂载那一刻读一次：
+     * 传入后跳过挂载时的首次重置拉取，直接以快照内容呈现。
+     */
+    initial?: IPagedSnapshot<T>;
     /**
      * 音源声明的总条数（歌单侧就是 `sheetItem.worksNum`）。
      * 插件协议的搜索返回**没有**总数字段，所以搜索页拿不到，只能显示「已加载 N 首」；
@@ -56,11 +75,20 @@ export interface IUsePagedMusicListResult<T> {
     hasMore: boolean;
     /** 音源声明的总条数；搜索等拿不到总数的场景是 undefined */
     expectedTotal?: number;
+    /** 音源已拉到的页码（还原现场用） */
+    sourcePage: number;
     /** 首次加载 / 重置后的加载 */
     loading: boolean;
     /** 正在为翻页补数据 */
     loadingMore: boolean;
     goToPage: (page: number) => void;
+    /** 无限滚动模式：往后多拉一页的量（滚到底部哨兵触发） */
+    loadMore: () => void;
+    /**
+     * 手动重试被「卡住」的续拉（插件原地踏步 / 连续失败触发的 stalled）：
+     * 撤销熔断再补一轮。音源真正到底（isEnd）时什么都不做。
+     */
+    retry: () => void;
     changePageSize: (size: number) => void;
     /** 就地替换全部数据（本地歌单这种一次性拿全的场景） */
     replaceAll: (items: T[]) => void;
@@ -109,27 +137,43 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
     const fetchPageRef = useRef(options.fetchPage);
     fetchPageRef.current = options.fetchPage;
 
+    // 恢复快照只在挂载那一刻生效，之后调用方传什么都不该打扰正在进行的分页
+    const initialRef = useRef(options.initial);
+    const initial = initialRef.current;
+
     const [nonce, setNonce] = useState(0);
-    const [items, setItems] = useState<T[]>([]);
-    const [isEnd, setIsEnd] = useState(false);
-    const [stalled, setStalled] = useState(false);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [pageSize, setPageSize] = useState(() =>
-        readStoredPageSize(storageKey, defaultPageSize, PAGE_SIZE_OPTIONS),
+    const [items, setItems] = useState<T[]>(() => initial?.items ?? []);
+    const [isEnd, setIsEnd] = useState(() => !!initial?.isEnd);
+    const [stalled, setStalled] = useState(() => !!initial?.stalled);
+    const [currentPage, setCurrentPage] = useState(() => initial?.currentPage ?? 1);
+    const [pageSize, setPageSize] = useState(
+        () =>
+            initial?.pageSize ??
+            readStoredPageSize(storageKey, defaultPageSize, PAGE_SIZE_OPTIONS),
     );
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(() => !initial);
     const [loadingMore, setLoadingMore] = useState(false);
 
     /** 世代号：resetKey 变化后，旧请求回来时一律丢弃，避免脏数据回填 */
     const generationRef = useRef(0);
-    const itemsRef = useRef<T[]>([]);
-    const sourcePageRef = useRef(0);
-    const isEndRef = useRef(false);
-    const stalledRef = useRef(false);
+    const itemsRef = useRef<T[]>(initial?.items ?? []);
+    const sourcePageRef = useRef(initial?.sourcePage ?? 0);
+    const isEndRef = useRef(!!initial?.isEnd);
+    const stalledRef = useRef(!!initial?.stalled);
+    /**
+     * 连续「整轮补数据失败」计数。手动翻页失败了用户还能再点；无限滚动是哨兵自动
+     * 触发的，失败后列表变矮又立刻重新挂哨兵，不封顶就变成「滚到底 -> 失败 ->
+     * 再触发」的请求风暴。连续 3 轮失败后按 stalled 停住（换关键词/重进页面可重来）。
+     */
+    const consecutiveFailRef = useRef(0);
     const currentPageRef = useRef(currentPage);
     currentPageRef.current = currentPage;
     const pageSizeRef = useRef(pageSize);
     pageSizeRef.current = pageSize;
+    const loadingRef = useRef(loading);
+    loadingRef.current = loading;
+    const loadingMoreRef = useRef(loadingMore);
+    loadingMoreRef.current = loadingMore;
 
     /** 串行化音源请求 */
     const queueRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -142,33 +186,36 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
         return run;
     }, []);
 
-    const fetchNextSourcePage = useCallback(async (generation: number) => {
-        const next = sourcePageRef.current + 1;
-        const result = await fetchPageRef.current(next);
-        if (generation !== generationRef.current) {
-            return { added: 0, end: true };
-        }
-        const seen = new Set(itemsRef.current.map(musicKey));
-        const fresh = (result?.items ?? []).filter((item) => {
-            const key = musicKey(item);
-            if (seen.has(key)) {
-                return false;
+    const fetchNextSourcePage = useCallback(
+        async (generation: number) => {
+            const next = sourcePageRef.current + 1;
+            const result = await fetchPageRef.current(next);
+            if (generation !== generationRef.current) {
+                return { added: 0, end: true };
             }
-            seen.add(key);
-            return true;
-        });
-        sourcePageRef.current = next;
-        isEndRef.current = !!result?.isEnd;
-        // 有新增就说明插件还在往前走，之前的「原地踏步」判断作废
-        if (fresh.length) {
-            stalledRef.current = false;
-            setStalled(false);
-        }
-        itemsRef.current = [...itemsRef.current, ...fresh];
-        setItems(itemsRef.current);
-        setIsEnd(isEndRef.current);
-        return { added: fresh.length, end: isEndRef.current };
-    }, []);
+            const seen = new Set(itemsRef.current.map(musicKey));
+            const fresh = (result?.items ?? []).filter((item) => {
+                const key = musicKey(item);
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            });
+            sourcePageRef.current = next;
+            isEndRef.current = !!result?.isEnd;
+            // 有新增就说明插件还在往前走，之前的「原地踏步」判断作废
+            if (fresh.length) {
+                stalledRef.current = false;
+                setStalled(false);
+            }
+            itemsRef.current = [...itemsRef.current, ...fresh];
+            setItems(itemsRef.current);
+            setIsEnd(isEndRef.current);
+            return { added: fresh.length, end: isEndRef.current };
+        },
+        [],
+    );
 
     /** 保证第 target 页的数据就绪；不够就继续拉音源 */
     const ensurePage = useCallback(
@@ -178,6 +225,8 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
                 return;
             }
             setLoadingMore(true);
+            const lengthBefore = itemsRef.current.length;
+            let errored = false;
             try {
                 for (let i = 0; i < maxSourceFetchPerTurn; i++) {
                     if (generation !== generationRef.current) {
@@ -201,9 +250,21 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
                 }
             } catch (e: any) {
                 // 故意不写 isEnd：一次网络抖动不该让列表永久停在「已到底」
+                errored = true;
                 console.warn("[pagedList] 加载失败：", e?.message ?? e);
             } finally {
                 if (generation === generationRef.current) {
+                    if (errored && itemsRef.current.length === lengthBefore) {
+                        // 整轮零收获还带着错误：无限滚动的哨兵会在列表变矮后重新触发，
+                        // 连续几次就按 stalled 停住，免得变成滚到底 -> 失败 -> 重试的风暴。
+                        if (++consecutiveFailRef.current >= 3) {
+                            console.warn("[pagedList] 连续加载失败，暂停自动续拉");
+                            stalledRef.current = true;
+                            setStalled(true);
+                        }
+                    } else {
+                        consecutiveFailRef.current = 0;
+                    }
                     setLoadingMore(false);
                     setLoading(false);
                 }
@@ -212,13 +273,49 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
         [fetchNextSourcePage, maxSourceFetchPerTurn],
     );
 
-    // resetKey / nonce 变化：清空重来
+    /**
+     * 无限滚动补数据：把缺口补足到「已加载条数 + 一页」。
+     * 与 ensurePage(target) 的区别是不动 currentPage——分页页码在这里没有意义。
+     */
+    const loadMore = useCallback(() => {
+        const generation = generationRef.current;
+        enqueue(() =>
+            ensurePage(
+                Math.ceil(itemsRef.current.length / pageSizeRef.current) + 1,
+                generation,
+            ),
+        );
+    }, [enqueue, ensurePage]);
+
+    const retry = useCallback(() => {
+        if (isEndRef.current || loadingRef.current || loadingMoreRef.current) {
+            return;
+        }
+        stalledRef.current = false;
+        setStalled(false);
+        consecutiveFailRef.current = 0;
+        loadMore();
+    }, [loadMore]);
+
+    /**
+     * resetKey / nonce 变化：清空重来。
+     * 挂载本身也会触发一次：带了恢复快照（数据已在快照里）就整段跳过，
+     * 否则照常从第 1 页拉。用「上次执行时的 resetKey#nonce」去重，
+     * 依赖没实际变化的重复触发不会重复清拉。
+     */
+    const lastResetSigRef = useRef<string | null>(initial ? `${resetKey}#0` : null);
     useEffect(() => {
+        const sig = `${resetKey}#${nonce}`;
+        if (lastResetSigRef.current === sig) {
+            return;
+        }
+        lastResetSigRef.current = sig;
         const generation = ++generationRef.current;
         itemsRef.current = [];
         sourcePageRef.current = 0;
         isEndRef.current = false;
         stalledRef.current = false;
+        consecutiveFailRef.current = 0;
         setItems([]);
         setIsEnd(false);
         setStalled(false);
@@ -303,9 +400,12 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
             stalled,
             hasMore,
             expectedTotal: options.expectedTotal,
+            sourcePage: sourcePageRef.current,
             loading,
             loadingMore,
             goToPage,
+            loadMore,
+            retry,
             changePageSize,
             replaceAll,
             reload,
@@ -322,6 +422,8 @@ export function usePagedMusicList<T extends { id?: string; platform?: string }>(
             loading,
             loadingMore,
             goToPage,
+            loadMore,
+            retry,
             changePageSize,
             replaceAll,
             reload,

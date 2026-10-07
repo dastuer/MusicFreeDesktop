@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { app } from "electron";
 import axios from "axios";
 import * as cheerio from "cheerio";
 import CryptoJs from "crypto-js";
@@ -13,7 +14,29 @@ import configStoreInstance from "./configStore";
 import coverCache, { isOversizedDataUrl } from "./coverCache";
 
 const sha256 = (s: string) => CryptoJs.SHA256(s).toString();
-const appVersion = "1.0.0";
+/**
+ * 报给插件的应用版本：取真实版本号（package.json）。
+ * 插件声明的 appVersion 兼容范围（satisfies）按它校验，写死会失真。
+ */
+function getAppVersion(): string {
+    try {
+        return app.getVersion();
+    } catch {
+        // app ready 前理论上取不到；取不到就退回与 MusicFree 兼容的标记
+        return "1.0.0";
+    }
+}
+/** MusicFree 生态的平台标识：插件按它做平台分支 */
+function getPluginOs(): "mac" | "windows" | "linux" {
+    switch (process.platform) {
+        case "win32":
+            return "windows";
+        case "darwin":
+            return "mac";
+        default:
+            return "linux";
+    }
+}
 
 /**
  * 响应体是 JSON 对象/数组（即聚合源而非插件代码）。
@@ -177,13 +200,13 @@ class Plugin {
                 get userVariables() {
                     return this.getUserVariables() ?? {};
                 },
-                appVersion,
-                os: "mac",
+                appVersion: getAppVersion(),
+                os: getPluginOs(),
                 lang: "zh-CN",
             };
             const _process = {
-                platform: "mac",
-                version: appVersion,
+                platform: getPluginOs(),
+                version: getAppVersion(),
                 env,
             };
 
@@ -215,7 +238,7 @@ class Plugin {
             }
             if (
                 instance.appVersion &&
-                !satisfies(appVersion, instance.appVersion)
+                !satisfies(getAppVersion(), instance.appVersion)
             ) {
                 throw {
                     instance,

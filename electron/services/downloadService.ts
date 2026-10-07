@@ -60,6 +60,12 @@ class DownloadService {
     private running = 0;
     private saveTimer: NodeJS.Timeout | null = null;
     private notifyTimer: NodeJS.Timeout | null = null;
+    /**
+     * 在途下载的中止器：removeTask 取消 running 任务时用它掐断 axios 流。
+     * 没有这一步的话「取消」只是把状态改成 failed 让 pump 跳过，
+     * 正在写的流会继续跑完并 rename 成品——记录没了、文件却在，成孤儿。
+     */
+    private controllers = new Map<string, AbortController>();
 
     setup(downloadDir: string, configStore: typeof configStoreInstance, notify: () => void) {
         this.configStore = configStore;
@@ -193,10 +199,11 @@ class DownloadService {
         const idx = this.tasks.findIndex((t) => t.id === taskId);
         if (idx >= 0) {
             const task = this.tasks[idx];
-            // 进行中的任务标记取消：running 状态时只把状态改成 failed 由 pump 跳过
+            // 进行中的任务标记取消：中止在途流（半截 .part 随中止删掉），状态改 failed 由 pump 跳过
             if (task.status === "running") {
                 task.status = "failed";
                 task.error = "已取消";
+                this.controllers.get(taskId)?.abort();
             }
             if (deleteFile && task.filePath) {
                 try {
@@ -263,20 +270,41 @@ class DownloadService {
             ...(source.headers ?? {}),
         };
         const tmpPath = path.join(this.downloadDir, `${task.id}.part`);
-        const resp = await axios.get(source.url, {
+        // 取消登记：removeTask 通过 controller.abort() 掐断这次下载
+        const controller = new AbortController();
+        this.controllers.set(task.id, controller);
+        try {
+            await this.runTaskBody(task, source, headers, tmpPath, controller.signal);
+        } finally {
+            this.controllers.delete(task.id);
+        }
+        task.status = "completed";
+        task.progress = 100;
+    }
+
+    /** runTask 主体；单独拆出来是为了 finally 里稳定注销取消登记 */
+    private async runTaskBody(
+        task: IDownloadTask,
+        source: Awaited<ReturnType<typeof pluginHost.resolveMedia>>,
+        headers: Record<string, string>,
+        tmpPath: string,
+        signal: AbortSignal,
+    ) {
+        const resp = await axios.get(source!.url, {
             headers,
             responseType: "stream",
             timeout: 30000,
             maxRedirects: 5,
             validateStatus: () => true,
+            signal,
         });
         if (resp.status >= 400) {
             throw new Error(`下载源响应异常 (${resp.status})`);
         }
         const total = Number(resp.headers["content-length"] ?? 0) || 0;
-        const ext = extFromUrl(source.url, resp.headers["content-type"] as string | undefined);
+        const ext = extFromUrl(source!.url, resp.headers["content-type"] as string | undefined);
         const filename = sanitizeFilename(
-            `${musicItem.artist} - ${musicItem.title} [${quality}].${ext}`,
+            `${task.musicItem.artist} - ${task.musicItem.title} [${task.quality}].${ext}`,
         );
         task.filename = filename;
         const finalPath = path.join(this.downloadDir, filename);
@@ -286,6 +314,36 @@ class DownloadService {
             const out = fs.createWriteStream(tmpPath);
             let received = 0;
             let lastNotify = 0;
+            // 取消时：中止响应流、关掉写句柄，写句柄 close 后删掉半截 .part（Windows
+            // 上文件未关删不掉），然后按「已取消」收场
+            let aborted = false;
+            const onAbort = () => {
+                aborted = true;
+                try {
+                    resp.data.destroy();
+                } catch {
+                    // ignore
+                }
+                out.destroy();
+                reject(new Error("已取消"));
+            };
+            if (signal.aborted) {
+                onAbort();
+            } else {
+                signal.addEventListener("abort", onAbort, { once: true });
+            }
+            out.on("close", () => {
+                signal.removeEventListener("abort", onAbort);
+                if (aborted) {
+                    try {
+                        if (fs.existsSync(tmpPath)) {
+                            fs.unlinkSync(tmpPath);
+                        }
+                    } catch {
+                        // ignore
+                    }
+                }
+            });
             resp.data.on("data", (chunk: Buffer) => {
                 received += chunk.length;
                 if (total > 0) {
@@ -306,8 +364,6 @@ class DownloadService {
             fs.unlinkSync(finalPath);
         }
         fs.renameSync(tmpPath, finalPath);
-        task.status = "completed";
-        task.progress = 100;
     }
 }
 

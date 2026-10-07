@@ -1,4 +1,5 @@
 import React, {
+    useCallback,
     useEffect,
     useLayoutEffect,
     useRef,
@@ -79,6 +80,29 @@ interface IHomeSnapshot {
 /** 取当前音源下的快照；没有（首次进入或换过音源）就返回 null，按冷启动处理 */
 function readSnapshot(): IHomeSnapshot | null {
     return readPageSnapshot<IHomeSnapshot>(PAGE_KEY, getBrowseSource());
+}
+
+/**
+ * 分类胶囊条上滚滚轮 = 左右滑动分类（条本身不出横向滚动条）：条溢出时滚轮一律
+ * 拦截换算成横向滚动，顶到左/右边缘后停住，不再放行给页面纵向滚动；没有溢出
+ * （或纯触控板横向手势外的情况）时不拦截，页面照常滚。必须原生监听 +
+ * passive:false——React 的 onWheel 挂在根节点上是 passive 的，preventDefault 无效。
+ */
+function wheelTagbarHorizontal(e: WheelEvent) {
+    const el = e.currentTarget as HTMLElement;
+    // 归一化增量：deltaMode=1（按行）/2（按页）时把 delta 换算成像素，
+    // 否则 scrollLeft 每次只挪 3 单位，鼠标滚轮几乎感觉不到滑动
+    const ratio = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? el.clientWidth : 1;
+    const dx = e.deltaX * ratio;
+    const dy = e.deltaY * ratio;
+    // 纵向滚轮换算成横向滑动；触控板横向手势直接按自身方向走
+    const delta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+    const max = el.scrollWidth - el.clientWidth;
+    if (!max || !delta) {
+        return;
+    }
+    e.preventDefault();
+    el.scrollLeft = Math.max(0, Math.min(max, el.scrollLeft + delta));
 }
 
 /** 冷启动（无快照）时的骨架屏：结构对齐真实内容，避免切换过来先看到一大块白 */
@@ -386,6 +410,16 @@ export default function HomePage() {
     // 只有窗口缩放需要重算。
     const moreBtnRef = useRef<HTMLButtonElement>(null);
     const tagbarWrapRef = useRef<HTMLDivElement>(null);
+    // 分类条本体：挂载时绑滚轮监听（passive:false 才能 preventDefault），卸载解绑
+    const tagbarWheelElRef = useRef<HTMLDivElement | null>(null);
+    const tagbarRef = useCallback((el: HTMLDivElement | null) => {
+        tagbarWheelElRef.current?.removeEventListener(
+            "wheel",
+            wheelTagbarHorizontal,
+        );
+        tagbarWheelElRef.current = el;
+        el?.addEventListener("wheel", wheelTagbarHorizontal, { passive: false });
+    }, []);
     const [morePos, setMorePos] = useState<{ right: number; width: number } | null>(null);
     useLayoutEffect(() => {
         if (!moreOpen) {
@@ -495,7 +529,7 @@ export default function HomePage() {
                                 外的全部标签平铺（与顶部不重复），点选即换歌单并收起。
                                 选中标签不在顶部行时（从浮窗选的），按钮呈激活态 */}
                             <div className="sheet-tagbar-wrap" ref={tagbarWrapRef}>
-                                <div className="sheet-tagbar">
+                                <div className="sheet-tagbar" ref={tagbarRef}>
                                     {topPills.map((tag) => (
                                         <button
                                             key={tag.id}

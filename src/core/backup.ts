@@ -151,6 +151,8 @@ const PREF_KEYS = [
     "searchHistory",
     // 发现音乐/排行榜共用的音源偏好（见 core/mediaSource）
     "browseSourceHash",
+    // 搜索页最后选用的音源（见 core/mediaSource）
+    "searchSourceHash",
     // 播放进度记忆及其开关：和播放列表/当前歌曲同属会话偏好，一起带走才完整
     "playProgress",
     "rememberProgress",

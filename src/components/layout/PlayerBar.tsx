@@ -14,6 +14,7 @@ import {
     useProgress,
     useQuality,
     useQualitySwapping,
+    useRate,
     useRepeatMode,
     useVolume,
 } from "@/core/trackPlayer";
@@ -22,6 +23,10 @@ import {
     toggleDesktopLyrics,
     useDesktopLyricsVisible,
 } from "@/core/desktopLyrics";
+import {
+    toggleLyricTranslation,
+    useLyricTranslationOn,
+} from "@/core/trackPlayer";
 import { showAddToSheetPanel } from "../base/AddToSheetPanel";
 import { showDownloadPanel } from "../base/DownloadPanel";
 import { showContextMenu } from "../base/ContextMenu";
@@ -33,6 +38,14 @@ const repeatModeMeta: Record<string, { icon: string; label: string }> = {
     queue: { icon: "repeatQueue", label: "随机播放" },
     single: { icon: "repeatSingle", label: "单曲循环" },
 };
+
+/** 倍速菜单的档位（低→高） */
+const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+/** 倍速显示：整数档补一位小数（1→1.0x、2→2.0x），非整数原样（0.75x） */
+function formatRate(r: number) {
+    return `${Math.abs(r % 1) < 1e-9 ? r.toFixed(1) : String(r)}x`;
+}
 
 /** 音质短标签：徽标和菜单都用它（与下载管理页同一套叫法） */
 const qualityMeta: Record<IMusic.IQualityKey, string> = {
@@ -67,6 +80,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
      */
     const badgeQuality = currentMusic?.localPath ? null : playingQuality ?? quality;
     const lyricsVisible = useDesktopLyricsVisible();
+    const translationOn = useLyricTranslationOn();
+    const rate = useRate();
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
     /** 队列一进歌就在歌单入口图标上弹一次提示，两秒后自己收回去 */
@@ -120,6 +135,20 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
         );
     };
 
+    const showRateMenu = (anchor: { left: number; top: number }) => {
+        showContextMenu(
+            anchor.left,
+            // y 传「菜单底边」锚点：贴底的播放栏，菜单要向按钮上方展开（参考网易云）
+            anchor.top - 8,
+            RATE_OPTIONS.map((r) => ({
+                title: r === 1 ? "1.0x（正常）" : formatRate(r),
+                checked: Math.abs(r - rate) < 1e-6,
+                onClick: () => TrackPlayerSingleton.setRate(r),
+            })),
+            { above: true, compact: true, checkGap: true },
+        );
+    };
+
     const showMoreMenu = (e: React.MouseEvent) => {
         // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
         e.stopPropagation();
@@ -128,10 +157,17 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
             return;
         }
         const rect = e.currentTarget.getBoundingClientRect();
+        const anchor = { left: rect.left, top: rect.top };
         showContextMenu(
             rect.left,
             rect.top - 8,
             [
+                {
+                    // 倍速收进这里：图标 + 当前档位（如「» 1.0x」），点开二级菜单就地换速
+                    title: formatRate(rate),
+                    icon: "forward",
+                    onClick: () => showRateMenu(anchor),
+                },
                 {
                     title: "下载",
                     icon: "download",
@@ -245,7 +281,7 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     </div>
                 </div>
 
-                {/* 右：音质 / 喜欢 / 音量 / 更多（下载、收藏收进更多菜单） */}
+                {/* 右：音质 / 喜欢 / 桌面歌词 / 翻译 / 音量 / 更多（倍速、下载、收藏收进更多菜单） */}
                 <div className="playerbar-right">
                     {badgeQuality && (
                         <button
@@ -279,6 +315,15 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     >
                         词
                         {lyricsVisible && <span className="playerbar-lyrics-badge">ON</span>}
+                    </button>
+                    {/* 歌词翻译开关（与「词」同款）：默认关，开着才在播放详情页显示译文 */}
+                    <button
+                        className={`playerbar-lyrics-toggle${translationOn ? " on" : ""}`}
+                        title={translationOn ? "关闭歌词翻译" : "开启歌词翻译"}
+                        onClick={() => toggleLyricTranslation()}
+                    >
+                        文
+                        {translationOn && <span className="playerbar-lyrics-badge">ON</span>}
                     </button>
                     {/* 音量：悬浮图标在上方弹出竖向音量面板（参考网易云）；
                         点击图标本身仍是静音开关，拖竖杆即时调音量 */}

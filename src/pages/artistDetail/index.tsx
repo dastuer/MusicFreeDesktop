@@ -3,82 +3,69 @@ import Cover from "@/components/base/Cover";
 import MusicList from "@/components/base/MusicList";
 import { getPluginByMedia, pluginCall } from "@/core/ipc";
 import { navigate } from "@/core/router";
+import { IPagedFetchResult, usePagedMusicList } from "@/hooks/usePagedMusicList";
 
 /**
  * 歌手详情页：作品（单曲）/ 专辑 两个 tab
+ *
+ * 单曲列表走 usePagedMusicList 的无限滚动模式：滚到底部自动续拉（去重、串行、
+ * 失败可重试都在 hook 里），不再有点按钮翻页；专辑 tab 仍是整屏卡片 + 手动加载更多。
  */
+
+/** 一次续拉的数据量（音源页条数不定，这里按「缺口 = 60 条」滚动补） */
+const ARTIST_LOAD_CHUNK = 60;
 
 export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistItemBase }) {
     const { artistItem } = props;
     const [type, setType] = useState<"music" | "album">("music");
-    const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
     const [albums, setAlbums] = useState<IArtist.IAlbumItem[]>([]);
     // 进页面就要拉数据，初始即加载态：否则 effect 首帧置位前会先闪一帧空态
-    const [loading, setLoading] = useState(() => !!artistItem);
-    const [page, setPage] = useState(1);
-    const [isEnd, setIsEnd] = useState(true);
+    const [albumLoading, setAlbumLoading] = useState(() => !!artistItem);
+
+    /** 拉音源第 page 页（type 决定取单曲还是专辑） */
+    const fetchArtistWorksPage = async (page: number): Promise<IPagedFetchResult<any>> => {
+        const plugin = await getPluginByMedia(artistItem!);
+        if (!plugin?.supportedMethods.includes("getArtistWorks")) {
+            return { items: [], isEnd: true };
+        }
+        const result = await pluginCall(plugin.hash, "getArtistWorks", artistItem, page, type);
+        return {
+            items: (result?.data ?? []) as any[],
+            isEnd: result?.isEnd ?? true,
+        };
+    };
+
+    const musicList = usePagedMusicList<IMusic.IMusicItem>({
+        fetchPage: (page) =>
+            // 只在「单曲」tab 且歌手信息齐全时走 hook 发请求：专辑 tab 的卡片自己拉、
+            // 缺歌手信息时（路由参数丢失）不白跑网络
+            type === "music" && artistItem
+                ? fetchArtistWorksPage(page)
+                : Promise.resolve({ items: [] as IMusic.IMusicItem[], isEnd: true }),
+        defaultPageSize: ARTIST_LOAD_CHUNK,
+        storageKey: "pagedList.pageSize.artistMusic",
+        resetKey: `${artistItem?.platform ?? ""}|${artistItem?.id ?? ""}|${type}`,
+    });
 
     useEffect(() => {
         if (!artistItem) {
             return;
         }
-        (async () => {
-            setLoading(true);
-            setMusicList([]);
-            setAlbums([]);
-            const plugin = await getPluginByMedia(artistItem);
-            if (plugin?.supportedMethods.includes("getArtistWorks")) {
-                try {
-                    const result = await pluginCall(
-                        plugin.hash,
-                        "getArtistWorks",
-                        artistItem,
-                        1,
-                        type,
-                    );
-                    if (type === "music") {
-                        setMusicList((result?.data ?? []) as IMusic.IMusicItem[]);
-                    } else {
-                        setAlbums((result?.data ?? []) as IArtist.IAlbumItem[]);
-                    }
-                    setIsEnd(result?.isEnd ?? true);
-                    setPage(1);
-                } catch {
-                    setIsEnd(true);
-                }
-            }
-            setLoading(false);
-        })();
-    }, [artistItem?.id, type]);
-
-    const loadMore = async () => {
-        if (!artistItem || loading) {
+        setAlbums([]);
+        if (type !== "album") {
             return;
         }
-        setLoading(true);
-        const plugin = await getPluginByMedia(artistItem);
-        if (plugin) {
+        (async () => {
+            setAlbumLoading(true);
             try {
-                const result = await pluginCall(
-                    plugin.hash,
-                    "getArtistWorks",
-                    artistItem,
-                    page + 1,
-                    type,
-                );
-                if (type === "music") {
-                    setMusicList((prev) => [...prev, ...((result?.data ?? []) as any[])]);
-                } else {
-                    setAlbums((prev) => [...prev, ...((result?.data ?? []) as any[])]);
-                }
-                setIsEnd(result?.isEnd ?? true);
-                setPage((p) => p + 1);
+                const first = await fetchArtistWorksPage(1);
+                setAlbums(first.items as IArtist.IAlbumItem[]);
             } catch {
-                setIsEnd(true);
+                // 失败保持空态，切走再切回 tab 会重拉
             }
-        }
-        setLoading(false);
-    };
+            setAlbumLoading(false);
+        })();
+    }, [artistItem?.id, type]);
 
     if (!artistItem) {
         return <div className="empty-hint">歌手信息缺失</div>;
@@ -118,11 +105,15 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
 
             {type === "music" ? (
                 <MusicList
-                    musicList={musicList}
-                    loading={loading}
-                    isEnd={isEnd}
+                    musicList={musicList.items}
+                    loading={musicList.loading}
+                    loadingMore={musicList.loadingMore}
+                    autoLoad
+                    isEnd={musicList.isEnd}
+                    stalled={musicList.stalled}
+                    onRetry={musicList.retry}
+                    onLoadMore={musicList.loadMore}
                     listId={`artist:${artistItem?.platform}/${artistItem?.id}`}
-                    onLoadMore={loadMore}
                 />
             ) : (
                 <div className="card-grid">
@@ -150,7 +141,9 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                 </div>
             )}
             {/* 单曲列表的加载占位由 MusicList 的骨架屏负责，这里的提示只给专辑卡片 tab 用 */}
-            {type !== "music" && loading && <div className="loading-hint">加载中…</div>}
+            {type !== "music" && albumLoading && (
+                <div className="loading-hint">加载中…</div>
+            )}
         </div>
     );
 }
