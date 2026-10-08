@@ -266,14 +266,16 @@ export function setup(options: {
 
     // 图标（渲染进程画好，与播放栏同源）：
     // trayTemplate 黑色模板（mac）/ trayWhite 白色实心（win 托盘与缩略图按钮）/
-    // prev play pause next 白色 32px（缩略图按钮）
+    // prev play pause next 白色（缩略图按钮）。
+    // 全部是 @2x 位图（16pt 逻辑尺寸 → 32px），必须按 scaleFactor: 2 解析：
+    // 按 1 解析会把 32px 当成 32pt，菜单栏里比旁边图标大一倍还被裁掉底部。
     ipcMain.on("system:icons", (_e, icons: Record<string, string>) => {
         const make = (base64?: string, template?: boolean) => {
             if (!base64) {
                 return null;
             }
             const img = nativeImage.createFromBuffer(Buffer.from(base64, "base64"), {
-                scaleFactor: 1,
+                scaleFactor: 2,
             });
             if (template) {
                 img.setTemplateImage(true);
