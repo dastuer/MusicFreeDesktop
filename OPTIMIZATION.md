@@ -22,14 +22,14 @@
 
 ## 第二梯队：桌面播放器的「及格线」体验
 
-- [ ] **系统托盘 + 关闭行为设置**：现在 `window-all-closed → app.quit()`（macOS 也是关窗即退），无托盘。目标：关闭 = 最小化到托盘（可设置），托盘菜单含播放/暂停/上一首/下一首/退出。
-- [ ] **媒体键（Windows SMTC）**：macOS 已走 MediaSession；Windows 侧 Electron 33 理论上自动桥接 MediaSession → SMTC，实测确认，不生效则补主进程方案。
-- [ ] **全局快捷键**：`globalShortcut` 可选注册 + 设置页说明区（当前快捷键只藏在按钮 tooltip 里）。
-- [ ] **下载写标签**：`downloadService.ts` 下载完不写 ID3/FLAC 元数据、不嵌封面。补标题/歌手/专辑/封面写入 + 歌词 .lrc 同步落盘。
-- [ ] **桌面歌词设置**：字体大小、双行（原文+翻译）、鼠标穿透锁定（`setIgnoreMouseEvents`）。参考网易云桌面歌词样式面板。
-- [ ] **定时关闭（睡眠定时器）**：倒计时 + `pause()`，成本极低。
-- [ ] **本地歌词匹配**：本地歌曲拿不到歌词（`loadCurrentLyric` 对 `localPath` 直接跳过）。用 `neteaseMatch` 的匹配能力按「标题+歌手」补歌词/封面；同时支持同名 `.lrc` 与内嵌 USLT。
-- [ ] **任务栏缩略图按钮**：Electron `setThumbarButtons` 现成。
+- [x] **系统托盘 + 关闭行为设置**：`electron/services/systemIntegration.ts` 全平台常驻托盘（可设置隐藏），菜单含 播放/暂停/上一首/下一首/喜欢/显示主窗口/完全退出；关闭行为可设「最小化到托盘（默认）/ 直接退出」，关窗前照常走一次会话落盘。托盘图标由渲染进程 canvas 画成（mac 模板图随深浅色反色 / win 白色实心）。
+- [x] **媒体键（Windows SMTC）**：MediaSession 补齐 `playbackState`（play/pause 事件同步）、`setPositionState`（1s 限频）与 `seekto/seekforward/seekbackward` handler——Electron 33 桥接 SMTC 需要 metadata+handler 齐全才出系统面板与媒体键；macOS 控制中心同步获得进度条与拖动。
+- [x] **全局快捷键**：媒体键（MediaPlayPause/Next/Prev）+ `Cmd/Ctrl+Alt+M` 显示/隐藏主窗口，默认关闭、设置页开启（避免与其它应用抢键）；应用内快捷键在设置页有说明区。
+- [x] **下载写标签**：`electron/services/tagWriter.ts` 零依赖手写 ID3v2.3（TIT2/TPE1「/」分隔/TALB/TYER/TRCK/TCON/USLT/APIC，中文走 UTF-16）与 FLAC（Vorbis Comment 多 ARTIST 字段 + PICTURE + LYRICS）；downloadService 下载完成后经插件 getLyric 拿歌词（译文并轨）、artwork 拉封面写入，非 mp3/flac 退同名 .lrc 边车。round-trip 经 music-metadata 官方解析器验证（含二次写入保留旧字段）。
+- [x] **桌面歌词设置**：右键播放栏「词」按钮弹样式面板——形态（mac 菜单栏/悬浮窗）、字号四档、双行（原文+译文，菜单栏拼「原文 · 译文」）、鼠标穿透锁定（`setIgnoreMouseEvents` forward，锁定时悬浮窗不吃鼠标、隐藏遥控钮）；设置 localStorage 持久化 + 主进程落盘，悬浮窗高度随字号/行数自适应，开着切形态即时换装。
+- [x] **定时关闭（睡眠定时器）**：`core/sleepTimer.ts`，播放栏「更多」菜单入口——10/20/30/45/60/90 分钟倒计时或播完 1/3/5 首后 `pause()`，到点自动停、菜单行实时显示剩余，可随时取消。
+- [x] **本地歌词匹配**：`loadCurrentLyric` 对 localPath 不再跳过。优先级：内嵌歌词（MP3 USLT/FLAC LYRICS，主进程 `services/localLyrics.ts` 解析）→ 同名 .lrc 边车（UTF-8/GB18030 自动识别）→ 上次匹配的 localStorage 缓存 → 联网（装机 getLyric 插件按「标题+歌手」搜索，titleSim/artistSim 打分 ≥0.78 采信）。命中后经主进程把歌词+封面写回文件（下次即「文件自带」），封面同步进缓存与本地音乐列表。
+- [x] **任务栏缩略图按钮**：Windows `setThumbarButtons`（上一首/播放暂停/下一首），图标与托盘同源由渲染进程生成，播放状态切换即时换图。
 
 ## 第三梯队：体验升级
 

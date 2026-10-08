@@ -16,7 +16,7 @@ import CacheSection from "./CacheSection";
 import NeteaseSection from "./NeteaseSection";
 
 /**
- * 设置页：外观 / 播放 / 下载 / 存储与缓存 / 关于
+ * 设置页：通用 / 网易云 / 外观 / 播放 / 快捷键 / 下载 / 存储与缓存 / 关于
  */
 
 const qualityLabels: Record<IMusic.IQualityKey, string> = {
@@ -80,11 +80,37 @@ export default function SettingsPage() {
     const [remembered, setRemembered] = useState(() => getRememberedProgress());
     // null 表示还没从主进程读到系统登录项的真实状态
     const [autoLaunch, setAutoLaunch] = useState<boolean | null>(null);
+    // 关闭行为 / 托盘 / 全局快捷键（主进程 config 持有，这边只展示与切换）
+    const [closeBehavior, setCloseBehavior] = useState<"minimize" | "quit">("minimize");
+    const [trayVisible, setTrayVisible] = useState(true);
+    const [globalShortcuts, setGlobalShortcuts] = useState(false);
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
         ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
         ipcInvoke("app:getAutoLaunch").then((s) => setAutoLaunch(!!s?.enabled));
+        ipcInvoke("app:getCloseBehavior").then((b) => setCloseBehavior(b === "quit" ? "quit" : "minimize"));
+        ipcInvoke("config:get", "tray.visible", true).then((v) => setTrayVisible(v !== false));
+        ipcInvoke("config:get", "app.globalShortcuts.enabled", false).then((v) => setGlobalShortcuts(v === true));
     }, []);
+
+    const changeCloseBehavior = async (next: "minimize" | "quit") => {
+        const applied = await ipcInvoke<string>("app:setCloseBehavior", next);
+        setCloseBehavior(applied === "quit" ? "quit" : "minimize");
+        showToast(next === "minimize" ? "关闭窗口后将最小化到托盘" : "关闭窗口后将直接退出");
+    };
+
+    const changeTrayVisible = async (next: boolean) => {
+        const applied = await ipcInvoke<boolean>("system:setTrayVisible", next);
+        setTrayVisible(applied !== false);
+    };
+
+    const changeGlobalShortcuts = async (next: boolean) => {
+        const ok = await ipcInvoke<boolean>("system:setShortcutsEnabled", next);
+        setGlobalShortcuts(!!ok);
+        if (next && !ok) {
+            showToast("注册失败：快捷键可能被其他应用占用");
+        }
+    };
 
     const changeAutoLaunch = async (next: boolean) => {
         const res = await ipcInvoke<{ supported: boolean; enabled: boolean }>(
@@ -127,6 +153,34 @@ export default function SettingsPage() {
                     }
                     value={autoLaunch === true}
                     onChange={changeAutoLaunch}
+                />
+                <div className="settings-item">
+                    <div>
+                        <div className="settings-item-label">点 × 时</div>
+                        <div className="settings-item-desc">
+                            最小化到托盘：窗口收进系统托盘，音乐继续播；直接退出：关窗即退出应用
+                        </div>
+                    </div>
+                    <div className="segment">
+                        <button
+                            className={`segment-item${closeBehavior === "minimize" ? " active" : ""}`}
+                            onClick={() => changeCloseBehavior("minimize")}
+                        >
+                            最小化到托盘
+                        </button>
+                        <button
+                            className={`segment-item${closeBehavior === "quit" ? " active" : ""}`}
+                            onClick={() => changeCloseBehavior("quit")}
+                        >
+                            直接退出
+                        </button>
+                    </div>
+                </div>
+                <ToggleRow
+                    label="显示系统托盘图标"
+                    desc="托盘菜单可播放/暂停/切歌/退出；关掉后应用仍按上面的关闭行为工作"
+                    value={trayVisible}
+                    onChange={changeTrayVisible}
                 />
             </div>
 
@@ -227,6 +281,32 @@ export default function SettingsPage() {
                         setAutoPlayOnLaunchState(next);
                     }}
                 />
+            </div>
+
+            <div className="settings-group">
+                <div className="settings-group-title">快捷键</div>
+                <ToggleRow
+                    label="全局媒体键"
+                    desc="媒体键（播放/暂停、上一首、下一首）在应用未聚焦时也可用。macOS 控制中心与 Windows 系统媒体面板默认就生效，此项是独立于它们的系统级兜底"
+                    value={globalShortcuts}
+                    onChange={changeGlobalShortcuts}
+                />
+                <div className="settings-item">
+                    <div>
+                        <div className="settings-item-label">应用内快捷键</div>
+                        <div className="settings-item-desc">
+                            空格 播放/暂停 · ← 上一首 · → 下一首 · ↑/↓ 音量加减（输入框中不生效）
+                        </div>
+                    </div>
+                </div>
+                <div className="settings-item">
+                    <div>
+                        <div className="settings-item-label">定时关闭</div>
+                        <div className="settings-item-desc">
+                            播放栏「更多」菜单 → 定时关闭：到点暂停播放，支持倒计时与「播完 N 首」
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div className="settings-group">

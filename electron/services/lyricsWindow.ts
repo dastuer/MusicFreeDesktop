@@ -31,10 +31,41 @@ type ConfigStore = typeof configStoreType;
 const LYRICS_WIDTH = 680;
 const LYRICS_HEIGHT = 72;
 const BOUNDS_KEY = "lyricsWindow.bounds";
+/** 悬浮窗设置持久化（字号/双行/锁定）：主窗口推来，重启后歌词窗自己也要能拿到 */
+const SETTINGS_KEY = "lyricsWindow.settings";
 /** 菜单栏无歌时占一个音符，让「开启了」这件事看得见、也点得到 */
 const MENUBAR_IDLE_TITLE = "♪";
 /** 支持把歌词画进系统栏的只有 macOS 菜单栏；其余平台退回悬浮窗 */
 const MENUBAR_SUPPORTED = process.platform === "darwin";
+
+/** 桌面歌词设置：形态（mac 可选菜单栏/悬浮窗，其他平台恒为悬浮窗）+ 悬浮窗的字号/双行/锁定 */
+export interface ILyricsWindowSettings {
+    /** menubar（仅 mac 生效）/ overlay */
+    form: "menubar" | "overlay";
+    /** 字号 px：12-32 */
+    fontSize: number;
+    /** 双行：原文 + 译文（译文没有时自动退回单行）；菜单栏形态拼成「原文 · 译文」 */
+    twoLine: boolean;
+    /** 鼠标穿透锁定：整窗不吃点击，可穿透到下层窗口（此时不能拖动，退出锁定才能搬位置） */
+    locked: boolean;
+}
+
+const DEFAULT_SETTINGS: ILyricsWindowSettings = {
+    form: "menubar",
+    fontSize: 17,
+    twoLine: false,
+    locked: false,
+};
+
+function normalizeSettings(raw: any): ILyricsWindowSettings {
+    const size = Number(raw?.fontSize);
+    return {
+        form: raw?.form === "overlay" ? "overlay" : "menubar",
+        fontSize: Number.isFinite(size) ? Math.min(Math.max(Math.round(size), 12), 32) : DEFAULT_SETTINGS.fontSize,
+        twoLine: !!raw?.twoLine,
+        locked: !!raw?.locked,
+    };
+}
 
 /**
  * 文本字形：位图图标没就位时的兜底（正常流程下渲染进程启动即发来图标）。
@@ -72,7 +103,14 @@ let menubar: {
     like: Tray;
 } | null = null;
 /** 最近一次收到的播放状态：图标形态/提示文案跟着它走 */
-let lastState: { playing?: boolean; liked?: boolean; activeLine?: string } | null = null;
+let lastState: {
+    playing?: boolean;
+    liked?: boolean;
+    activeLine?: string;
+    /** 双行开启且有译文时的第二行（菜单栏拼进标题，悬浮窗直接画两行） */
+    activeTranslation?: string;
+    settings?: ILyricsWindowSettings;
+} | null = null;
 let configStoreRef: ConfigStore | null = null;
 let getMainWindow: () => BrowserWindow | null = () => null;
 
@@ -89,6 +127,32 @@ function sendCommand(cmd: string) {
     if (wc && !wc.isDestroyed()) {
         wc.send("lyrics:command", cmd);
     }
+}
+
+/** 主进程侧最近一次的悬浮窗设置：转发给歌词窗渲染层，同时驱动窗口几何/穿透 */
+let currentSettings: ILyricsWindowSettings = { ...DEFAULT_SETTINGS };
+
+/** 悬浮窗高度跟字号/行数走 */
+function windowHeightOf(s: ILyricsWindowSettings): number {
+    const lines = s.twoLine ? 2 : 1;
+    return Math.round(s.fontSize * 1.5 * lines + (LYRICS_HEIGHT - 17 * 1.5));
+}
+
+/** 把设置落到悬浮窗：高度（字号/双行）与鼠标穿透锁定 */
+function applySettingsToLyricsWin() {
+    if (!lyricsWin || lyricsWin.isDestroyed()) {
+        return;
+    }
+    const h = windowHeightOf(currentSettings);
+    const b = lyricsWin.getBounds();
+    if (b.height !== h) {
+        // 保持顶边不动：往下长（双行/大字号）
+        lyricsWin.setBounds({ x: b.x, y: b.y, width: b.width, height: h });
+    }
+    // forward:true：穿透状态下鼠标事件仍会透到下层窗口，但我们自己的 hover 失效——
+    // 这正是「锁定」的语义：歌词彻底不打扰，解锁回主窗口「词」设置面板
+    lyricsWin.setIgnoreMouseEvents(currentSettings.locked, { forward: true });
+    lyricsWin.webContents.send("lyrics:settings", currentSettings);
 }
 
 /** ---------- 形态一：macOS 菜单栏歌词 ---------- */
@@ -124,6 +188,15 @@ function showMenubarLyrics() {
     syncMenubarState();
 }
 
+/** 菜单栏标题：双行开启且有译文时拼成「原文 · 译文」（菜单栏只有一格，画不了两行） */
+function menubarTitle(): string {
+    const line = String(lastState?.activeLine || "");
+    if (line && lastState?.settings?.twoLine && lastState?.activeTranslation) {
+        return `${line} · ${lastState.activeTranslation}`;
+    }
+    return line || MENUBAR_IDLE_TITLE;
+}
+
 /** 状态 → 菜单栏：刷新歌词标题、播放/喜欢图标的形态与提示 */
 function syncMenubarState() {
     if (!menubar) {
@@ -131,7 +204,7 @@ function syncMenubarState() {
     }
     const playing = !!lastState?.playing;
     const liked = !!lastState?.liked;
-    menubar.lyric.setTitle(String(lastState?.activeLine || MENUBAR_IDLE_TITLE));
+    menubar.lyric.setTitle(menubarTitle());
     if (trayImages) {
         // 与播放栏同源的等大位图：▶↔⏸、♡↔♥ 切换尺寸一致，图标栏纹丝不动
         menubar.prev.setImage(trayImages.prev);
@@ -206,7 +279,7 @@ function createLyricsWindow() {
 
     lyricsWin = new BrowserWindow({
         width: LYRICS_WIDTH,
-        height: LYRICS_HEIGHT,
+        height: windowHeightOf(currentSettings),
         x,
         y,
         show: false,
@@ -231,12 +304,20 @@ function createLyricsWindow() {
     lyricsWin.setAlwaysOnTop(true, "floating");
     // 每个桌面空间都可见（切到别的虚拟桌面歌词还在）
     lyricsWin.setVisibleOnAllWorkspaces(true);
+    // 带着「锁定」重启时：窗口一建出来就不吃鼠标
+    if (currentSettings.locked) {
+        lyricsWin.setIgnoreMouseEvents(true, { forward: true });
+    }
     lyricsWin.once("ready-to-show", () => {
         // showInactive 同样是为了不抢焦点
         lyricsWin?.showInactive();
     });
     // 兜底：Windows 上隐藏启动时 ready-to-show 可能不触发（同 main.ts 的问题）
     lyricsWin.webContents.once("did-finish-load", () => {
+        // 页面就绪即推一份当前设置：首帧就是上次的字号/双行/锁定，不用等主窗口补推
+        if (lyricsWin && !lyricsWin.isDestroyed()) {
+            lyricsWin.webContents.send("lyrics:settings", currentSettings);
+        }
         setTimeout(() => {
             if (lyricsWin && !lyricsWin.isDestroyed() && !lyricsWin.isVisible()) {
                 lyricsWin.showInactive();
@@ -261,8 +342,20 @@ function createLyricsWindow() {
 
 /** ---------- 开关与 IPC ---------- */
 
+/** 当前该用哪种形态：只有 mac 且用户没切到悬浮窗时才走菜单栏 */
+function useMenubarForm(): boolean {
+    return MENUBAR_SUPPORTED && currentSettings.form !== "overlay";
+}
+
+function isFormVisible(): boolean {
+    if (useMenubarForm()) {
+        return !!menubar;
+    }
+    return !!lyricsWin && !lyricsWin.isDestroyed() && lyricsWin.isVisible();
+}
+
 function show() {
-    if (MENUBAR_SUPPORTED) {
+    if (useMenubarForm()) {
         showMenubarLyrics();
     } else if (!lyricsWin || lyricsWin.isDestroyed()) {
         createLyricsWindow();
@@ -273,9 +366,8 @@ function show() {
 }
 
 function hide() {
-    if (MENUBAR_SUPPORTED) {
-        hideMenubarLyrics();
-    } else if (lyricsWin && !lyricsWin.isDestroyed()) {
+    hideMenubarLyrics();
+    if (lyricsWin && !lyricsWin.isDestroyed()) {
         // 藏起来但保留实例：再次开启不用重载页面，状态链路也还热着
         lyricsWin.hide();
     }
@@ -296,6 +388,8 @@ function setup(options: {
 }) {
     configStoreRef = options.configStore;
     getMainWindow = options.getMainWindow;
+    // 重启后歌词窗先于主窗口推送出现时，也要带着上次的显示设置（字号/双行/锁定）
+    currentSettings = normalizeSettings(configStoreRef.get(SETTINGS_KEY));
 
     ipcMain.handle("lyrics:show", () => {
         show();
@@ -305,12 +399,8 @@ function setup(options: {
         hide();
         return true;
     });
-    ipcMain.handle("lyrics:getVisible", () => {
-        if (MENUBAR_SUPPORTED) {
-            return !!menubar;
-        }
-        return !!lyricsWin && !lyricsWin.isDestroyed() && lyricsWin.isVisible();
-    });
+    ipcMain.handle("lyrics:getVisible", () => isFormVisible());
+    ipcMain.handle("lyrics:getSettings", () => currentSettings);
 
     // 主窗口画好的托盘图标（与播放栏同源 SVG 位图）；模板图随菜单栏深浅色自动反色
     ipcMain.on("lyrics:setIcons", (_e, icons: Record<string, string>) => {
@@ -338,9 +428,9 @@ function setup(options: {
         syncMenubarState();
     });
 
-    // 主窗口 → 歌词形态：macOS 直接落到菜单栏标题；其余转发给悬浮窗渲染
+    // 主窗口 → 歌词形态：mac 菜单栏直接落到标题；其余转发给悬浮窗渲染
     ipcMain.on("lyrics:state", (_e, state) => {
-        if (MENUBAR_SUPPORTED) {
+        if (useMenubarForm()) {
             applyStateToMenubar(state);
             return;
         }
@@ -354,11 +444,35 @@ function setup(options: {
     });
     // 悬浮窗挂载完成：让主窗口补推一份最新状态（窗口刚开/重开时别等下一次 timeupdate）
     ipcMain.on("lyrics:ready", () => {
-        notifyMainWindow(
-            MENUBAR_SUPPORTED
-                ? !!menubar
-                : !!lyricsWin && !lyricsWin.isDestroyed() && lyricsWin.isVisible(),
-        );
+        notifyMainWindow(isFormVisible());
+    });
+
+    // 主窗口 → 歌词形态：显示设置（形态/字号/双行/锁定）。落盘 + 即时生效
+    ipcMain.on("lyrics:setSettings", (_e, settings) => {
+        const next = normalizeSettings(settings);
+        const formChanged = next.form !== currentSettings.form;
+        const wasVisible = isFormVisible();
+        currentSettings = next;
+        configStoreRef?.set(SETTINGS_KEY, currentSettings);
+        // 开着的时候切形态（mac 菜单栏↔悬浮窗）：旧形态收掉，新形态顶上
+        if (formChanged) {
+            if (wasVisible) {
+                hideMenubarLyrics();
+                if (lyricsWin && !lyricsWin.isDestroyed()) {
+                    lyricsWin.hide();
+                }
+                show();
+            } else {
+                // 没开着：把另一个形态的残留收掉，别让它下次 show 顶出来
+                if (useMenubarForm() && lyricsWin && !lyricsWin.isDestroyed()) {
+                    lyricsWin.destroy();
+                    lyricsWin = null;
+                }
+            }
+        }
+        applySettingsToLyricsWin();
+        // 菜单栏形态：双行开关会改变标题拼接，立刻重刷一次
+        syncMenubarState();
     });
 }
 

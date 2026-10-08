@@ -29,6 +29,7 @@ import { useThemeSetup } from "./core/theme";
 import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
+import { setupSystemIntegration } from "./core/systemIntegration";
 
 import HomePage from "./pages/home";
 import NeteaseDailyPage from "./pages/neteaseDaily";
@@ -219,6 +220,8 @@ export default function App() {
         TrackPlayerSingleton.setup();
         // 桌面歌词：接好「状态推送 → 歌词窗」与「歌词窗遥控 → 播放器」两条链路
         setupDesktopLyrics();
+        // 托盘 / 全局快捷键 / 任务栏缩略图按钮：图标与状态在这边供，命令回这边执行
+        setupSystemIntegration();
     }, []);
 
     // 播放失败时把原因说出来：能降级音质自救的本曲会接着重试，救不了才停住或跳下一首

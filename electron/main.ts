@@ -17,6 +17,8 @@ import sessionStore from "./services/sessionStore";
 import backupService, { ResumeMode } from "./services/backupService";
 import lyricsWindow from "./services/lyricsWindow";
 import neteaseService from "./services/neteaseService";
+import localLyrics from "./services/localLyrics";
+import systemIntegration from "./services/systemIntegration";
 import { isSupported as isAutoLaunchSupported, isEnabled as isAutoLaunchEnabled, setEnabled as setAutoLaunchEnabled } from "./services/autoLaunch";
 
 const isMac = process.platform === "darwin";
@@ -63,6 +65,9 @@ protocol.registerSchemesAsPrivileged([
         },
     },
 ]);
+
+/** 关窗到底是要退出还是要藏进托盘：before-quit 先置位，close 事件据此放行 */
+let isQuitting = false;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -112,15 +117,33 @@ function createWindow() {
         }, 1000);
     });
 
-    // 关窗（红点 / ⌘W）在 macOS 上等于退出应用，所以这里也要把「上次播放会话」要回来。
-    // 这是**唯一**的落盘时机：播放进度只在退出前记一次（见 src/core/playProgress.ts），
+    // 关窗（红点 / ⌘W）：先要回「上次播放会话」，再按关闭行为决定去向。
+    // 这是**唯一**的进度落盘时机：播放进度只在退出前记一次（见 src/core/playProgress.ts），
     // 主进程手里没有「上一版进度」可兜底。
+    // 关闭行为（app.closeBehavior）：minimize = 藏进托盘继续播（桌面播放器惯例）；
+    // quit = 旧行为，关窗即退。isQuitting（托盘「完全退出」/⌘Q/before-quit）时永远放行。
     mainWindow.on("close", (event) => {
-        if (!needsSessionFlush()) {
+        const hideToTray =
+            !isQuitting && configStore.get("app.closeBehavior", "minimize") !== "quit";
+        if (!needsSessionFlush() && !hideToTray) {
             return;
         }
         event.preventDefault();
-        requestSessionFlush().finally(() => mainWindow?.close());
+        const proceed = () => {
+            if (isQuitting) {
+                mainWindow?.close();
+            } else if (hideToTray) {
+                mainWindow?.hide();
+            } else {
+                isQuitting = true;
+                mainWindow?.close();
+            }
+        };
+        if (needsSessionFlush()) {
+            requestSessionFlush().finally(proceed);
+        } else {
+            proceed();
+        }
     });
 
     // 主窗口没了桌面歌词窗也没必要留：一起收掉，window-all-closed 才能正常退出
@@ -187,6 +210,11 @@ app.whenReady().then(() => {
         configStore,
         getMainWindow: () => mainWindow,
     });
+    // 托盘 / 关闭行为 / 全局快捷键 / 任务栏缩略图按钮
+    systemIntegration.setup({
+        configStore,
+        getMainWindow: () => mainWindow,
+    });
     // 网易云账号（扫码登录）与每日推荐
     neteaseService.setup();
     pluginHost.setup(
@@ -231,18 +259,24 @@ app.whenReady().then(() => {
     });
 
     createWindow();
+    systemIntegration.onMainWindowReady();
 
     app.on("activate", () => {
         // 不能按「没有窗口」判断：桌面歌词窗开着时 getAllWindows() 不为空，
         // 但主窗口可能已经没了，点 Dock 图标必须能把它拉回来
         if (!mainWindow || mainWindow.isDestroyed()) {
             createWindow();
+            systemIntegration.onMainWindowReady();
+        } else {
+            // 窗口还在但可能被关进了托盘（hide）或最小化：点 Dock 一律带回前台
+            focusMainWindow();
         }
     });
 });
 
 // 退出前把防抖中的待写数据落盘，避免丢掉最后几百毫秒内的修改
 app.on("before-quit", (event) => {
+    isQuitting = true;
     configStore.flushNow();
     // 已经要过一次就不再问了（下面 app.quit() 会再进一次这个回调）
     if (!needsSessionFlush()) {
@@ -627,6 +661,30 @@ ipcMain.handle(
         return true;
     },
 );
+
+/** ---------- 关闭行为（设置页「点 × 时」） ---------- */
+ipcMain.handle("app:getCloseBehavior", () =>
+    configStore.get("app.closeBehavior", "minimize"));
+ipcMain.handle("app:setCloseBehavior", (_e, behavior: string) => {
+    const next = behavior === "quit" ? "quit" : "minimize";
+    configStore.set("app.closeBehavior", next);
+    // 改成「直接退出」时，若窗口正藏在托盘里，按新语义应当退出（会话照常先落盘）
+    if (next === "quit" && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        app.quit();
+    }
+    return next;
+});
+
+/** ---------- 本地歌曲歌词/封面（见 services/localLyrics.ts） ---------- */
+ipcMain.handle("localLyrics:read", (_e, payload: { localPath: string; title?: string; artist?: string }) =>
+    localLyrics.readLyric(payload));
+ipcMain.handle("localLyrics:applyRemote", async (_e, payload: any) => {
+    try {
+        return { success: true, data: await localLyrics.applyRemote(payload) };
+    } catch (e: any) {
+        return { success: false, message: e?.message ?? String(e) };
+    }
+});
 
 /** ---------- 备份与恢复 ---------- */
 

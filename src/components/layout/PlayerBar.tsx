@@ -20,9 +20,21 @@ import {
 } from "@/core/trackPlayer";
 import { isLiked, likesVersionAtom, toggleLike } from "@/core/musicSheet";
 import {
+    LYRICS_FORM_SUPPORTED,
+    getLyricsSettings,
+    setLyricsSettings,
     toggleDesktopLyrics,
+    useDesktopLyricsSettings,
     useDesktopLyricsVisible,
 } from "@/core/desktopLyrics";
+import {
+    SLEEP_COUNTDOWN_PRESETS,
+    SLEEP_SONG_PRESETS,
+    sleepTimerAtom,
+    startSleepAfterSongs,
+    startSleepCountdown,
+    stopSleepTimer,
+} from "@/core/sleepTimer";
 import {
     toggleLyricTranslation,
     useLyricTranslationOn,
@@ -80,8 +92,10 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
      */
     const badgeQuality = currentMusic?.localPath ? null : playingQuality ?? quality;
     const lyricsVisible = useDesktopLyricsVisible();
+    const lyricsSettings = useDesktopLyricsSettings();
     const translationOn = useLyricTranslationOn();
     const rate = useRate();
+    const sleepTimer = useAtomValue(sleepTimerAtom);
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
     /** 队列一进歌就在歌单入口图标上弹一次提示，两秒后自己收回去 */
@@ -169,6 +183,12 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     onClick: () => showRateMenu(anchor),
                 },
                 {
+                    title: sleepTimerLabel(),
+                    icon: "timer",
+                    checked: sleepTimer.mode !== "off",
+                    onClick: () => showSleepMenu(anchor),
+                },
+                {
                     title: "下载",
                     icon: "download",
                     onClick: () => showDownloadPanel([music]),
@@ -181,6 +201,154 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
             ],
             // 贴底的播放栏：菜单向上展开；两项短文字，宽度贴内容
             { above: true, compact: true },
+        );
+    };
+
+    /** 定时关闭的当前档位文案（更多菜单那一行直接说清还剩什么） */
+    function sleepTimerLabel() {
+        if (sleepTimer.mode === "countdown" && sleepTimer.deadline) {
+            const remain = Math.max(0, sleepTimer.deadline - Date.now());
+            const min = Math.ceil(remain / 60000);
+            return `定时关闭 · 剩 ${min} 分钟`;
+        }
+        if (sleepTimer.mode === "songs" && sleepTimer.songsLeft != null) {
+            return `定时关闭 · 剩 ${sleepTimer.songsLeft} 首`;
+        }
+        return "定时关闭";
+    }
+
+    const showSleepMenu = (anchor: { left: number; top: number }) => {
+        const active = sleepTimer.mode;
+        showContextMenu(
+            anchor.left,
+            anchor.top - 8,
+            [
+                ...SLEEP_COUNTDOWN_PRESETS.map((m) => ({
+                    title: `${m} 分钟后`,
+                    checked: active === "countdown" && sleepTimer.deadline != null &&
+                        Math.round((sleepTimer.deadline - Date.now()) / 60000) === m,
+                    onClick: () => {
+                        startSleepCountdown(m);
+                        showToast(`将在 ${m} 分钟后暂停播放`);
+                    },
+                })),
+                ...SLEEP_SONG_PRESETS.map((n) => ({
+                    title: `播完 ${n} 首后`,
+                    checked: active === "songs" && sleepTimer.songsLeft === n,
+                    onClick: () => {
+                        startSleepAfterSongs(n);
+                        showToast(`将在播完 ${n} 首后暂停播放`);
+                    },
+                })),
+                ...(active !== "off"
+                    ? [
+                        {
+                            title: "取消定时",
+                            onClick: () => {
+                                stopSleepTimer();
+                            },
+                        },
+                    ]
+                    : []),
+            ],
+            { above: true, compact: true, checkGap: true },
+        );
+    };
+
+    /**
+     * 桌面歌词设置（右键「词」按钮就地弹出，参考网易云桌面歌词样式面板）：
+     * 每项点击即生效并重新弹开菜单（重读实时设置，勾选项跟着刷新），连续调整不用反复右键。
+     */
+    const showLyricsSettingsMenu = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = e.currentTarget.getBoundingClientRect();
+        openLyricsSettingsMenu({ left: rect.left, top: rect.top });
+    };
+
+    const openLyricsSettingsMenu = (anchor: { left: number; top: number }) => {
+        // 每次展开都读实时值：点完一项 setTimeout 重弹时，hook 快照还是旧的
+        const s = getLyricsSettings();
+        const reopen = () => setTimeout(() => openLyricsSettingsMenu(anchor), 0);
+        showContextMenu(
+            anchor.left,
+            anchor.top - 8,
+            [
+                ...(LYRICS_FORM_SUPPORTED
+                    ? [
+                        {
+                            title: "菜单栏歌词",
+                            checked: s.form === "menubar",
+                            onClick: () => {
+                                setLyricsSettings({ form: "menubar" });
+                                reopen();
+                            },
+                        },
+                        {
+                            title: "悬浮窗歌词",
+                            checked: s.form === "overlay",
+                            onClick: () => {
+                                setLyricsSettings({ form: "overlay" });
+                                reopen();
+                            },
+                        },
+                    ]
+                    : []),
+                {
+                    title: "字体小",
+                    checked: s.fontSize <= 15,
+                    onClick: () => {
+                        setLyricsSettings({ fontSize: 14 });
+                        reopen();
+                    },
+                },
+                {
+                    title: "字体标准",
+                    checked: s.fontSize > 15 && s.fontSize < 19,
+                    onClick: () => {
+                        setLyricsSettings({ fontSize: 17 });
+                        reopen();
+                    },
+                },
+                {
+                    title: "字体大",
+                    checked: s.fontSize >= 19 && s.fontSize < 25,
+                    onClick: () => {
+                        setLyricsSettings({ fontSize: 22 });
+                        reopen();
+                    },
+                },
+                {
+                    title: "字体特大",
+                    checked: s.fontSize >= 25,
+                    onClick: () => {
+                        setLyricsSettings({ fontSize: 28 });
+                        reopen();
+                    },
+                },
+                {
+                    title: "双行（原文+译文）",
+                    checked: s.twoLine,
+                    onClick: () => {
+                        setLyricsSettings({ twoLine: !s.twoLine });
+                        reopen();
+                    },
+                },
+                {
+                    title: "鼠标穿透锁定",
+                    checked: s.locked,
+                    onClick: () => {
+                        setLyricsSettings({ locked: !s.locked });
+                        showToast(
+                            s.locked
+                                ? "已解除锁定：悬浮窗可拖动、可点按钮"
+                                : "已锁定：歌词不再挡鼠标（回这里解锁）",
+                        );
+                        reopen();
+                    },
+                },
+            ],
+            { above: true, compact: true, checkGap: true },
         );
     };
 
@@ -307,11 +475,17 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             />
                         </button>
                     )}
-                    {/* 桌面歌词开关（参考网易云「词ON」）：文字图标，开启时亮主色 + ON 角标 */}
+                    {/* 桌面歌词开关（参考网易云「词ON」）：文字图标，开启时亮主色 + ON 角标；
+                        右键就地弹出样式设置（形态/字号/双行/鼠标穿透锁定） */}
                     <button
                         className={`playerbar-lyrics-toggle${lyricsVisible ? " on" : ""}`}
-                        title={lyricsVisible ? "关闭桌面歌词" : "开启桌面歌词"}
+                        title={
+                            lyricsVisible
+                                ? "关闭桌面歌词（右键：样式设置）"
+                                : "开启桌面歌词（右键：样式设置）"
+                        }
                         onClick={() => toggleDesktopLyrics()}
+                        onContextMenu={showLyricsSettingsMenu}
                     >
                         词
                         {lyricsVisible && <span className="playerbar-lyrics-badge">ON</span>}

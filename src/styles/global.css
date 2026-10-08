@@ -2953,15 +2953,30 @@ body.in-desktop-lyrics-window {
     cursor: default;
 }
 
-.desktop-lyrics-text {
+.desktop-lyrics-lines {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+}
+
+.desktop-lyrics-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: #ffffff;
-    font-size: 17px;
+    /* 字号跟容器走（悬浮窗从主窗口收到设置后写在 style 上） */
+    font-size: inherit;
     font-weight: 600;
+    line-height: 1.5;
+}
+
+.desktop-lyrics-translation {
+    font-weight: 400;
+    opacity: 0.78;
+    font-size: 0.82em;
 }
 
 .desktop-lyrics-controls {
@@ -2969,6 +2984,7 @@ body.in-desktop-lyrics-window {
     align-items: center;
     gap: 2px;
     -webkit-app-region: no-drag;
+    flex-shrink: 0;
 }
 
 .desktop-lyrics-btn {

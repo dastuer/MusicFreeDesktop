@@ -9,6 +9,7 @@ import {
     pluginCall,
 } from "./ipc";
 import { setMusicHistory } from "./musicHistory";
+import { matchLocalLyric } from "./localLyricMatch";
 import { getQuality, setQuality } from "./appConfig";
 import {
     bindProgressPersistence,
@@ -260,6 +261,8 @@ function setAtom<T>(atom_: any, value: T) {
 
 class TrackPlayer extends EventEmitter {
     private audio: HTMLAudioElement | null = null;
+    /** 系统媒体面板的进度同步限频旗标（timeupdate 太密，1s 一次足够） */
+    private mediaPositionThrottled = false;
     private _repeatMode: MusicRepeatMode = "off";
     private _playList: IMusic.IMusicItem[] = [];
     /**
@@ -487,6 +490,14 @@ class TrackPlayer extends EventEmitter {
         };
         setAtom(progressAtom, progress);
         this.emit(TrackPlayerEvents.ProgressChanged, progress);
+        // 系统媒体面板的进度条（SMTC/控制中心）：秒级同步足够，别每个事件都设
+        if (!this.mediaPositionThrottled) {
+            this.mediaPositionThrottled = true;
+            setTimeout(() => {
+                this.mediaPositionThrottled = false;
+                this.syncMediaPositionState();
+            }, 1000);
+        }
         // 这里不落盘：进度只在**退出前**记一次（见 collectSessionProgress）。
         // 播放中反复写文件既没有必要，也会在音源解析 / 网络抖动的窗口里写出坏位置。
     };
@@ -547,6 +558,7 @@ class TrackPlayer extends EventEmitter {
         if (this._currentMusic) {
             setAtom(musicStateAtom, "paused");
         }
+        this.syncMediaPlaybackState();
     };
 
     private onAudioPlay = (e: Event) => {
@@ -554,6 +566,7 @@ class TrackPlayer extends EventEmitter {
             return;
         }
         setAtom(musicStateAtom, "playing");
+        this.syncMediaPlaybackState();
     };
 
     private onAudioPlaying = (e: Event) => {
@@ -1355,7 +1368,8 @@ class TrackPlayer extends EventEmitter {
     }
 
     private async updateMediaSession(musicItem: IMusic.IMusicItem) {
-        // macOS 控制中心 / 触控栏
+        // macOS 控制中心 / 触控栏；Windows 上 Electron 33 会把它桥接成 SMTC（系统媒体浮窗 + 媒体键）。
+        // 桥接的前提是「设了 metadata」+ action handler 齐全，下面一并补齐 playbackState。
         if ("mediaSession" in navigator) {
             let artwork: string | undefined = musicItem.artwork;
             // 本地音乐的封面在列表里是 mfs://cover 短链，系统媒体面板取不到，
@@ -1390,6 +1404,57 @@ class TrackPlayer extends EventEmitter {
                 this.skipToPrevious(),
             );
             navigator.mediaSession.setActionHandler("nexttrack", () => this.skipToNext());
+            // 系统面板拖进度条（Windows SMTC 的 seek）：没注册 seekto 时进度条整条消失
+            navigator.mediaSession.setActionHandler("seekto" as MediaSessionAction, (d: MediaSessionActionDetails) => {
+                if (typeof d.seekTime === "number") {
+                    this.seekTo(d.seekTime);
+                }
+            });
+            navigator.mediaSession.setActionHandler("seekbackward" as MediaSessionAction, (d: MediaSessionActionDetails) => {
+                const cur = this.audio?.currentTime ?? 0;
+                this.seekTo(Math.max(0, cur - (d.seekOffset ?? 10)));
+            });
+            navigator.mediaSession.setActionHandler("seekforward" as MediaSessionAction, (d: MediaSessionActionDetails) => {
+                const cur = this.audio?.currentTime ?? 0;
+                const dur = this.audio?.duration ?? 0;
+                this.seekTo(Math.min(dur || cur + 10, cur + (d.seekOffset ?? 10)));
+            });
+            // 系统面板里的进度条（SMTC/控制中心）与 seek：没有 seekto 时进度条会整个消失
+            if ("setPositionState" in navigator.mediaSession) {
+                this.syncMediaPositionState();
+            }
+            this.syncMediaPlaybackState();
+        }
+    }
+
+    /** 播放状态同步给系统（SMTC 按钮的 播放/暂停 形态与可用性由它决定） */
+    private syncMediaPlaybackState() {
+        if (!("mediaSession" in navigator)) {
+            return;
+        }
+        const state = store.get(musicStateAtom);
+        try {
+            navigator.mediaSession.playbackState =
+                state === "playing" ? "playing" : state === "paused" ? "paused" : "none";
+        } catch {
+            // 个别 Chromium 版本 setter 会抛，忽略
+        }
+    }
+
+    /** 进度同步给系统：SMTC 的进度条/剩余时间靠它（低频调用即可，秒级足够） */
+    private syncMediaPositionState() {
+        const audio = this.audio;
+        if (!audio?.src || !isFinite(audio.duration) || audio.duration <= 0) {
+            return;
+        }
+        try {
+            navigator.mediaSession.setPositionState({
+                duration: audio.duration,
+                position: audio.currentTime || 0,
+                playbackRate: audio.playbackRate || 1,
+            });
+        } catch {
+            // 时间轴还没就绪（duration=0/NaN）等场景忽略
         }
     }
 
@@ -1869,7 +1934,11 @@ export function useLyricTranslationOn() {
 /** 加载当前歌曲歌词 */
 export async function loadCurrentLyric(musicItem: IMusic.IMusicItem) {
     let lyricSource: ILyric.ILyricSource | null = musicItem.lyric ?? null;
-    if (!lyricSource && !musicItem.localPath) {
+    if (!lyricSource && musicItem.localPath) {
+        // 本地歌曲：文件自带（内嵌/同名 .lrc）→ 上次匹配缓存 → 联网按标题+歌手找同款。
+        // 之前这里对 localPath 直接跳过，本地歌永远没歌词。见 core/localLyricMatch.ts
+        lyricSource = await matchLocalLyric(musicItem);
+    } else if (!lyricSource) {
         const plugin = await getPluginByMedia(musicItem);
         if (plugin?.supportedMethods.includes("getLyric")) {
             try {

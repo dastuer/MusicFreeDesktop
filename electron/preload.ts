@@ -47,6 +47,12 @@ const allowedChannels = [
     "netease:getPlaylistDetail",
     "window:setCaptionOverlay",
     "session:save",
+    "app:getCloseBehavior",
+    "app:setCloseBehavior",
+    "localLyrics:read",
+    "localLyrics:applyRemote",
+    "system:setShortcutsEnabled",
+    "system:setTrayVisible",
     "cache:info",
     "cache:clear",
     "cache:openDir",
@@ -132,5 +138,27 @@ contextBridge.exposeInMainWorld("mfp", {
      */
     sendLyricsIcons: (icons: Record<string, string>) => {
         ipcRenderer.send("lyrics:setIcons", icons);
+    },
+    /** ---------- 桌面歌词设置（字号/双行/锁定）：主窗口 → 主进程 → 歌词窗 ---------- */
+    /** 主窗口：推送歌词窗设置（字号/双行/锁定） */
+    sendLyricsSettings: (settings: any) => {
+        ipcRenderer.send("lyrics:setSettings", settings);
+    },
+    /** 歌词窗：接收设置 */
+    onLyricsSettings: (callback: (settings: any) => void) => {
+        ipcRenderer.on("lyrics:settings", (_e, settings) => callback(settings));
+    },
+    /** ---------- 系统集成（托盘 / 全局快捷键 / 任务栏按钮）---------- */
+    /** 主窗口 → 主进程：播放状态快照（托盘菜单与缩略图按钮跟着走） */
+    sendSystemState: (state: any) => {
+        ipcRenderer.send("system:state", state);
+    },
+    /** 主窗口 → 主进程：托盘/缩略图按钮的图标（base64 PNG） */
+    sendSystemIcons: (icons: Record<string, string>) => {
+        ipcRenderer.send("system:icons", icons);
+    },
+    /** 主窗口：接收托盘菜单/快捷键/缩略图按钮发来的命令（与歌词遥控同一词表） */
+    onSystemCommand: (callback: (cmd: string) => void) => {
+        ipcRenderer.on("system:command", (_e, cmd) => callback(cmd));
     },
 });

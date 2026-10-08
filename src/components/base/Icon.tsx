@@ -116,6 +116,13 @@ const iconPaths: Record<string, React.ReactNode> = {
     ),
     /** 云端：WebDAV 相关操作 */
     cloud: <path d="M7 18h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 6.7 8.6A3.7 3.7 0 0 0 7 18z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />,
+    /** 定时关闭（睡眠定时器）：表盘 + 指针 */
+    timer: (
+        <>
+            <circle cx="12" cy="13" r="7.25" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M12 9.5V13l2.5 2M9.5 2.75h5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+    ),
     /** 每日推荐（网易云）：日历 + 星标 */
     netease: (
         <>

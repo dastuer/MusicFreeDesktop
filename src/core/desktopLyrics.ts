@@ -16,12 +16,79 @@ import { isLiked, toggleLike } from "./musicSheet";
  *  - 状态推送：歌曲/播放状态/歌词变化时立刻推，进度按 timeupdate 的节奏跟着推；
  *    歌词窗不可见时全部跳过，不白白走 IPC；
  *  - 可见性以主进程回执（lyrics:visibility）为准：开关、歌词窗就绪提醒都汇到这一条上，
- *    变为可见时顺手补推一份最新状态，歌词窗不用等下一次 timeupdate。
+ *    变为可见时顺手补推一份最新状态，歌词窗不用等下一次 timeupdate；
+ *  - 显示设置（字号/双行/鼠标穿透锁定）持久化在 localStorage，改动即时推给主进程：
+ *    悬浮窗的高度/穿透状态由主进程应用，双行的「译文」在这里拼好一起推。
  */
 
 export const desktopLyricsVisibleAtom = atom(false);
 
+/** 桌面歌词设置（与主进程/歌词窗共用同一形状，见 services/lyricsWindow.ts） */
+export interface ILyricsWindowSettings {
+    /** 形态（仅 mac 可选）：菜单栏 / 悬浮窗；Windows 上主进程恒走悬浮窗 */
+    form: "menubar" | "overlay";
+    fontSize: number;
+    twoLine: boolean;
+    locked: boolean;
+}
+
+const SETTINGS_STORAGE_KEY = "desktopLyrics.settings";
+
+export function readLyricsSettings(): ILyricsWindowSettings {
+    try {
+        const raw = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) ?? "null");
+        const size = Number(raw?.fontSize);
+        return {
+            form: raw?.form === "overlay" ? "overlay" : "menubar",
+            fontSize: Number.isFinite(size) ? Math.min(Math.max(Math.round(size), 12), 32) : 17,
+            twoLine: !!raw?.twoLine,
+            locked: !!raw?.locked,
+        };
+    } catch {
+        return { form: "menubar", fontSize: 17, twoLine: false, locked: false };
+    }
+}
+
+/** mac 才有形态选择；其余平台恒悬浮窗 */
+export const LYRICS_FORM_SUPPORTED = /Mac/.test(navigator.userAgent);
+
 const store = getDefaultStore();
+const settingsAtom = atom<ILyricsWindowSettings>(readLyricsSettings());
+
+export function useDesktopLyricsSettings() {
+    return useAtomValue(settingsAtom);
+}
+
+/** 菜单/回调里拿最新设置用（hook 值是渲染时的快照，点完一项要重弹菜单时得读实时值） */
+export function getLyricsSettings(): ILyricsWindowSettings {
+    return store.get(settingsAtom);
+}
+
+export function setLyricsSettings(patch: Partial<ILyricsWindowSettings>) {
+    const next = { ...store.get(settingsAtom), ...patch };
+    store.set(settingsAtom, next);
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
+    window.mfp?.sendLyricsSettings(next);
+    // 双行开关直接决定 activeTranslation 有没有：开着歌词就立刻重推一帧
+    pushState();
+}
+
+/** 当前歌词位置（position + 0.2 容差口径）上激活行的译文行；没开双行或没有译文时 null */
+function resolveActiveTranslation(position: number): string | undefined {
+    const settings = store.get(settingsAtom);
+    if (!settings.twoLine) {
+        return undefined;
+    }
+    let translation: string | undefined;
+    for (const item of store.get(currentLyricAtom)) {
+        if (item.time <= position + 0.2) {
+            translation = item.translation;
+        } else {
+            break;
+        }
+    }
+    return translation || undefined;
+}
 
 /** 当前歌曲的喜欢状态：随状态包推给歌词窗，红心不用自己去查 */
 let liked = false;
@@ -40,6 +107,9 @@ function buildState() {
         lines: store.get(currentLyricAtom),
         // 激活行在这里解析好：菜单栏（主进程直接设标题）和悬浮窗共用同一条
         activeLine: resolveActiveLine(progress.position),
+        // 双行开启且有译文才给第二行；菜单栏形态把它并进标题（原文 · 译文）
+        activeTranslation: resolveActiveTranslation(progress.position),
+        settings: store.get(settingsAtom),
     };
 }
 
@@ -116,6 +186,8 @@ export function setupDesktopLyrics() {
     refreshLiked();
     // 菜单栏托盘图标早一步备好：用户随时可能点「词」
     sendTrayIcons();
+    // 开机把本地存的显示设置推给主进程一次：悬浮窗的高度/穿透锁定以渲染侧为准
+    window.mfp.sendLyricsSettings(store.get(settingsAtom));
 
     // 歌词窗的遥控命令 → 播放器
     window.mfp.onLyricsCommand((cmd: string) => {

@@ -4,12 +4,18 @@ import axios from "axios";
 import { shell } from "electron";
 import configStoreInstance from "./configStore";
 import pluginHost from "./pluginHost";
+import { fetchArtworkBytes } from "./localLyrics";
+import { writeTags } from "./tagWriter";
+import type { IAudioTags } from "./tagWriter";
 
 /**
  * 下载服务：
  *  - 下载队列（并发 2），音质可选
  *  - 进度事件推送给渲染进程
  *  - 任务记录持久化，重启后可在下载管理中查看/重试
+ *  - 下载完成后写标签：标题/歌手/专辑/年份 + 内嵌封面 + 歌词（USLT/LYRICS）。
+ *    标签只覆盖 mp3/flac（tagWriter 手写格式）；其他格式与「写失败」退回同名 .lrc 边车。
+ *    标签内容先下载文件、再解析歌词/封面（尽力而为，任何一步失败都不影响下载本身完成）。
  */
 
 const CONCURRENCY = 2;
@@ -32,6 +38,8 @@ export interface IDownloadTask {
     filename: string;
     filePath?: string;
     error?: string;
+    /** 下载完成后标签写入成功（mp3/flac 内嵌）；false/缺省 = 没写或写了 .lrc 边车 */
+    tagsWritten?: boolean;
     createdAt: number;
 }
 
@@ -280,6 +288,81 @@ class DownloadService {
         }
         task.status = "completed";
         task.progress = 100;
+        // 写标签（尽力而为）：失败只记一笔，不影响下载本身完成
+        try {
+            await this.embedTags(task);
+        } catch (e: any) {
+            console.warn(`[download] 写标签失败 ${task.filename}:`, e?.message ?? e);
+        }
+    }
+
+    /**
+     * 下载完成后把元数据写进文件：标题/歌手/专辑/年份 + 封面 + 歌词。
+     * 歌词走这首歌自己的音源插件（getLyric）；封面走条目 artwork。
+     * 非 mp3/flac（写不了标签）时歌词退同名 .lrc 边车。
+     */
+    private async embedTags(task: IDownloadTask) {
+        const filePath = task.filePath;
+        if (!filePath || !fs.existsSync(filePath)) {
+            return;
+        }
+        const item = task.musicItem as any;
+        const artists: string[] = Array.isArray(item.artist)
+            ? item.artist.map(String)
+            : String(item.artist ?? "")
+                  .split(/[/、,;&]/)
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+
+        const tags: IAudioTags = {
+            title: item.title || undefined,
+            artists: artists.length ? artists : undefined,
+            album: item.album || undefined,
+            year: item.year ? String(item.year).slice(0, 4) : undefined,
+        };
+
+        // 歌词：插件 getLyric 优先（rawLrc / lrc 直链两形态都接）
+        try {
+            const plugin = pluginHost.getByPlatform(item.platform);
+            const getLyric = plugin?.instance?.getLyric;
+            if (plugin && typeof getLyric === "function") {
+                const lyricSource = await getLyric.call(plugin.instance, item);
+                const rawLrc = String(lyricSource?.rawLrc ?? "");
+                tags.lyrics =
+                    rawLrc ||
+                    (lyricSource?.lrc
+                        ? await axios
+                              .get(String(lyricSource.lrc), { timeout: 10000, responseType: "text" })
+                              .then((r) => String(r.data ?? ""))
+                              .catch(() => "")
+                        : "");
+                // 译文有就并进同一份 LRC（同一时间轴加一行），没译文就是原文
+                const translation = String(lyricSource?.translation ?? "");
+                if (translation) {
+                    tags.lyrics = `${tags.lyrics}\n${translation}`.trim();
+                }
+            }
+        } catch {
+            // 拿不到歌词不影响写其余标签
+        }
+
+        // 封面：条目 artwork（短链/远程/data URL 都认）
+        if (item.artwork) {
+            const fetched = await fetchArtworkBytes(String(item.artwork));
+            if (fetched?.mime) {
+                tags.picture = { format: fetched.mime, data: fetched.data };
+            }
+        }
+
+        const wrote = writeTags(filePath, tags);
+        if (!wrote && tags.lyrics) {
+            // 写不进标签的格式（m4a/wav/ogg…）：留一份同名 .lrc，播放器/手机都能读
+            const lrcPath = `${filePath.slice(0, -path.extname(filePath).length)}.lrc`;
+            fs.writeFileSync(lrcPath, tags.lyrics, "utf8");
+        }
+        if (wrote) {
+            task.tagsWritten = true;
+        }
     }
 
     /** runTask 主体；单独拆出来是为了 finally 里稳定注销取消登记 */
