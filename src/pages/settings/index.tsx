@@ -156,7 +156,7 @@ export default function SettingsPage() {
                 />
                 <div className="settings-item">
                     <div>
-                        <div className="settings-item-label">点 × 时</div>
+                        <div className="settings-item-label">点击关闭按钮时</div>
                         <div className="settings-item-desc">
                             最小化到托盘：窗口收进系统托盘，音乐继续播；直接退出：关窗即退出应用
                         </div>
