@@ -11,6 +11,11 @@ import {
 } from "@/core/playProgress";
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
+import {
+    openReleasePage,
+    setAutoCheck,
+    useUpdateStatus,
+} from "@/core/updater";
 import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
 import NeteaseSection from "./NeteaseSection";
@@ -84,6 +89,8 @@ export default function SettingsPage() {
     const [closeBehavior, setCloseBehavior] = useState<"minimize" | "quit">("minimize");
     const [trayVisible, setTrayVisible] = useState(true);
     const [globalShortcuts, setGlobalShortcuts] = useState(false);
+    // 检查更新（GitHub Releases）：结果与 App 启动检查共享同一份 jotai 状态
+    const { result: updateResult, autoCheck, checking, check: checkUpdate } = useUpdateStatus();
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
         ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
@@ -347,8 +354,68 @@ export default function SettingsPage() {
                     </div>
                 </div>
                 <div className="settings-item">
+                    <div style={{ minWidth: 0 }}>
+                        <div className="settings-item-label">检查更新</div>
+                        <div className="settings-item-desc">
+                            {updateDesc(updateResult, appInfo?.version)}
+                        </div>
+                    </div>
+                    <button
+                        className="btn-ghost"
+                        style={{ flexShrink: 0 }}
+                        disabled={checking}
+                        onClick={async () => {
+                            // 用返回值而不是闭包里的 updateResult：等 await 回来再提示，数据才是这次的
+                            const res = await checkUpdate();
+                            if (res.error) {
+                                showToast(`检查更新失败：${res.error}`);
+                            } else if (res.updateAvailable) {
+                                showToast(`发现新版本 v${res.latestVersion}（当前 v${res.currentVersion}）`);
+                            } else {
+                                showToast(`当前已是最新版本（v${res.currentVersion}）`);
+                            }
+                        }}
+                    >
+                        {checking ? "检查中…" : "检查更新"}
+                    </button>
+                </div>
+                <ToggleRow
+                    label="启动时自动检查更新"
+                    desc="联网查询 GitHub Releases 上的最新版本，有更新时在界面提醒；不自动下载安装"
+                    value={autoCheck}
+                    onChange={(next) => {
+                        setAutoCheck(next);
+                        showToast(next ? "已开启自动检查更新" : "已关闭自动检查更新");
+                    }}
+                />
+                {updateResult?.updateAvailable && (
+                    <div className="settings-item">
+                        <div style={{ minWidth: 0 }}>
+                            <div className="settings-item-label">
+                                新版本 v{updateResult.latestVersion ?? updateResult.name}
+                            </div>
+                            <div
+                                className="settings-item-desc"
+                                style={{
+                                    wordBreak: "break-all",
+                                    whiteSpace: "normal",
+                                }}
+                            >
+                                {releaseNotesPreview(updateResult.notes) || "暂无更新说明"}
+                            </div>
+                        </div>
+                        <button
+                            className="btn-ghost"
+                            style={{ flexShrink: 0 }}
+                            onClick={() => openReleasePage(updateResult.url ?? undefined)}
+                        >
+                            前往下载
+                        </button>
+                    </div>
+                )}
+                <div className="settings-item">
                     <div>
-                        <div className="settings-item-label">插件生态</div                        >
+                        <div className="settings-item-label">插件生态</div>
                         <div className="settings-item-desc">
                             与 MusicFree 移动端音源插件（.js）兼容，在「音源插件」页安装
                         </div>
@@ -357,4 +424,35 @@ export default function SettingsPage() {
             </div>
         </div>
     );
+}
+
+/** 「检查更新」一行 desc：按检查状态给出不同文案 */
+function updateDesc(
+    result: ReturnType<typeof useUpdateStatus>["result"],
+    fallbackVersion?: string,
+) {
+    if (!result) {
+        return `当前 v${fallbackVersion ?? "?"} · 更新渠道：GitHub Releases`;
+    }
+    if (result.error) {
+        return `上次检查失败：${result.error}`;
+    }
+    if (result.updateAvailable) {
+        return `发现新版本 ${result.latestVersion}，当前 v${result.currentVersion}`;
+    }
+    return `当前 v${result.currentVersion}，已是最新版本`;
+}
+
+/** 更新说明预览：只取前几行非空文本，Markdown 记号粗略剥掉 */
+function releaseNotesPreview(notes: string | null) {
+    if (!notes) {
+        return "";
+    }
+    return notes
+        .split("\n")
+        .map((line) => line.replace(/^[#*\-\s]+/, "").trim())
+        .filter(Boolean)
+        .slice(0, 4)
+        .join("；")
+        .slice(0, 120);
 }

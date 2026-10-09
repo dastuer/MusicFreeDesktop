@@ -30,6 +30,7 @@
 - [x] **定时关闭（睡眠定时器）**：`core/sleepTimer.ts`，播放栏「更多」菜单入口——10/20/30/45/60/90 分钟倒计时或播完 1/3/5 首后 `pause()`，到点自动停、菜单行实时显示剩余，可随时取消。
 - [x] **本地歌词匹配**：`loadCurrentLyric` 对 localPath 不再跳过。优先级：内嵌歌词（MP3 USLT/FLAC LYRICS，主进程 `services/localLyrics.ts` 解析）→ 同名 .lrc 边车（UTF-8/GB18030 自动识别）→ 上次匹配的 localStorage 缓存 → 联网（装机 getLyric 插件按「标题+歌手」搜索，titleSim/artistSim 打分 ≥0.78 采信）。命中后经主进程把歌词+封面写回文件（下次即「文件自带」），封面同步进缓存与本地音乐列表。
 - [x] **任务栏缩略图按钮**：Windows `setThumbarButtons`（上一首/播放暂停/下一首），图标与托盘同源由渲染进程生成，播放状态切换即时换图。
+- [x] **检查更新**：`electron/services/updater.ts` 走 GitHub Releases 渠道（`releases/latest` API + compare-versions 比版本），只查不装（免签分发没有统一静默升级通道）。启动后渲染进程挂载时自动查一次（已打包 + 设置开启才联网，失败静默），设置页「关于」节可手动检查、开关「启动时自动检查更新」、展示新版本与更新说明并跳转 release 页；发现新版 App 内弹 toast 可直达。配置存 `app.updates.autoCheck`（默认开）。
 
 ## 第三梯队：体验升级
 

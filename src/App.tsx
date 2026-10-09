@@ -30,6 +30,8 @@ import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
 import { setupSystemIntegration } from "./core/systemIntegration";
+import { initUpdater, openReleasePage, updateResultAtom } from "./core/updater";
+import { useAtomValue } from "jotai";
 
 import HomePage from "./pages/home";
 import NeteaseDailyPage from "./pages/neteaseDaily";
@@ -222,7 +224,30 @@ export default function App() {
         setupDesktopLyrics();
         // 托盘 / 全局快捷键 / 任务栏缩略图按钮：图标与状态在这边供，命令回这边执行
         setupSystemIntegration();
+        // 检查更新：读一次状态并按设置自动查（是否开启见设置页「关于」节）
+        void initUpdater();
     }, []);
+
+    // 启动检查发现新版本：弹一条 toast 引去 GitHub release 页（结果不落 localStorage，每次启动都提醒）
+    const updateResult = useAtomValue(updateResultAtom);
+    const lastNotifiedRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!updateResult?.updateAvailable || !updateResult.url) {
+            return;
+        }
+        // 同一个版本只在本次会话提醒一次（设置页手动检查改状态时会再进这里）
+        if (lastNotifiedRef.current === updateResult.url) {
+            return;
+        }
+        lastNotifiedRef.current = updateResult.url;
+        showToast(
+            `发现新版本 ${updateResult.latestVersion}（当前 v${updateResult.currentVersion}），点击前往下载`,
+            {
+                action: { text: "查看", onClick: () => openReleasePage(updateResult.url!) },
+                duration: 8000,
+            },
+        );
+    }, [updateResult?.updateAvailable, updateResult?.url, updateResult?.latestVersion, updateResult?.currentVersion]);
 
     // 播放失败时把原因说出来：能降级音质自救的本曲会接着重试，救不了才停住或跳下一首
     useEffect(() => {

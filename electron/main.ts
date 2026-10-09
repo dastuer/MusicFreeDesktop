@@ -19,6 +19,7 @@ import lyricsWindow from "./services/lyricsWindow";
 import neteaseService from "./services/neteaseService";
 import localLyrics from "./services/localLyrics";
 import systemIntegration from "./services/systemIntegration";
+import * as updater from "./services/updater";
 import { isSupported as isAutoLaunchSupported, isEnabled as isAutoLaunchEnabled, setEnabled as setAutoLaunchEnabled } from "./services/autoLaunch";
 
 const isMac = process.platform === "darwin";
@@ -217,6 +218,8 @@ app.whenReady().then(() => {
     });
     // 网易云账号（扫码登录）与每日推荐
     neteaseService.setup();
+    // 检查更新（GitHub Releases 渠道）
+    updater.setup(configStore);
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
@@ -649,6 +652,19 @@ ipcMain.handle("app:setAutoLaunch", (_e, enabled: boolean) => ({
     supported: isAutoLaunchSupported(),
     enabled: setAutoLaunchEnabled(!!enabled),
 }));
+
+/** ---------- 检查更新（GitHub Releases 渠道，见 services/updater.ts） ---------- */
+ipcMain.handle("app:updates:getStatus", () => updater.getStatus());
+ipcMain.handle("app:updates:startupCheck", () => updater.startupCheck());
+// 手动检查：设置页「检查更新」按钮，网络失败把原因带给调用方展示
+ipcMain.handle("app:updates:checkNow", async () => {
+    const result = await updater.checkNow();
+    return { success: !result.error, ...result };
+});
+ipcMain.handle("app:updates:setAutoCheck", (_e, enabled: boolean) =>
+    updater.setAutoCheck(!!enabled));
+ipcMain.handle("app:updates:openPage", (_e, url?: string) =>
+    updater.openReleasePage(url));
 
 // Windows 的 caption 按钮直接叠在标题栏上：底色不跟主题走会在右上角留一块白
 ipcMain.handle(
