@@ -1,6 +1,7 @@
-import { BrowserWindow, safeStorage } from "electron";
+import { BrowserWindow } from "electron";
 import https from "https";
 import configStore from "./configStore";
+import * as cookieCipher from "./cookieCipher";
 
 /**
  * 网易云账号（扫码登录）与个性化推荐接口
@@ -9,8 +10,10 @@ import configStore from "./configStore";
  * 自己完成登录，`MUSIC_U` cookie 落进该 session，监听 cookie 变化拿到值后自动关窗。
  * 不自己实现 weapi 加密、不碰风控逻辑。
  *
- * cookie 保存：safeStorage（macOS 钥匙串 / Windows DPAPI）加密后存 configStore；
- * 加密不可用时退回明文。属登录凭据，刻意不进备份（与 WebDAV 密码同一约定）。
+ * cookie 保存：cookieCipher（AES-256-GCM，密钥在 configStore，绑机器）加密后存
+ * configStore；加密不可用时退回明文。刻意不用 Electron safeStorage——它的密钥
+ * 存 macOS 钥匙串，ad-hoc 签名每次更新后 CDHash 变化会反复弹「访问钥匙串」授权框。
+ * 属登录凭据，刻意不进备份（与 WebDAV 密码同一约定）。
  *
  * 推荐接口走 music.163.com 的 plain api（GET/POST 表单），带 `Cookie: MUSIC_U=`
  * 即为账号个性化视角；未登录/过期时接口返回 code 301，这里转成 NeedLoginError。
@@ -41,16 +44,18 @@ function readCookie(): string | null {
         return cachedCookie;
     }
     const stored = configStore.get(COOKIE_KEY) as
-        | { enc?: boolean; data?: string; plain?: string }
+        | { enc?: boolean; data?: string; plain?: string; cipher?: string }
         | string
         | undefined;
     try {
         if (stored && typeof stored === "object") {
-            if (stored.enc && stored.data) {
-                // 加密不可用（钥匙串拒绝访问等）时解不开，按未登录处理，不丢密文
-                cachedCookie = safeStorage.isEncryptionAvailable()
-                    ? safeStorage.decryptString(Buffer.from(stored.data, "base64"))
-                    : null;
+            if (stored.cipher) {
+                // 当前格式：cookieCipher 密文。解不开（换机器/存储重置）按未登录处理
+                cachedCookie = cookieCipher.decrypt(stored.cipher);
+            } else if (stored.enc && stored.data) {
+                // 旧格式：safeStorage 密文。2026-10 起已弃用（钥匙串弹窗问题），
+                // 不再尝试解（密钥在钥匙串里，解就要弹窗），按未登录让用户重扫
+                cachedCookie = null;
             } else {
                 cachedCookie = stored.plain ?? null;
             }
@@ -67,11 +72,12 @@ function readCookie(): string | null {
 }
 
 function saveCookie(value: string) {
-    let payload: { enc: boolean; data?: string; plain?: string };
-    if (safeStorage.isEncryptionAvailable()) {
-        payload = { enc: true, data: safeStorage.encryptString(value).toString("base64") };
+    let payload: { cipher?: string; plain?: string };
+    const encrypted = cookieCipher.encrypt(value);
+    if (encrypted) {
+        payload = { cipher: encrypted };
     } else {
-        payload = { enc: false, plain: value };
+        payload = { plain: value };
     }
     configStore.set(COOKIE_KEY, payload);
     cachedCookie = value;
