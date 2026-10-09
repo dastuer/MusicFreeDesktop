@@ -218,8 +218,14 @@ app.whenReady().then(() => {
     });
     // 网易云账号（扫码登录）与每日推荐
     neteaseService.setup();
-    // 检查更新（GitHub Releases 渠道）
-    updater.setup(configStore);
+    // 检查更新（mac: Sparkle 2 应用内更新；其他平台: GitHub Releases 检查）
+    updater.setup(configStore, {
+        onSparkleStateChange: (state) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("updates:event", state);
+            }
+        },
+    });
     pluginHost.setup(
         path.join(app.getPath("userData"), "plugins"),
         configStore,
@@ -665,6 +671,10 @@ ipcMain.handle("app:updates:setAutoCheck", (_e, enabled: boolean) =>
     updater.setAutoCheck(!!enabled));
 ipcMain.handle("app:updates:openPage", (_e, url?: string) =>
     updater.openReleasePage(url));
+// Sparkle 引擎实时状态（下载进度/可安装），渲染层主动拉取用
+ipcMain.handle("app:updates:getSparkleState", () => updater.getSparkleState());
+// 应用内安装已下载的更新（仅 mac Sparkle 可用；返回 false 时渲染层退跳下载页）
+ipcMain.handle("app:updates:installNow", () => updater.installNow());
 
 // Windows 的 caption 按钮直接叠在标题栏上：底色不跟主题走会在右上角留一块白
 ipcMain.handle(

@@ -12,6 +12,7 @@ import {
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
 import {
+    installUpdateNow,
     openReleasePage,
     setAutoCheck,
     useUpdateStatus,
@@ -89,8 +90,8 @@ export default function SettingsPage() {
     const [closeBehavior, setCloseBehavior] = useState<"minimize" | "quit">("minimize");
     const [trayVisible, setTrayVisible] = useState(true);
     const [globalShortcuts, setGlobalShortcuts] = useState(false);
-    // 检查更新（GitHub Releases）：结果与 App 启动检查共享同一份 jotai 状态
-    const { result: updateResult, autoCheck, checking, check: checkUpdate } = useUpdateStatus();
+    // 检查更新（GitHub Releases / macOS Sparkle）：结果与 App 启动检查共享同一份 jotai 状态
+    const { result: updateResult, autoCheck, checking, sparkle, check: checkUpdate } = useUpdateStatus();
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
         ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
@@ -357,16 +358,20 @@ export default function SettingsPage() {
                     <div style={{ minWidth: 0 }}>
                         <div className="settings-item-label">检查更新</div>
                         <div className="settings-item-desc">
-                            {updateDesc(updateResult, appInfo?.version)}
+                            {updateDesc(updateResult, sparkle, appInfo?.version)}
                         </div>
                     </div>
                     <button
                         className="btn-ghost"
                         style={{ flexShrink: 0 }}
-                        disabled={checking}
+                        disabled={checking || sparkle.stage === "checking" || sparkle.stage === "downloading"}
                         onClick={async () => {
-                            // 用返回值而不是闭包里的 updateResult：等 await 回来再提示，数据才是这次的
+                            // Sparkle 引擎路径返回 null（结果经状态推送更新到 sparkle stage）；
+                            // GitHub API 路径返回本次结果，直接提示
                             const res = await checkUpdate();
+                            if (!res) {
+                                return;
+                            }
                             if (res.error) {
                                 showToast(`检查更新失败：${res.error}`);
                             } else if (res.updateAvailable) {
@@ -376,19 +381,88 @@ export default function SettingsPage() {
                             }
                         }}
                     >
-                        {checking ? "检查中…" : "检查更新"}
+                        {checking || sparkle.stage === "checking" || sparkle.stage === "downloading"
+                            ? "检查中…"
+                            : "检查更新"}
                     </button>
                 </div>
+                {sparkle.stage === "downloading" && (
+                    <div className="settings-item">
+                        <div style={{ minWidth: 0 }}>
+                            <div className="settings-item-label">
+                                正在下载 v{sparkle.version ?? "新版本"}
+                            </div>
+                            <div className="settings-item-desc">
+                                下载完成后可一键安装（应用会自动重启进入新版本）
+                            </div>
+                            <div className="update-progress-track">
+                                <div
+                                    className="update-progress-bar"
+                                    style={{ width: `${Math.min(100, Math.max(0, sparkle.progress ?? 0))}%` }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {sparkle.stage === "downloaded" && (
+                    <div className="settings-item">
+                        <div>
+                            <div className="settings-item-label">
+                                v{sparkle.version ?? "新版本"} 已就绪
+                            </div>
+                            <div className="settings-item-desc">
+                                安装将退出应用并自动重启进入新版本，播放进度不会丢失
+                            </div>
+                        </div>
+                        <button
+                            className="btn-primary"
+                            style={{ flexShrink: 0 }}
+                            onClick={async () => {
+                                const ok = await installUpdateNow();
+                                if (!ok) {
+                                    openReleasePage();
+                                }
+                            }}
+                        >
+                            重启并安装
+                        </button>
+                    </div>
+                )}
+                {sparkle.stage === "error" && sparkle.error && (
+                    <div className="settings-item">
+                        <div>
+                            <div className="settings-item-label">自动更新出错</div>
+                            <div
+                                className="settings-item-desc"
+                                style={{ wordBreak: "break-all", whiteSpace: "normal" }}
+                            >
+                                {sparkle.error}。可前往
+                                <button
+                                    className="btn-ghost"
+                                    style={{ margin: "0 4px" }}
+                                    onClick={() => openReleasePage()}
+                                >
+                                    下载页
+                                </button>
+                                手动获取新版本
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <ToggleRow
                     label="启动时自动检查更新"
-                    desc="联网查询 GitHub Releases 上的最新版本，有更新时在界面提醒；不自动下载安装"
+                    desc={
+                        sparkle.engine === "sparkle"
+                            ? "启动时联网检查新版本；macOS 支持在应用内直接下载并安装，其他平台跳转下载页"
+                            : "联网查询 GitHub Releases 上的最新版本，有更新时在界面提醒；不自动下载安装"
+                    }
                     value={autoCheck}
                     onChange={(next) => {
                         setAutoCheck(next);
                         showToast(next ? "已开启自动检查更新" : "已关闭自动检查更新");
                     }}
                 />
-                {updateResult?.updateAvailable && (
+                {updateResult?.updateAvailable && sparkle.stage !== "downloaded" && (
                     <div className="settings-item">
                         <div style={{ minWidth: 0 }}>
                             <div className="settings-item-label">
@@ -426,11 +500,26 @@ export default function SettingsPage() {
     );
 }
 
-/** 「检查更新」一行 desc：按检查状态给出不同文案 */
+/** 「检查更新」一行 desc：按检查状态给出不同文案（Sparkle 引擎优先展示引擎阶段） */
 function updateDesc(
     result: ReturnType<typeof useUpdateStatus>["result"],
+    sparkle: ReturnType<typeof useUpdateStatus>["sparkle"],
     fallbackVersion?: string,
 ) {
+    if (sparkle.engine === "sparkle") {
+        switch (sparkle.stage) {
+            case "available":
+                return `发现新版本 v${sparkle.version ?? ""}，正在自动下载`;
+            case "downloading":
+                return `正在下载 v${sparkle.version ?? "新版本"}（${Math.round(sparkle.progress ?? 0)}%）`;
+            case "downloaded":
+                return `v${sparkle.version ?? "新版本"} 已下载完成，可安装`;
+            case "error":
+                return `自动更新出错：${sparkle.error ?? "未知错误"}`;
+            default:
+                break;
+        }
+    }
     if (!result) {
         return `当前 v${fallbackVersion ?? "?"} · 更新渠道：GitHub Releases`;
     }

@@ -54,6 +54,8 @@ const allowedChannels = [
     "app:updates:checkNow",
     "app:updates:setAutoCheck",
     "app:updates:openPage",
+    "app:updates:getSparkleState",
+    "app:updates:installNow",
     "localLyrics:read",
     "localLyrics:applyRemote",
     "system:setShortcutsEnabled",
@@ -101,6 +103,10 @@ contextBridge.exposeInMainWorld("mfp", {
     },
     onDownloadEvent: (callback: (data: any) => void) => {
         ipcRenderer.on("download:event", (_e, data) => callback(data));
+    },
+    /** 主窗口：Sparkle 更新引擎状态推送（下载进度/已就绪可安装，见 services/updater.ts） */
+    onUpdateEvent: (callback: (state: any) => void) => {
+        ipcRenderer.on("updates:event", (_e, state) => callback(state));
     },
     /** 启动时的上次播放会话（主进程侧那份，见 services/sessionStore.ts） */
     initialSession,

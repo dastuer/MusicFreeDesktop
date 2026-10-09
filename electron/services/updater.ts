@@ -1,29 +1,38 @@
 import axios from "axios";
 import { app, shell } from "electron";
 import { compare } from "compare-versions";
+import { createRequire } from "node:module";
+import path from "node:path";
+import type { SparkleBridge } from "electron-sparkle-updater";
 import configStoreType from "./configStore";
 
 /** configStore 默认导出的是实例，这里借实例拿类型 */
 type ConfigStore = typeof configStoreType;
 
 /**
- * 检查更新（渠道：GitHub Releases）
+ * 检查更新与macOS应用内更新
  *
- *  - 只查不装：拉 latest release 与当前版本比一比，有新版就把「去哪下、更新了什么」
- *    告诉用户。应用以免签 dmg / 便携包分发，没有统一的静默升级通道，
- *    自动下载装一半还得用户手动确认，不如只提醒。
+ *  - macOS（已打包）：接 Sparkle 2（经 electron-sparkle-updater 的 N-API 桥）。
+ *    Sparkle 接受 ad-hoc 签名，绕开 Squirrel.Mac 的 Developer ID 签名硬性要求。
+ *    检查/下载/安装全走 Sparkle，应用内直接「重启并安装」，appcast 托管在
+ *    GitHub Releases（latest/download/appcast.xml）。
+ *  - 其他平台 / 开发模式 / 桥加载失败：退回 GitHub Releases API 检查——
+ *    只查不装，提醒用户去 release 页手动下载（Windows 免签安装包与
+ *    portable 也没有静默升级通道，portable 单文件无固定安装位置）。
  *  - 自动检查由渲染进程挂载时触发一次（app:updates:startupCheck），
- *    仅当「已打包 + 用户开启 + 本会话没查过」才真正联网；失败静默，不打扰启动。
- *    开发模式不自动查（天天启动都查一次没有意义），手动检查不受限制，便于联调。
- *  - 手动检查（设置页 → 关于）不做上述限制，结果原样返回（含失败原因）。
+ *    仅当「已打包 + 用户开启 + 本会话没查过」才联网；失败静默，不打扰启动。
  *  - 配置只有一项：app.updates.autoCheck（默认开）。
- *  - 最近一次结果缓存在内存（lastResult）：设置页打开时直接展示，不用为了显示再查一遍。
  */
 
 const RELEASES_API_URL =
     "https://api.github.com/repos/dastuer/MusicFreeDesktop/releases/latest";
 const RELEASES_PAGE_URL =
     "https://github.com/dastuer/MusicFreeDesktop/releases/latest";
+/** Sparkle appcast：每次 release 随资产上传（generate-appcast 产物） */
+const APPCAST_URL =
+    "https://github.com/dastuer/MusicFreeDesktop/releases/latest/download/appcast.xml";
+/** EdDSA 公钥（私钥在发布者本机钥匙串，经 sign_update 签 appcast） */
+const SPARKLE_PUBLIC_ED_KEY = "38LHF3fdC4xjvz5+LhEHCgKSTvZJKShpMDKRWJkKlTk=";
 
 const CHECK_TIMEOUT = 10_000;
 /** release 说明截断：够设置页展示更新内容，又不至于把 IPC 负载撑大 */
@@ -45,18 +54,172 @@ export interface IUpdateCheckResult {
     error?: string;
 }
 
+/**
+ * Sparkle 引擎的实时状态（下载进度等），经 updates:event 推给渲染层。
+ * 引擎不可用时恒为 engine:"none"，渲染层只展示 fallback 检查结果。
+ */
+export interface ISparkleState {
+    /** none = 引擎不可用（非 mac/未打包/桥加载失败） */
+    engine: "none" | "sparkle";
+    stage: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
+    version: string | null;
+    /** 下载进度 0-100（downloading 阶段） */
+    progress: number | null;
+    error: string | null;
+}
+
 export interface IUpdateStatus {
     currentVersion: string;
     autoCheck: boolean;
     lastResult: IUpdateCheckResult | null;
+    sparkle: ISparkleState;
 }
 
 let configStoreRef: ConfigStore | null = null;
 let lastResult: IUpdateCheckResult | null = null;
 let startupChecked = false;
 
-export function setup(configStore: ConfigStore) {
+/** ---------- Sparkle 桥（macOS 应用内更新引擎） ---------- */
+
+/**
+ * addon 加载路径。不走包自带的 loadSparkleBridgeForApp：它的 defaultPackageRoot
+ * 依赖 import.meta.url，被 esbuild 的 CJS bundle 打成空对象后 fileURLToPath(undefined)
+ * 直接抛错（且求值发生在 addonPath 覆盖之前）；也不能用子路径 resolve——
+ * 该包 exports 只开放 "."/"builder"/"fallback"，native 子路径被封。
+ * 按它的布局约定手工拼：打包后在 app.asar.unpacked（asarUnpack 产物，
+ * require 时 Electron 自动重定向 asar 内同名路径，这里直接给 unpacked 真实路径）；
+ * 开发模式直接在 node_modules 里找。
+ */
+function resolveSparkleAddonPath(): string | null {
+    const relative = "native/build/Release/sparkle_bridge.node";
+    if (app.isPackaged) {
+        return path.join(
+            process.resourcesPath,
+            "app.asar.unpacked",
+            "node_modules",
+            "electron-sparkle-updater",
+            relative,
+        );
+    }
+    try {
+        const pkgJson = createRequire(__filename).resolve(
+            "electron-sparkle-updater/package.json",
+        );
+        return pkgJson.replace(/package\.json$/, relative);
+    } catch {
+        return null;
+    }
+}
+
+let sparkleBridge: SparkleBridge | null = null;
+
+const sparkleState: ISparkleState = {
+    engine: "none",
+    stage: "idle",
+    version: null,
+    progress: null,
+    error: null,
+};
+
+/** 状态变化回调（main.ts 注入：往主窗口广播 updates:event） */
+let onSparkleStateChange: ((state: ISparkleState) => void) | null = null;
+
+function setSparkleState(patch: Partial<ISparkleState>) {
+    Object.assign(sparkleState, patch);
+    onSparkleStateChange?.({ ...sparkleState });
+}
+
+async function initSparkle() {
+    if (process.platform !== "darwin" || !app.isPackaged) {
+        return;
+    }
+    try {
+        const addonPath = resolveSparkleAddonPath();
+        if (!addonPath) {
+            console.warn("[updater] Sparkle addon 未找到，退回 GitHub API 检查");
+            return;
+        }
+        // electron-sparkle-updater 的 .node addon（N-API，包导出表与 SparkleBridge 一致）
+        const bridge = createRequire(__filename)(addonPath) as SparkleBridge;
+        if (
+            typeof bridge.init !== "function" ||
+            typeof bridge.checkForUpdates !== "function" ||
+            typeof bridge.installUpdateNow !== "function" ||
+            typeof bridge.setEventHandler !== "function"
+        ) {
+            console.warn("[updater] Sparkle addon 导出异常，退回 GitHub API 检查");
+            return;
+        }
+        if (!bridge.init({
+            appcastUrl: APPCAST_URL,
+            publicEdKey: SPARKLE_PUBLIC_ED_KEY,
+        })) {
+            console.warn("[updater] Sparkle 初始化失败，退回 GitHub API 检查");
+            return;
+        }
+        bridge.setEventHandler((event: any) => {
+            switch (event?.type) {
+                case "checking":
+                    setSparkleState({ stage: "checking", error: null });
+                    break;
+                case "update-available":
+                    setSparkleState({
+                        stage: "available",
+                        version: event.version ?? sparkleState.version,
+                        error: null,
+                    });
+                    break;
+                case "download-progress":
+                    setSparkleState({
+                        stage: "downloading",
+                        progress:
+                            typeof event.progress === "number" ? event.progress : null,
+                    });
+                    break;
+                case "update-downloaded":
+                    setSparkleState({
+                        stage: "downloaded",
+                        progress: 100,
+                        version: event.version ?? sparkleState.version,
+                    });
+                    break;
+                case "update-not-available":
+                    setSparkleState({ stage: "idle", version: null, error: null });
+                    break;
+                case "error":
+                    setSparkleState({
+                        stage: "error",
+                        error: event.message ?? String(event ?? "未知错误"),
+                    });
+                    break;
+                default:
+                    break;
+            }
+        });
+        sparkleBridge = bridge;
+        setSparkleState({ engine: "sparkle" });
+        console.log("[updater] Sparkle 更新引擎已就绪");
+    } catch (e: any) {
+        console.warn("[updater] Sparkle 桥加载异常，退回 GitHub API 检查:", e?.message);
+    }
+}
+
+/** 检查是否由 Sparkle 引擎执行（mac 已打包且桥就绪） */
+export function isSparkleActive(): boolean {
+    return sparkleBridge != null;
+}
+
+export function getSparkleState(): ISparkleState {
+    return { ...sparkleState };
+}
+
+export function setup(
+    configStore: ConfigStore,
+    hooks?: { onSparkleStateChange?: (state: ISparkleState) => void },
+) {
     configStoreRef = configStore;
+    onSparkleStateChange = hooks?.onSparkleStateChange ?? null;
+    void initSparkle();
 }
 
 export function getAutoCheck(): boolean {
@@ -73,6 +236,7 @@ export function getStatus(): IUpdateStatus {
         currentVersion: app.getVersion(),
         autoCheck: getAutoCheck(),
         lastResult,
+        sparkle: { ...sparkleState },
     };
 }
 
@@ -134,6 +298,22 @@ async function fetchAndCompare(): Promise<IUpdateCheckResult> {
 
 /** 手动检查：任何环境都执行，并作为最新结果缓存 */
 export async function checkNow(): Promise<IUpdateCheckResult> {
+    // Sparkle 就绪时检查由它发起，进度与结果经 updates:event 推送；
+    // GitHub API 的结果只作展示兜底（Sparkle 的版本判断以 appcast 为准）
+    if (sparkleBridge) {
+        setSparkleState({ stage: "checking", error: null });
+        sparkleBridge.checkForUpdates();
+        return lastResult ?? {
+            updateAvailable: false,
+            currentVersion: app.getVersion(),
+            latestVersion: null,
+            name: null,
+            notes: null,
+            url: null,
+            publishedAt: null,
+            checkedAt: Date.now(),
+        };
+    }
     lastResult = await fetchAndCompare();
     return lastResult;
 }
@@ -147,6 +327,12 @@ export async function startupCheck(): Promise<IUpdateCheckResult | null> {
         return null;
     }
     startupChecked = true;
+    // Sparkle 引擎就绪时走它（结果经事件推送），不落 lastResult
+    if (sparkleBridge) {
+        setSparkleState({ stage: "checking", error: null });
+        sparkleBridge.checkForUpdates();
+        return null;
+    }
     try {
         const result = await fetchAndCompare();
         if (result.error) {
@@ -157,6 +343,15 @@ export async function startupCheck(): Promise<IUpdateCheckResult | null> {
     } catch {
         return null;
     }
+}
+
+/** 应用内安装已下载的更新（Sparkle：退出并安装新版后自动重启） */
+export function installNow(): boolean {
+    if (!sparkleBridge) {
+        return false;
+    }
+    sparkleBridge.installUpdateNow();
+    return true;
 }
 
 /** 打开 release 页面（默认跳最新 release）。url 来自渲染进程，只放行 GitHub 链接 */

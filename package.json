@@ -1,6 +1,6 @@
 {
   "name": "musicfree-desktop",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "author": "huah",
   "description": "MusicFree 桌面版（macOS / Windows）- 参考网易云桌面端交互重构",
@@ -16,69 +16,13 @@
     "debug:main": "npm run build:renderer && npm run build:main:debug && electron --inspect=9229 .",
     "build": "npm run build:renderer && npm run build:main",
     "start": "electron .",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win --publish=never --config.directories.output=release-win",
-    "dist:dir": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --config electron-builder.config.js",
+    "dist:mac": "npm run build && electron-builder --mac --config electron-builder.config.js",
+    "dist:win": "npm run build && electron-builder --win --publish=never --config.directories.output=release-win --config electron-builder.config.js",
+    "dist:dir": "npm run build && electron-builder --dir --config electron-builder.config.js",
+    "sparkle:rebuild": "electron-sparkle-updater rebuild",
     "reinstall": "bash scripts/reinstall.sh",
     "reinstall:dmg": "bash scripts/reinstall.sh --with-dmg"
-  },
-  "build": {
-    "appId": "com.huah.musicfree-desktop",
-    "productName": "MusicFreeDesktop",
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist-electron/**/*",
-      "dist-renderer/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "icon": "build/icon.icns",
-      "category": "public.app-category.music",
-      "identity": null,
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ]
-    },
-    "win": {
-      "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "MusicFree",
-      "artifactName": "MusicFreeDesktop-Setup-${version}.exe",
-      "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true
-    },
-    "portable": {
-      "artifactName": "${productName}-Portable-${version}.${ext}"
-    }
   },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
@@ -104,6 +48,7 @@
     "compare-versions": "^6.1.1",
     "crypto-js": "^4.2.0",
     "dayjs": "^1.11.13",
+    "electron-sparkle-updater": "^0.5.3",
     "eventemitter3": "^5.0.1",
     "he": "^1.2.0",
     "iconv-lite": "^0.6.3",

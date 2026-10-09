@@ -3,12 +3,14 @@ import { useCallback } from "react";
 import { ipcInvoke } from "./ipc";
 
 /**
- * 检查更新（GitHub Releases 渠道，主进程实现在 electron/services/updater.ts）
+ * 检查更新（主进程实现在 electron/services/updater.ts）
  *
- *  - 版本比较与 release 拉取都在主进程：渲染层只拿结果做展示；
- *  - 一次检查的结果全应用共享（updateResultAtom），App 挂载时自动查一次，
- *    设置页「关于」节直接复用这份数据，手动「检查更新」两边触发的是同一个请求；
- *  - 自动检查只在启动时查一次（main 侧有会话内去重），失败静默；手动检查展示失败原因。
+ *  - macOS（已打包）：Sparkle 2 引擎——检查/下载/安装全在主进程完成，
+ *    实时状态经 updates:event 推来（sparkleAtom），下载完点「重启并安装」即可；
+ *  - 其他平台 / 开发模式：GitHub Releases API 检查（updateResultAtom），
+ *    提醒后跳 release 页手动下载；
+ *  - 两份数据并存：sparkleAtom 是引擎实时状态，updateResult 是
+ *    fallback 检查/上次结果，设置页同时展示两边的有效信息。
  */
 
 export interface IUpdateCheckResult {
@@ -27,28 +29,59 @@ export interface IUpdateCheckResult {
     error?: string;
 }
 
+/** 与 electron/services/updater.ts 的 ISparkleState 对齐 */
+export interface ISparkleState {
+    engine: "none" | "sparkle";
+    stage: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
+    version: string | null;
+    progress: number | null;
+    error: string | null;
+}
+
 interface IUpdateStatus {
     currentVersion: string;
     autoCheck: boolean;
     lastResult: IUpdateCheckResult | null;
+    sparkle: ISparkleState;
 }
 
 const store = getDefaultStore();
 export const updateResultAtom = atom<IUpdateCheckResult | null>(null);
 export const autoCheckAtom = atom<boolean>(true);
+export const sparkleAtom = atom<ISparkleState>({
+    engine: "none",
+    stage: "idle",
+    version: null,
+    progress: null,
+    error: null,
+});
 /** 手动检查进行中（按钮转圈/防连点；启动自动检查不占这个标志） */
 export const checkingAtom = atom<boolean>(false);
 
-/** 应用挂载时调用：拿一次状态、按设置自动查一次（结果写进共享 atom） */
+let eventSubscribed = false;
+
+/** 订阅主进程 Sparkle 状态推送（幂等，App 挂载时调用一次） */
+function subscribeUpdateEvents() {
+    if (eventSubscribed || !window.mfp.onUpdateEvent) {
+        return;
+    }
+    eventSubscribed = true;
+    window.mfp.onUpdateEvent((state) => store.set(sparkleAtom, state));
+}
+
+/** 应用挂载时调用：读状态、订事件推送、按设置自动查一次 */
 export async function initUpdater() {
+    subscribeUpdateEvents();
     try {
         const status = await ipcInvoke<IUpdateStatus>("app:updates:getStatus");
-        if (!status) {
-            return;
-        }
-        store.set(autoCheckAtom, status.autoCheck !== false);
-        if (status.lastResult) {
-            store.set(updateResultAtom, status.lastResult);
+        if (status) {
+            store.set(autoCheckAtom, status.autoCheck !== false);
+            if (status.lastResult) {
+                store.set(updateResultAtom, status.lastResult);
+            }
+            if (status.sparkle) {
+                store.set(sparkleAtom, status.sparkle);
+            }
         }
     } catch {
         // 主进程没起来（极端情况）：更新功能静默不可用
@@ -69,11 +102,18 @@ export async function initUpdater() {
 
 /**
  * 手动检查：设置页「检查更新」按钮。
- * 返回本次检查的完整结果（失败时 error 字段有值），调用方据此提示
+ * mac Sparkle 就绪时结果经 sparkleAtom 事件流回来（返回 null 表示走的是引擎路径）；
+ * 否则走 GitHub API，返回本次检查的完整结果（失败时 error 字段有值）
  */
-export async function checkForUpdate(): Promise<IUpdateCheckResult> {
+export async function checkForUpdate(): Promise<IUpdateCheckResult | null> {
     if (store.get(checkingAtom)) {
-        return store.get(updateResultAtom) ?? emptyResult("正在检查中，请稍候");
+        return store.get(updateResultAtom);
+    }
+    const sparkle = store.get(sparkleAtom);
+    if (sparkle.engine === "sparkle") {
+        // 引擎路径：检查结果异步经 onUpdateEvent 推来，这里不占 checking
+        await ipcInvoke("app:updates:checkNow");
+        return null;
     }
     store.set(checkingAtom, true);
     try {
@@ -112,16 +152,25 @@ export async function setAutoCheck(enabled: boolean) {
     await ipcInvoke("app:updates:setAutoCheck", enabled);
 }
 
+/**
+ * 安装已下载的更新（mac Sparkle 专用）：应用退出并安装新版后自动重启。
+ * 返回 false 表示引擎不可用，调用方退跳 release 下载页
+ */
+export async function installUpdateNow(): Promise<boolean> {
+    return (await ipcInvoke<boolean>("app:updates:installNow")) === true;
+}
+
 /** 打开 GitHub release 页面 */
 export function openReleasePage(url?: string) {
     void ipcInvoke("app:updates:openPage", url);
 }
 
-/** 供组件读取共享更新状态；check() 返回本次检查结果（含失败原因） */
+/** 供组件读取共享更新状态；check() 返回本次检查结果（引擎路径返回 null） */
 export function useUpdateStatus() {
     const result = useAtomValue(updateResultAtom);
     const autoCheck = useAtomValue(autoCheckAtom);
     const checking = useAtomValue(checkingAtom);
+    const sparkle = useAtomValue(sparkleAtom);
     const check = useCallback(() => checkForUpdate(), []);
-    return { result, autoCheck, checking, check };
+    return { result, autoCheck, checking, sparkle, check };
 }

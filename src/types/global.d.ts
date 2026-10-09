@@ -3,6 +3,14 @@ declare global {
         mfp: {
             invoke: (channel: string, ...args: any[]) => Promise<any>;
             onDownloadEvent: (callback: (data: any) => void) => void;
+            /** 主窗口：Sparkle 更新引擎状态推送（下载进度/已就绪可安装，见 core/updater.ts） */
+            onUpdateEvent: (callback: (state: {
+                engine: "none" | "sparkle";
+                stage: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
+                version: string | null;
+                progress: number | null;
+                error: string | null;
+            }) => void) => void;
             /** 启动时的上次播放会话（主进程 data/session.json，见 core/playProgress.ts） */
             initialSession: IPlaySessionSnapshot | null;
             /** 主进程退出前索要最新进度 */

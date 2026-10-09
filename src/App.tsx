@@ -30,7 +30,7 @@ import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
 import { setupSystemIntegration } from "./core/systemIntegration";
-import { initUpdater, openReleasePage, updateResultAtom } from "./core/updater";
+import { initUpdater, installUpdateNow, openReleasePage, sparkleAtom, updateResultAtom } from "./core/updater";
 import { useAtomValue } from "jotai";
 
 import HomePage from "./pages/home";
@@ -248,6 +248,28 @@ export default function App() {
             },
         );
     }, [updateResult?.updateAvailable, updateResult?.url, updateResult?.latestVersion, updateResult?.currentVersion]);
+
+    // macOS Sparkle 引擎：新版本下载完成弹「重启并安装」直达（fallback 平台没有这个阶段）
+    const sparkle = useAtomValue(sparkleAtom);
+    const installNotifiedRef = useRef(false);
+    useEffect(() => {
+        if (sparkle.stage !== "downloaded" || installNotifiedRef.current) {
+            return;
+        }
+        installNotifiedRef.current = true;
+        showToast(`新版本 v${sparkle.version ?? ""} 已下载完成，重启即可完成安装`, {
+            action: {
+                text: "重启安装",
+                onClick: async () => {
+                    const ok = await installUpdateNow();
+                    if (!ok) {
+                        openReleasePage();
+                    }
+                },
+            },
+            duration: 12000,
+        });
+    }, [sparkle.stage, sparkle.version]);
 
     // 播放失败时把原因说出来：能降级音质自救的本曲会接着重试，救不了才停住或跳下一首
     useEffect(() => {

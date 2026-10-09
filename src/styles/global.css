@@ -2453,6 +2453,22 @@ html[data-theme="dark"] .search-history-panel {
     opacity: 1;
 }
 
+/* ---------- 设置页：更新下载进度条 ---------- */
+.update-progress-track {
+    margin-top: 8px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--mask-bg, rgba(0, 0, 0, 0.08));
+    overflow: hidden;
+}
+
+.update-progress-bar {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--primary-color);
+    transition: width 0.4s ease;
+}
+
 /* ---------- 详情页头部 ---------- */
 .media-header {
     display: flex;
