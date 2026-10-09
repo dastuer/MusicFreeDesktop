@@ -21,6 +21,7 @@
     "dist:win": "npm run build && electron-builder --win --publish=never --config.directories.output=release-win --config electron-builder.config.js",
     "dist:dir": "npm run build && electron-builder --dir --config electron-builder.config.js",
     "sparkle:rebuild": "electron-sparkle-updater rebuild",
+    "release": "bash scripts/release.sh",
     "reinstall": "bash scripts/reinstall.sh",
     "reinstall:dmg": "bash scripts/reinstall.sh --with-dmg"
   },
