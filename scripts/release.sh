@@ -85,12 +85,18 @@ else
     echo "✗ 钥匙串取不到私钥（服务名 ${KEYCHAIN_SERVICE}）。先跑 generate_keys 生成"; exit 1
 fi
 
-# 工作区必须干净：发版产物要与 tag 严格对应
+# 工作区必须干净：发版产物要与 tag 严格对应。
+# 例外：脚本自己写回的 package.json 版本号（此处把该改动提交掉，让产物包含正确版本）
 if [ "${SKIP_BUILD}" = "0" ] && [ "${DRY_RUN}" = "0" ]; then
-    if ! git -C "${PROJECT_DIR}" diff --quiet || ! git -C "${PROJECT_DIR}" diff --cached --quiet; then
-        echo "✗ 工作区有未提交改动，先 commit（package.json 版本号改动除外——上面已代写）"
+    if ! git -C "${PROJECT_DIR}" diff --quiet -- ':!package.json' \
+        || ! git -C "${PROJECT_DIR}" diff --cached --quiet -- ':!package.json'; then
+        echo "✗ 工作区有未提交改动（package.json 除外），先 commit"
         git -C "${PROJECT_DIR}" status --short
         exit 1
+    fi
+    if ! git -C "${PROJECT_DIR}" diff --quiet -- package.json; then
+        run git -C "${PROJECT_DIR}" add package.json
+        run git -C "${PROJECT_DIR}" commit -m "版本号 ${VERSION}"
     fi
 fi
 
