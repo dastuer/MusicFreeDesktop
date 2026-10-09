@@ -12,10 +12,14 @@ import {
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
 import {
+    getSparkleError,
+    getSparkleStage,
+    getSparkleVersion,
     installUpdateNow,
     openReleasePage,
     setAutoCheck,
     useUpdateStatus,
+    waitForSparkleSettled,
 } from "@/core/updater";
 import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
@@ -366,10 +370,21 @@ export default function SettingsPage() {
                         style={{ flexShrink: 0 }}
                         disabled={checking || sparkle.stage === "checking" || sparkle.stage === "downloading"}
                         onClick={async () => {
-                            // Sparkle 引擎路径返回 null（结果经状态推送更新到 sparkle stage）；
-                            // GitHub API 路径返回本次结果，直接提示
+                            // Sparkle 引擎路径返回 null，结果经状态推送回到 sparkle stage，这里等一拍再按最终 stage 提示
                             const res = await checkUpdate();
                             if (!res) {
+                                await waitForSparkleSettled();
+                                const stage = getSparkleStage();
+                                if (stage === "idle" || stage === "available") {
+                                    showToast(
+                                        stage === "available"
+                                            ? `发现新版本 v${getSparkleVersion()}，开始下载`
+                                            : "当前已是最新版本",
+                                    );
+                                } else if (stage === "error") {
+                                    showToast(`检查更新失败：${getSparkleError() ?? "未知错误"}`);
+                                }
+                                // downloading / downloaded 有自己的常驻 UI（进度条 / 重启安装行），不用 toast
                                 return;
                             }
                             if (res.error) {

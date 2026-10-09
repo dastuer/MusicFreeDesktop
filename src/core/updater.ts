@@ -160,6 +160,30 @@ export async function installUpdateNow(): Promise<boolean> {
     return (await ipcInvoke<boolean>("app:updates:installNow")) === true;
 }
 
+/** 等待 Sparkle 状态离开 checking（检查完成/出错/开始下载），最长 5s 兜底 */
+export async function waitForSparkleSettled(): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        if (store.get(sparkleAtom).stage !== "checking") {
+            return;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+    }
+}
+
+/** 取 Sparkle 当前 stage（waitForSparkleSettled 之后用） */
+export function getSparkleStage(): ISparkleState["stage"] {
+    return store.get(sparkleAtom).stage;
+}
+
+export function getSparkleVersion(): string | null {
+    return store.get(sparkleAtom).version;
+}
+
+export function getSparkleError(): string | null {
+    return store.get(sparkleAtom).error;
+}
+
 /** 打开 GitHub release 页面 */
 export function openReleasePage(url?: string) {
     void ipcInvoke("app:updates:openPage", url);
