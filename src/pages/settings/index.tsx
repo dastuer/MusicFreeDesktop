@@ -12,14 +12,13 @@ import {
 import { ipcInvoke } from "@/core/ipc";
 import { showToast } from "@/components/base/Toast";
 import {
-    getSparkleError,
-    getSparkleStage,
-    getSparkleVersion,
+    checkAndAskToUpdate,
     installUpdateNow,
     openReleasePage,
+    reaskUpdate,
     setAutoCheck,
+    setDownloadDialogVisible,
     useUpdateStatus,
-    waitForSparkleSettled,
 } from "@/core/updater";
 import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
@@ -95,7 +94,7 @@ export default function SettingsPage() {
     const [trayVisible, setTrayVisible] = useState(true);
     const [globalShortcuts, setGlobalShortcuts] = useState(false);
     // 检查更新（GitHub Releases / macOS Sparkle）：结果与 App 启动检查共享同一份 jotai 状态
-    const { result: updateResult, autoCheck, checking, sparkle, check: checkUpdate } = useUpdateStatus();
+    const { result: updateResult, autoCheck, checking, sparkle } = useUpdateStatus();
     useEffect(() => {
         ipcInvoke("app:getInfo").then(setAppInfo);
         ipcInvoke("download:getDir").then((dir) => setDownloadDir(dir ?? ""));
@@ -370,28 +369,14 @@ export default function SettingsPage() {
                         style={{ flexShrink: 0 }}
                         disabled={checking || sparkle.stage === "checking" || sparkle.stage === "downloading"}
                         onClick={async () => {
-                            // Sparkle 引擎路径返回 null，结果经状态推送回到 sparkle stage，这里等一拍再按最终 stage 提示
-                            const res = await checkUpdate();
-                            if (!res) {
-                                await waitForSparkleSettled();
-                                const stage = getSparkleStage();
-                                if (stage === "idle" || stage === "available") {
-                                    showToast(
-                                        stage === "available"
-                                            ? `发现新版本 v${getSparkleVersion()}，开始下载`
-                                            : "当前已是最新版本",
-                                    );
-                                } else if (stage === "error") {
-                                    showToast(`检查更新失败：${getSparkleError() ?? "未知错误"}`);
-                                }
-                                // downloading / downloaded 有自己的常驻 UI（进度条 / 重启安装行），不用 toast
-                                return;
-                            }
+                            // 只查不下载；发现新版本时由 UpdateDialogHost 弹「更新 / 取消」
+                            const res = await checkAndAskToUpdate();
                             if (res.error) {
                                 showToast(`检查更新失败：${res.error}`);
-                            } else if (res.updateAvailable) {
-                                showToast(`发现新版本 v${res.latestVersion}（当前 v${res.currentVersion}）`);
-                            } else {
+                                return;
+                            }
+                            // 引擎路径的下载中/已就绪有弹窗与常驻 UI，不用 toast
+                            if (!res.updateAvailable && sparkle.stage !== "downloading" && sparkle.stage !== "downloaded") {
                                 showToast(`当前已是最新版本（v${res.currentVersion}）`);
                             }
                         }}
@@ -408,7 +393,7 @@ export default function SettingsPage() {
                                 正在下载 v{sparkle.version ?? "新版本"}
                             </div>
                             <div className="settings-item-desc">
-                                下载完成后可一键安装（应用会自动重启进入新版本）
+                                下载在后台继续，关闭进度窗口不影响
                             </div>
                             <div className="update-progress-track">
                                 <div
@@ -417,6 +402,13 @@ export default function SettingsPage() {
                                 />
                             </div>
                         </div>
+                        <button
+                            className="btn-ghost"
+                            style={{ flexShrink: 0 }}
+                            onClick={() => setDownloadDialogVisible(true)}
+                        >
+                            查看进度
+                        </button>
                     </div>
                 )}
                 {sparkle.stage === "downloaded" && (
@@ -426,7 +418,7 @@ export default function SettingsPage() {
                                 v{sparkle.version ?? "新版本"} 已就绪
                             </div>
                             <div className="settings-item-desc">
-                                安装将退出应用并自动重启进入新版本，播放进度不会丢失
+                                立即安装将退出应用并自动重启进入新版本，播放进度不会丢失
                             </div>
                         </div>
                         <button
@@ -466,42 +458,50 @@ export default function SettingsPage() {
                 )}
                 <ToggleRow
                     label="启动时自动检查更新"
-                    desc={
-                        sparkle.engine === "sparkle"
-                            ? "启动时联网检查新版本；macOS 支持在应用内直接下载并安装，其他平台跳转下载页"
-                            : "联网查询 GitHub Releases 上的最新版本，有更新时在界面提醒；不自动下载安装"
-                    }
+                    desc="启动时联网检查新版本；发现新版本会弹窗询问，由你决定是否现在更新"
                     value={autoCheck}
                     onChange={(next) => {
                         setAutoCheck(next);
                         showToast(next ? "已开启自动检查更新" : "已关闭自动检查更新");
                     }}
                 />
-                {updateResult?.updateAvailable && sparkle.stage !== "downloaded" && (
-                    <div className="settings-item">
-                        <div style={{ minWidth: 0 }}>
-                            <div className="settings-item-label">
-                                新版本 v{updateResult.latestVersion ?? updateResult.name}
+                {updateResult?.updateAvailable &&
+                    sparkle.stage !== "downloading" &&
+                    sparkle.stage !== "downloaded" && (
+                        <div className="settings-item">
+                            <div style={{ minWidth: 0 }}>
+                                <div className="settings-item-label">
+                                    新版本 v{updateResult.latestVersion ?? updateResult.name}
+                                </div>
+                                <div
+                                    className="settings-item-desc"
+                                    style={{
+                                        wordBreak: "break-all",
+                                        whiteSpace: "normal",
+                                    }}
+                                >
+                                    {releaseNotesPreview(updateResult.notes) || "暂无更新说明"}
+                                </div>
                             </div>
-                            <div
-                                className="settings-item-desc"
-                                style={{
-                                    wordBreak: "break-all",
-                                    whiteSpace: "normal",
-                                }}
-                            >
-                                {releaseNotesPreview(updateResult.notes) || "暂无更新说明"}
-                            </div>
+                            {sparkle.engine === "sparkle" ? (
+                                <button
+                                    className="btn-ghost"
+                                    style={{ flexShrink: 0 }}
+                                    onClick={reaskUpdate}
+                                >
+                                    更新
+                                </button>
+                            ) : (
+                                <button
+                                    className="btn-ghost"
+                                    style={{ flexShrink: 0 }}
+                                    onClick={() => openReleasePage(updateResult.url ?? undefined)}
+                                >
+                                    前往下载
+                                </button>
+                            )}
                         </div>
-                        <button
-                            className="btn-ghost"
-                            style={{ flexShrink: 0 }}
-                            onClick={() => openReleasePage(updateResult.url ?? undefined)}
-                        >
-                            前往下载
-                        </button>
-                    </div>
-                )}
+                    )}
                 <div className="settings-item">
                     <div>
                         <div className="settings-item-label">插件生态</div>
@@ -523,8 +523,10 @@ function updateDesc(
 ) {
     if (sparkle.engine === "sparkle") {
         switch (sparkle.stage) {
+            case "checking":
+                return "正在检查更新…";
             case "available":
-                return `发现新版本 v${sparkle.version ?? ""}，正在自动下载`;
+                return `发现新版本 v${sparkle.version ?? ""}，等待确认下载`;
             case "downloading":
                 return `正在下载 v${sparkle.version ?? "新版本"}（${Math.round(sparkle.progress ?? 0)}%）`;
             case "downloaded":

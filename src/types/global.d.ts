@@ -9,6 +9,8 @@ declare global {
                 stage: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
                 version: string | null;
                 progress: number | null;
+                transferred: number | null;
+                total: number | null;
                 error: string | null;
             }) => void) => void;
             /** 启动时的上次播放会话（主进程 data/session.json，见 core/playProgress.ts） */

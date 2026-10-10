@@ -19,6 +19,11 @@ type ConfigStore = typeof configStoreType;
  *  - 其他平台 / 开发模式 / 桥加载失败：退回 GitHub Releases API 检查——
  *    只查不装，提醒用户去 release 页手动下载（Windows 免签安装包与
  *    portable 也没有静默升级通道，portable 单文件无固定安装位置）。
+ *  - 检查与下载解耦：桥的 SilentUserDriver「发现更新即自动下载」且 JS 侧拦不住，
+ *    所以「有没有新版本」一律先用 GitHub API 探测；用户在更新确认弹窗里点了
+ *    「更新」才调 Sparkle 的 checkForUpdates 让它开始下载（进度经 updates:event
+ *    推送，关闭进度弹窗不影响下载，下载完成可选安装时机：立即重启或退出时自动装）。
+ *    桥的定时自动检查（setAutomaticChecks）保持关闭，避免绕过弹窗直接下载。
  *  - 自动检查由渲染进程挂载时触发一次（app:updates:startupCheck），
  *    仅当「已打包 + 用户开启 + 本会话没查过」才联网；失败静默，不打扰启动。
  *  - 配置只有一项：app.updates.autoCheck（默认开）。
@@ -65,6 +70,10 @@ export interface ISparkleState {
     version: string | null;
     /** 下载进度 0-100（downloading 阶段） */
     progress: number | null;
+    /** 已下载字节数（downloading 阶段；Sparkle 事件里 phase=apply 提取时不带） */
+    transferred: number | null;
+    /** 下载总字节数（服务器未回报 Content-Length 时为 null，此时只展示百分比） */
+    total: number | null;
     error: string | null;
 }
 
@@ -118,6 +127,8 @@ const sparkleState: ISparkleState = {
     stage: "idle",
     version: null,
     progress: null,
+    transferred: null,
+    total: null,
     error: null,
 };
 
@@ -173,7 +184,13 @@ async function initSparkle() {
                     setSparkleState({
                         stage: "downloading",
                         progress:
-                            typeof event.progress === "number" ? event.progress : null,
+                            typeof event.percent === "number" ? event.percent : null,
+                        transferred:
+                            typeof event.transferred === "number"
+                                ? event.transferred
+                                : null,
+                        total:
+                            typeof event.total === "number" ? event.total : null,
                     });
                     break;
                 case "update-downloaded":
@@ -197,6 +214,8 @@ async function initSparkle() {
             }
         });
         sparkleBridge = bridge;
+        // 定时自动检查关掉：发现更新即下载的桥绕不过弹窗，检查时机统一由渲染层控制
+        bridge.setAutomaticChecks(false);
         setSparkleState({ engine: "sparkle" });
         console.log("[updater] Sparkle 更新引擎已就绪");
     } catch (e: any) {
@@ -296,24 +315,12 @@ async function fetchAndCompare(): Promise<IUpdateCheckResult> {
     }
 }
 
-/** 手动检查：任何环境都执行，并作为最新结果缓存 */
+/**
+ * 检查（不下载）：任何环境都执行，并作为最新结果缓存。
+ * mac 也走 GitHub API 探测——Sparkle 的检查会直接开始下载，必须等用户确认
+ * （downloadNow）才能发起；Sparkle 侧真正的版本判断以 appcast 为准。
+ */
 export async function checkNow(): Promise<IUpdateCheckResult> {
-    // Sparkle 就绪时检查由它发起，进度与结果经 updates:event 推送；
-    // GitHub API 的结果只作展示兜底（Sparkle 的版本判断以 appcast 为准）
-    if (sparkleBridge) {
-        setSparkleState({ stage: "checking", error: null });
-        sparkleBridge.checkForUpdates();
-        return lastResult ?? {
-            updateAvailable: false,
-            currentVersion: app.getVersion(),
-            latestVersion: null,
-            name: null,
-            notes: null,
-            url: null,
-            publishedAt: null,
-            checkedAt: Date.now(),
-        };
-    }
     lastResult = await fetchAndCompare();
     return lastResult;
 }
@@ -327,12 +334,6 @@ export async function startupCheck(): Promise<IUpdateCheckResult | null> {
         return null;
     }
     startupChecked = true;
-    // Sparkle 引擎就绪时走它（结果经事件推送），不落 lastResult
-    if (sparkleBridge) {
-        setSparkleState({ stage: "checking", error: null });
-        sparkleBridge.checkForUpdates();
-        return null;
-    }
     try {
         const result = await fetchAndCompare();
         if (result.error) {
@@ -345,12 +346,37 @@ export async function startupCheck(): Promise<IUpdateCheckResult | null> {
     }
 }
 
+/**
+ * 用户在更新确认弹窗点了「更新」：让 Sparkle 开始检查并下载（mac 专用）。
+ * 返回 false 表示引擎不可用（调用方退跳 release 页手动下载）。
+ */
+export function downloadNow(): boolean {
+    if (!sparkleBridge) {
+        return false;
+    }
+    setSparkleState({ stage: "checking", error: null });
+    sparkleBridge.checkForUpdates();
+    return true;
+}
+
 /** 应用内安装已下载的更新（Sparkle：退出并安装新版后自动重启） */
 export function installNow(): boolean {
     if (!sparkleBridge) {
         return false;
     }
     sparkleBridge.installUpdateNow();
+    return true;
+}
+
+/**
+ * 不打断使用，应用这次退出时自动装已下载的更新（下次打开即新版本）。
+ * 仅 mac Sparkle 可用；返回 false 表示引擎不可用。
+ */
+export function installOnQuit(): boolean {
+    if (!sparkleBridge) {
+        return false;
+    }
+    sparkleBridge.installUpdateOnQuit();
     return true;
 }
 

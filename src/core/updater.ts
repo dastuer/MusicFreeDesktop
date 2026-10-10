@@ -5,12 +5,14 @@ import { ipcInvoke } from "./ipc";
 /**
  * 检查更新（主进程实现在 electron/services/updater.ts）
  *
- *  - macOS（已打包）：Sparkle 2 引擎——检查/下载/安装全在主进程完成，
- *    实时状态经 updates:event 推来（sparkleAtom），下载完点「重启并安装」即可；
- *  - 其他平台 / 开发模式：GitHub Releases API 检查（updateResultAtom），
- *    提醒后跳 release 页手动下载；
- *  - 两份数据并存：sparkleAtom 是引擎实时状态，updateResult 是
- *    fallback 检查/上次结果，设置页同时展示两边的有效信息。
+ *  - 「有没有新版本」一律走 GitHub Releases API（updateResultAtom）：
+ *    mac 的 Sparkle 引擎发现更新即自动下载、拦不住，所以 Sparkle 的检查
+ *    只在用户确认更新（downloadUpdate）后才发起；
+ *  - 用户确认后进入下载（mac Sparkle 引擎）：进度经 updates:event 推来
+ *    （sparkleAtom），进度弹窗可关，关了下载照常、下载完只浮窗提示；
+ *  - 下载完成后的安装时机：「立即重启安装」或「退出时自动安装」
+ *    （后者下次打开应用即新版本），设置页也常驻「重启并安装」入口；
+ *  - 其他平台 / 开发模式 / 引擎不可用：提醒后跳 release 页手动下载。
  */
 
 export interface IUpdateCheckResult {
@@ -35,6 +37,8 @@ export interface ISparkleState {
     stage: "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";
     version: string | null;
     progress: number | null;
+    transferred: number | null;
+    total: number | null;
     error: string | null;
 }
 
@@ -53,10 +57,26 @@ export const sparkleAtom = atom<ISparkleState>({
     stage: "idle",
     version: null,
     progress: null,
+    transferred: null,
+    total: null,
     error: null,
 });
+
 /** 手动检查进行中（按钮转圈/防连点；启动自动检查不占这个标志） */
 export const checkingAtom = atom<boolean>(false);
+
+/**
+ * 更新确认弹窗（发现新版本，用户选「更新 / 取消」）的展示状态。
+ * 注意 Sparkle 引擎不可用的平台弹「更新」只会退跳下载页，所以引擎不在时
+ * 弹窗不提供「更新」按钮（调用方见 UpdateDialogHost）。
+ */
+export const updateAvailableDialogAtom = atom<boolean>(false);
+
+/**
+ * 下载进度弹窗的展示状态：仅控制弹窗显隐，关掉后下载照常
+ * （downloading / downloaded 阶段都能重开，见 setDownloadDialogVisible）。
+ */
+export const downloadDialogAtom = atom<boolean>(false);
 
 let eventSubscribed = false;
 
@@ -94,6 +114,11 @@ export async function initUpdater() {
         );
         if (result) {
             store.set(updateResultAtom, result);
+            // 启动检查发现新版本：弹确认弹窗（更新已在路上/已就绪则不弹）
+            const stage = store.get(sparkleAtom).stage;
+            if (result.updateAvailable && stage !== "downloading" && stage !== "downloaded") {
+                store.set(updateAvailableDialogAtom, true);
+            }
         }
     } catch {
         // 网络不通就当没有更新
@@ -101,19 +126,12 @@ export async function initUpdater() {
 }
 
 /**
- * 手动检查：设置页「检查更新」按钮。
- * mac Sparkle 就绪时结果经 sparkleAtom 事件流回来（返回 null 表示走的是引擎路径）；
- * 否则走 GitHub API，返回本次检查的完整结果（失败时 error 字段有值）
+ * 手动检查（设置页「检查更新」/启动检查共用）：只查不下载。
+ * 返回本次检查结果（失败时 error 字段有值）。
  */
-export async function checkForUpdate(): Promise<IUpdateCheckResult | null> {
+export async function checkForUpdate(): Promise<IUpdateCheckResult> {
     if (store.get(checkingAtom)) {
-        return store.get(updateResultAtom);
-    }
-    const sparkle = store.get(sparkleAtom);
-    if (sparkle.engine === "sparkle") {
-        // 引擎路径：检查结果异步经 onUpdateEvent 推来，这里不占 checking
-        await ipcInvoke("app:updates:checkNow");
-        return null;
+        return store.get(updateResultAtom) ?? emptyResult("检查已在进行中");
     }
     store.set(checkingAtom, true);
     try {
@@ -146,6 +164,50 @@ function emptyResult(error: string): IUpdateCheckResult {
     };
 }
 
+/**
+ * 检查并弹确认弹窗（有新版本时）：手动检查的入口。
+ * 启动检查的弹窗逻辑在 initUpdater 里，那条路径失败静默不弹窗。
+ */
+export async function checkAndAskToUpdate(): Promise<IUpdateCheckResult> {
+    const result = await checkForUpdate();
+    if (result.updateAvailable && !result.error) {
+        const stage = store.get(sparkleAtom).stage;
+        // 已在下载/已下载完成：更新流程已在路上，不用再问一遍
+        if (stage !== "downloading" && stage !== "downloaded") {
+            store.set(updateAvailableDialogAtom, true);
+        }
+    }
+    return result;
+}
+
+/**
+ * 弹窗里点了「更新」：mac Sparkle 就绪时开始应用内下载（返回 true），
+ * 否则返回 false（调用方退跳 release 页手动下载）。
+ */
+export async function downloadUpdate(): Promise<boolean> {
+    store.set(updateAvailableDialogAtom, false);
+    const ok = await ipcInvoke<boolean>("app:updates:downloadNow");
+    if (ok) {
+        store.set(downloadDialogAtom, true);
+    }
+    return ok === true;
+}
+
+/** 弹窗里点了「取消」/关掉弹窗 */
+export function declineUpdate() {
+    store.set(updateAvailableDialogAtom, false);
+}
+
+/** 用户取消后改主意 / 从设置页再次发起：重开确认弹窗 */
+export function reaskUpdate() {
+    store.set(updateAvailableDialogAtom, true);
+}
+
+/** 打开/关闭下载进度弹窗（关闭不影响后台下载） */
+export function setDownloadDialogVisible(visible: boolean) {
+    store.set(downloadDialogAtom, visible);
+}
+
 /** 切换「启动时自动检查」设置 */
 export async function setAutoCheck(enabled: boolean) {
     store.set(autoCheckAtom, enabled);
@@ -160,28 +222,12 @@ export async function installUpdateNow(): Promise<boolean> {
     return (await ipcInvoke<boolean>("app:updates:installNow")) === true;
 }
 
-/** 等待 Sparkle 状态离开 checking（检查完成/出错/开始下载），最长 5s 兜底 */
-export async function waitForSparkleSettled(): Promise<void> {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-        if (store.get(sparkleAtom).stage !== "checking") {
-            return;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-    }
-}
-
-/** 取 Sparkle 当前 stage（waitForSparkleSettled 之后用） */
-export function getSparkleStage(): ISparkleState["stage"] {
-    return store.get(sparkleAtom).stage;
-}
-
-export function getSparkleVersion(): string | null {
-    return store.get(sparkleAtom).version;
-}
-
-export function getSparkleError(): string | null {
-    return store.get(sparkleAtom).error;
+/**
+ * 不打断使用，应用这次退出时自动安装已下载的更新（下次打开即新版本）。
+ * 返回 false 表示引擎不可用。
+ */
+export async function installUpdateOnQuit(): Promise<boolean> {
+    return (await ipcInvoke<boolean>("app:updates:installOnQuit")) === true;
 }
 
 /** 打开 GitHub release 页面 */
@@ -189,7 +235,7 @@ export function openReleasePage(url?: string) {
     void ipcInvoke("app:updates:openPage", url);
 }
 
-/** 供组件读取共享更新状态；check() 返回本次检查结果（引擎路径返回 null） */
+/** 供组件读取共享更新状态；check() 返回本次检查结果 */
 export function useUpdateStatus() {
     const result = useAtomValue(updateResultAtom);
     const autoCheck = useAtomValue(autoCheckAtom);

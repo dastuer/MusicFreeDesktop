@@ -673,8 +673,12 @@ ipcMain.handle("app:updates:openPage", (_e, url?: string) =>
     updater.openReleasePage(url));
 // Sparkle 引擎实时状态（下载进度/可安装），渲染层主动拉取用
 ipcMain.handle("app:updates:getSparkleState", () => updater.getSparkleState());
+// 用户确认更新后开始下载（仅 mac Sparkle；返回 false 时渲染层退跳下载页）
+ipcMain.handle("app:updates:downloadNow", () => updater.downloadNow());
 // 应用内安装已下载的更新（仅 mac Sparkle 可用；返回 false 时渲染层退跳下载页）
 ipcMain.handle("app:updates:installNow", () => updater.installNow());
+// 退出时自动安装已下载的更新（不打断当前使用，下次打开即新版本）
+ipcMain.handle("app:updates:installOnQuit", () => updater.installOnQuit());
 
 // Windows 的 caption 按钮直接叠在标题栏上：底色不跟主题走会在右上角留一块白
 ipcMain.handle(

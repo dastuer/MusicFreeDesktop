@@ -7,6 +7,7 @@ import ContextMenuHost from "./components/base/ContextMenu";
 import ToastHost, { showToast } from "./components/base/Toast";
 import AddToSheetPanelHost from "./components/base/AddToSheetPanel";
 import PromptDialogHost from "./components/base/PromptDialog";
+import UpdateDialogHost from "./components/base/UpdateDialog";
 import DownloadPanelHost from "./components/base/DownloadPanel";
 import SearchHistoryPanel from "./components/base/SearchHistoryPanel";
 import Icon from "./components/base/Icon";
@@ -30,7 +31,7 @@ import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
 import { setupSystemIntegration } from "./core/systemIntegration";
-import { initUpdater, installUpdateNow, openReleasePage, sparkleAtom, updateResultAtom } from "./core/updater";
+import { initUpdater, installUpdateNow, openReleasePage, sparkleAtom } from "./core/updater";
 import { useAtomValue } from "jotai";
 
 import HomePage from "./pages/home";
@@ -228,38 +229,23 @@ export default function App() {
         void initUpdater();
     }, []);
 
-    // 启动检查发现新版本：弹一条 toast 引去 GitHub release 页（结果不落 localStorage，每次启动都提醒）
-    const updateResult = useAtomValue(updateResultAtom);
-    const lastNotifiedRef = useRef<string | null>(null);
-    useEffect(() => {
-        if (!updateResult?.updateAvailable || !updateResult.url) {
-            return;
-        }
-        // 同一个版本只在本次会话提醒一次（设置页手动检查改状态时会再进这里）
-        if (lastNotifiedRef.current === updateResult.url) {
-            return;
-        }
-        lastNotifiedRef.current = updateResult.url;
-        showToast(
-            `发现新版本 ${updateResult.latestVersion}（当前 v${updateResult.currentVersion}），点击前往下载`,
-            {
-                action: { text: "查看", onClick: () => openReleasePage(updateResult.url!) },
-                duration: 8000,
-            },
-        );
-    }, [updateResult?.updateAvailable, updateResult?.url, updateResult?.latestVersion, updateResult?.currentVersion]);
-
-    // macOS Sparkle 引擎：新版本下载完成弹「重启并安装」直达（fallback 平台没有这个阶段）
+    // 发现新版本的询问与下载进度都由 UpdateDialogHost 展示（见 components/base/UpdateDialog.tsx）；
+    // 这里只负责「下载完成但用户已关掉进度弹窗」的浮窗提示：
+    // 下载在后台继续，完成后不再弹窗打断，只给一条带动作的 toast，由用户选时机安装。
     const sparkle = useAtomValue(sparkleAtom);
-    const installNotifiedRef = useRef(false);
+    const downloadedNotifiedRef = useRef<string | null>(null);
     useEffect(() => {
-        if (sparkle.stage !== "downloaded" || installNotifiedRef.current) {
+        if (sparkle.stage !== "downloaded") {
             return;
         }
-        installNotifiedRef.current = true;
-        showToast(`新版本 v${sparkle.version ?? ""} 已下载完成，重启即可完成安装`, {
+        const version = sparkle.version ?? "";
+        if (downloadedNotifiedRef.current === version) {
+            return;
+        }
+        downloadedNotifiedRef.current = version;
+        showToast(`新版本 v${version} 已下载完成，重启应用即可完成更新`, {
             action: {
-                text: "重启安装",
+                text: "立即安装",
                 onClick: async () => {
                     const ok = await installUpdateNow();
                     if (!ok) {
@@ -267,7 +253,7 @@ export default function App() {
                     }
                 },
             },
-            duration: 12000,
+            duration: 8000,
         });
     }, [sparkle.stage, sparkle.version]);
 
@@ -327,6 +313,7 @@ export default function App() {
             <PlayQueuePanelHost />
             <AddToSheetPanelHost />
             <PromptDialogHost />
+            <UpdateDialogHost />
             <DownloadPanelHost />
             <ContextMenuHost />
             <ToastHost />
