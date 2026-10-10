@@ -23,6 +23,7 @@ import {
 import BackupSection from "./BackupSection";
 import CacheSection from "./CacheSection";
 import NeteaseSection from "./NeteaseSection";
+import ProxySection from "./ProxySection";
 
 /**
  * 设置页：通用 / 网易云 / 外观 / 播放 / 快捷键 / 下载 / 存储与缓存 / 关于
@@ -196,6 +197,8 @@ export default function SettingsPage() {
             </div>
 
             <NeteaseSection />
+
+            <ProxySection />
 
             <div className="settings-group">
                 <div className="settings-group-title">外观</div>

@@ -52,6 +52,8 @@
     "electron-sparkle-updater": "^0.5.3",
     "eventemitter3": "^5.0.1",
     "he": "^1.2.0",
+    "http-proxy-agent": "^9.1.0",
+    "https-proxy-agent": "^9.1.0",
     "iconv-lite": "^0.6.3",
     "immer": "^10.1.1",
     "jotai": "^2.10.3",
@@ -62,6 +64,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-draggable": "^4.7.2",
+    "socks-proxy-agent": "^10.1.0",
     "webdav": "^5.7.0"
   },
   "allowScripts": {

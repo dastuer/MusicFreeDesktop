@@ -2,6 +2,7 @@ import { BrowserWindow } from "electron";
 import https from "https";
 import configStore from "./configStore";
 import * as cookieCipher from "./cookieCipher";
+import * as proxyService from "./proxyService";
 
 /**
  * 网易云账号（扫码登录）与个性化推荐接口
@@ -149,6 +150,9 @@ async function openLoginWindow(): Promise<{
                 sandbox: true,
             },
         });
+        // 登录窗走独立 partition，session 一出生就要带上当前代理，
+        // 否则代理用户开窗时登录页加载不出来
+        proxyService.setupSessionProxy(win.webContents.session, "netease-login");
         loginWindow = win;
         (async () => {
             const ses = win.webContents.session;
@@ -198,6 +202,10 @@ function rawRequest(
                 hostname: u.hostname,
                 path: u.pathname + u.search,
                 method: options.method ?? "GET",
+                // 全局代理开启时经代理（CONNECT 隧道）访问网易云接口
+                ...(proxyService.httpsRequestAgent()
+                    ? { agent: proxyService.httpsRequestAgent() }
+                    : {}),
                 headers: {
                     "User-Agent": UA,
                     Referer: "https://music.163.com/",

@@ -20,6 +20,7 @@ import neteaseService from "./services/neteaseService";
 import localLyrics from "./services/localLyrics";
 import systemIntegration from "./services/systemIntegration";
 import * as updater from "./services/updater";
+import * as proxyService from "./services/proxyService";
 import { isSupported as isAutoLaunchSupported, isEnabled as isAutoLaunchEnabled, setEnabled as setAutoLaunchEnabled } from "./services/autoLaunch";
 
 const isMac = process.platform === "darwin";
@@ -206,6 +207,8 @@ app.whenReady().then(() => {
     const dataDir = path.join(app.getPath("userData"), "data");
     configStore.setup(dataDir);
     sessionStore.setup(dataDir);
+    // 全局网络代理：axios defaults + 全部 session（含渲染层与登录窗），越早越好
+    proxyService.applyProxy();
     // 桌面歌词悬浮窗：注册 IPC 与窗口管理
     lyricsWindow.setup({
         configStore,
@@ -648,6 +651,41 @@ ipcMain.handle("netease:getPersonalizedPlaylists", () =>
     wrapNetease(() => neteaseService.getPersonalizedPlaylists()));
 ipcMain.handle("netease:getPlaylistDetail", (_e, id: string) =>
     wrapNetease(() => neteaseService.getPlaylistDetail(String(id))));
+
+/** ---------- 网络代理（见 services/proxyService.ts） ---------- */
+
+ipcMain.handle("proxy:get", () => proxyService.getProxyConfig());
+ipcMain.handle("proxy:set", (_e, next: { enabled?: boolean; url?: string }) => {
+    if (next.url !== undefined) {
+        const normalized = proxyService.normalizeProxyUrl(next.url);
+        // 开着开关但地址不合法时拒绝保存：宁可保持旧配置也别悄悄断网
+        if (next.enabled && !normalized) {
+            return {
+                success: false as const,
+                message: "代理地址无效，支持 http(s)://host:port 或 socks5://host:port",
+            };
+        }
+        proxyService.setProxyConfig({ url: normalized ?? next.url });
+    }
+    if (typeof next.enabled === "boolean") {
+        proxyService.setProxyConfig({ enabled: next.enabled });
+    }
+    return { success: true as const, config: proxyService.getProxyConfig() };
+});
+// 测试连接：经当前代理（或直连）请求一次公开端点，回延迟或错误
+ipcMain.handle("proxy:test", async () => {
+    const axios = (await import("axios")).default;
+    const started = Date.now();
+    try {
+        const resp = await axios.get("https://www.gstatic.com/generate_204", {
+            timeout: 8000,
+            validateStatus: () => true,
+        });
+        return { success: resp.status < 400, status: resp.status, ms: Date.now() - started };
+    } catch (e: any) {
+        return { success: false, message: e?.message ?? String(e), ms: Date.now() - started };
+    }
+});
 
 // 开机自启动（见 services/autoLaunch.ts）
 ipcMain.handle("app:getAutoLaunch", () => ({

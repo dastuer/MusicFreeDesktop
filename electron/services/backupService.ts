@@ -5,6 +5,7 @@ import { app, dialog } from "electron";
 import { AuthType, createClient } from "webdav";
 import configStore from "./configStore";
 import pluginHost, { IBackupPlugin, IPluginResumeResult } from "./pluginHost";
+import * as proxyService from "./proxyService";
 
 /**
  * 备份与恢复（主进程侧）
@@ -562,6 +563,8 @@ class BackupService {
                 authType: AuthType.Password,
                 username: cfg.username,
                 password: cfg.password,
+                // 全局代理开启时走代理（内网/本地地址由 agent 内部分发直连）
+                ...(proxyService.webdavAgents() ?? {}),
             }),
             remotePath: cfg.filePath || WEBDAV_FILE,
         };
