@@ -359,12 +359,28 @@ export function downloadNow(): boolean {
     return true;
 }
 
-/** 应用内安装已下载的更新（Sparkle：退出并安装新版后自动重启） */
+/**
+ * 应用内安装已下载的更新（Sparkle：退出并安装新版后自动重启）。
+ *
+ * 桥的 installUpdateNow 消费 readyToInstallReply 或置 installWhenReady 后重查；
+ * 但 readyToInstallReply 可能在之前某轮检查 abort 时已被原生侧清掉（showUpdaterError
+ * 统一清标志，实测 23:14 sessionInProgress 时 abort 过一次），此时桥只会「重新检查/
+ * 下载并把新包暂存好」，不会主动终止宿主——UI 上就是「点了没反应」。
+ * 所以这里挂 3 秒兜底：应用还没退出就主动 quit，Sparkle 在宿主终止时接管暂存包、
+ * 安装并自动重启进新版本（Sparkle 标准行为，播放进度由退出前的会话落盘保住）。
+ */
 export function installNow(): boolean {
     if (!sparkleBridge) {
         return false;
     }
     sparkleBridge.installUpdateNow();
+    setTimeout(() => {
+        if (!app.isPackaged) {
+            return; // 开发模式不折腾
+        }
+        console.log("[updater] installNow 3s 未退出，主动退出以触发安装");
+        app.quit();
+    }, 3000);
     return true;
 }
 
