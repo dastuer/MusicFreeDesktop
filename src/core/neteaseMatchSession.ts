@@ -8,7 +8,8 @@ import { ISongMatch, matchNeteaseSongs } from "./neteaseMatch";
  *
  * 会话按 key 隔离（`daily:<日期>` / `playlist:<歌单id>`）：
  *  - 同 key 已在跑或已完成时重复 start 直接复用（页面重挂载不会重新匹配）；
- *  - 「重新匹配」= 先 reset 再 start（重新拉曲目，匹配仍走映射缓存）。
+ *  - 「刷新」= 先 reset 再 start：重新拉曲目，但上一轮结果保留在 lastResults 里——
+ *    曲目没变就整列表直接复用，变了才对没匹配过的歌逐首搜索（映射缓存仍优先）。
  */
 
 export type MatchSessionStatus = "loading" | "running" | "done" | "error";
@@ -30,8 +31,6 @@ export interface IMatchSessionView {
     missedCount: number;
     /** 低置信命中（详情复核才采信或分数刚过线） */
     lowCount: number;
-    /** 本次是否跳过了缓存（刷新按钮的强制重配） */
-    ignoreCache?: boolean;
     /** 会话对应的网易云曲目原列表（展示编号/对照用；loading 阶段曲目未拉到，为空） */
     songs: INeteaseSong[];
     /** 按歌曲原顺序排列的全部已落地结果（running 时是实时快照） */
@@ -47,10 +46,16 @@ interface ISession {
     /** 结果按网易云歌曲 id 索引，展示时按 songs 原顺序重排 */
     results: Map<string, ISongMatch>;
     done: number;
-    ignoreCache?: boolean;
+    /**
+     * 上一轮跑完的结果：reset 时从旧会话摘出来，下一次 start 传给匹配器做
+     * 「数据没变直接复用」判定（见 matchNeteaseSongs 的 previous）。
+     */
+    lastResults?: ISongMatch[];
 }
 
 const sessions = new Map<string, ISession>();
+/** key → 上一次会话的结果，会话被 reset 时留存，供下一次 start 复用 */
+const lastResultsByKey = new Map<string, ISongMatch[]>();
 const sessionListAtom = atom<IMatchSessionView[]>([]);
 const store = getDefaultStore();
 
@@ -70,7 +75,6 @@ function viewOf(s: ISession): IMatchSessionView {
         cachedCount: matches.filter((m) => m.fromCache).length,
         missedCount: matches.filter((m) => m.status === "missed" || m.duplicate).length,
         lowCount: matched.filter((m) => m.viaDetail || m.low).length,
-        ignoreCache: s.ignoreCache,
         songs: s.songs,
         matches,
     };
@@ -90,21 +94,42 @@ export function getMatchSession(key: string): IMatchSessionView | null {
     return s ? viewOf(s) : null;
 }
 
-/** 删除会话：下一次 start 会重新拉取并完整跑一遍（匹配仍优先走映射缓存） */
+/**
+ * 删除会话：下一次 start 会重新拉取曲目，但上一轮结果留存复用——
+ * 曲目没变就不重配，变了的歌走映射缓存/逐首搜索。
+ */
 export function resetMatchSession(key: string) {
-    if (sessions.delete(key)) {
+    const s = sessions.get(key);
+    if (s) {
+        const results = Array.from(s.results.values());
+        if (results.length === s.songs.length && s.songs.length > 0) {
+            lastResultsByKey.set(key, results);
+        } else {
+            lastResultsByKey.delete(key);
+        }
+        sessions.delete(key);
         notify();
     }
 }
 
 /**
  * 清空全部会话。退出/更换网易云账号时调用：私人雷达等歌单的内容按账号生成，
- * 旧账号拉到的曲目与匹配结果对下一个账号来说是错的，全部作废重走。
+ * 旧账号拉到的曲目与匹配结果对下一个账号来说是错的，全部作废重走（历史结果一并丢弃）。
  */
 export function resetAllMatchSessions() {
-    if (sessions.size) {
+    if (sessions.size || lastResultsByKey.size) {
         sessions.clear();
+        lastResultsByKey.clear();
         notify();
+    }
+}
+
+/** 清掉某个 key 的历史结果（缓存被清等场景下不再有可复用的上一轮） */
+export function dropLastResults(key?: string) {
+    if (key) {
+        lastResultsByKey.delete(key);
+    } else {
+        lastResultsByKey.clear();
     }
 }
 
@@ -113,7 +138,7 @@ function runMatcher(session: ISession) {
     session.status = "running";
     notify();
     matchNeteaseSongs(session.songs, {
-        ignoreCache: session.ignoreCache,
+        previous: session.lastResults,
         onProgress: (done) => {
             if (sessions.get(session.key) === session) {
                 session.done = done;
@@ -145,16 +170,13 @@ function runMatcher(session: ISession) {
 }
 
 /** 曲目已在手上（每日推荐）：创建会话并开始匹配；同 key 已在跑/已完成时复用 */
-export function startMatchSession(
-    key: string,
-    title: string,
-    songs: INeteaseSong[],
-    opts: { ignoreCache?: boolean } = {},
-) {
+export function startMatchSession(key: string, title: string, songs: INeteaseSong[]) {
     const existing = sessions.get(key);
     if (existing && existing.status !== "error") {
         return;
     }
+    const lastResults = lastResultsByKey.get(key);
+    lastResultsByKey.delete(key);
     const session: ISession = {
         key,
         title,
@@ -162,7 +184,7 @@ export function startMatchSession(
         songs,
         results: new Map(),
         done: 0,
-        ignoreCache: !!opts.ignoreCache,
+        lastResults,
     };
     sessions.set(key, session);
     notify();
@@ -173,15 +195,14 @@ export function startMatchSession(
  * 推荐歌单：先拉全量曲目再匹配，整条流水线都在会话里跑——
  * 页面点开只是触发 + 订阅，立即退出拉取和匹配也照样完成。
  */
-export function startPlaylistMatchSession(
-    card: { id: string; title: string },
-    opts: { ignoreCache?: boolean } = {},
-) {
+export function startPlaylistMatchSession(card: { id: string; title: string }) {
     const key = `playlist:${card.id}`;
     const existing = sessions.get(key);
     if (existing && existing.status !== "error") {
         return;
     }
+    const lastResults = lastResultsByKey.get(key);
+    lastResultsByKey.delete(key);
     const session: ISession = {
         key,
         title: card.title,
@@ -189,7 +210,7 @@ export function startPlaylistMatchSession(
         songs: [],
         results: new Map(),
         done: 0,
-        ignoreCache: !!opts.ignoreCache,
+        lastResults,
     };
     sessions.set(key, session);
     notify();

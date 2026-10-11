@@ -750,6 +750,10 @@ html[data-theme="dark"] .sheet-tag-popover {
     font-variant-numeric: tabular-nums;
     text-align: right;
     font-size: 12px;
+    /* 时长宽窄不一（"3:45" vs "12:34"）会把左侧的快捷按钮顶得逐行横跳，
+       固定最小占位后操作列各项在各行垂直对齐 */
+    min-width: 40px;
+    flex-shrink: 0;
 }
 
 /* ---------- 骨架屏：首屏加载 / 分页换页数据未到时的占位行 ----------
@@ -887,7 +891,6 @@ html[data-theme="dark"] .sheet-tag-popover {
     opacity: 1;
 }
 
-.music-action-btn.liked,
 .music-action-btn.done {
     color: var(--primary-color);
     opacity: 1;
@@ -1056,11 +1059,33 @@ html[data-theme="dark"] .sheet-tag-popover {
     padding: 0;
 }
 
-/* 分区标题右侧的「数据来源：xxx」 */
-.section-source {
+/* 分区标题右侧的刷新按钮（替代「数据来源：xxx」文字，来源收进悬停提示） */
+.section-refresh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 12px;
     font-weight: 400;
     color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    padding: 4px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.section-refresh-btn:hover:not(:disabled) {
+    color: var(--text-color);
+    background: var(--hover-bg);
+}
+
+.section-refresh-btn:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.section-refresh-btn .refreshing {
+    animation: mfs-spin 1s linear infinite;
 }
 
 /* 音源不支持 / 该音源加载失败的说明块 */
@@ -1154,159 +1179,6 @@ html[data-theme="dark"] .sheet-tag-popover {
 /* 空态提示横跨整行，否则只能挤在第一个网格里 */
 .card-grid > .empty-hint {
     grid-column: 1 / -1;
-}
-
-/* ---------- 音乐列表分页器 ---------- */
-.music-pager {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px 16px;
-    padding: 14px 2px 2px;
-    margin-top: 10px;
-    border-top: 1px solid var(--divider);
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.music-pager-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    color: var(--text-tertiary);
-}
-
-.music-pager-count {
-    font-variant-numeric: tabular-nums;
-}
-
-/* 「共 N 首」与「每页」之间的小圆点 */
-.music-pager-dot {
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: var(--text-placeholder);
-    flex-shrink: 0;
-}
-
-.music-pager-size {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    color: var(--text-tertiary);
-}
-
-.music-pager-select-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-}
-
-.music-pager-select {
-    appearance: none;
-    -webkit-appearance: none;
-    border: 1px solid var(--divider);
-    outline: none;
-    background: transparent;
-    color: var(--text-color);
-    font-size: 12px;
-    font-weight: 500;
-    border-radius: 6px;
-    padding: 3px 20px 3px 8px;
-    cursor: pointer;
-    font-variant-numeric: tabular-nums;
-    transition: border-color 0.15s ease;
-    text-align: center;
-}
-
-.music-pager-select:hover {
-    border-color: var(--text-placeholder);
-}
-
-/* 下拉箭头 */
-.music-pager-caret {
-    position: absolute;
-    right: 10px;
-    width: 5px;
-    height: 5px;
-    bottom: 7px;
-    border-right: 1.5px solid var(--text-tertiary);
-    border-bottom: 1.5px solid var(--text-tertiary);
-    transform: translateY(-2px) rotate(45deg);
-    pointer-events: none;
-}
-
-.music-pager-loading {
-    color: var(--text-tertiary);
-}
-
-.music-pager-nav {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-}
-
-.pager-btn {
-    min-width: 30px;
-    height: 30px;
-    padding: 0 6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 7px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-    transition:
-        background 0.15s ease,
-        color 0.15s ease,
-        border-color 0.15s ease;
-}
-
-.pager-btn:hover:not(:disabled):not(.active) {
-    background: var(--hover-bg);
-    color: var(--text-color);
-}
-
-.pager-btn:disabled {
-    opacity: 0.35;
-    cursor: default;
-}
-
-/* 上一页 / 下一页：带描边，和页码按钮区分开 */
-.pager-btn.pager-step {
-    padding: 0 10px;
-    border-color: var(--divider);
-}
-
-.pager-btn.pager-step:hover:not(:disabled) {
-    border-color: var(--text-placeholder);
-}
-
-/* 当前页 */
-.pager-btn.pager-num.active,
-.pager-btn.pager-num.active:hover {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
-    color: #fff;
-    font-weight: 500;
-    cursor: default;
-}
-
-.pager-gap {
-    min-width: 22px;
-    text-align: center;
-    color: var(--text-placeholder);
-    font-size: 12px;
-    user-select: none;
-    cursor: default;
 }
 
 /* ---------- 播放条 ---------- */
@@ -3103,67 +2975,53 @@ body.in-desktop-lyrics-window {
     margin-top: 16px;
 }
 
-/* ---------- 每日推荐：整体匹配动效 ---------- */
+/* ---------- 每日推荐：匹配状态条 ---------- */
 
 @keyframes netease-spin {
     to { transform: rotate(360deg); }
 }
 
-@keyframes netease-pulse {
-    0%, 100% { transform: scale(1); opacity: 0.1; }
-    50% { transform: scale(1.18); opacity: 0.05; }
-}
-
-/* 匹配进行中占住列表区域的整体面板：旋转唱片 + 进度条，完成后整个列表一次性替换进来 */
-.netease-matching-panel {
-    min-height: 420px;
+/*
+ * 匹配进行中的紧凑状态条：贴在列表骨架屏上方，替代原来的居中大面板。
+ * 大面板完成后被整个列表一次性替换、页面高度骤变；现在骨架行与真实行
+ * 同构等高，完成后只把状态条换成「未匹配」折叠块，页面基本不动。
+ */
+.netease-matching-strip {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 48px 0;
+    gap: 10px;
+    padding: 10px 8px;
 }
 
-.netease-matching-disc {
-    width: 76px;
-    height: 76px;
+.netease-matching-spin {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--primary-color);
-    position: relative;
-    margin-bottom: 18px;
-}
-
-/* 外圈旋转弧线 */
-.netease-matching-disc::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
     border: 2px solid var(--hover-bg);
     border-top-color: var(--primary-color);
     animation: netease-spin 1.1s linear infinite;
 }
 
-/* 内圈呼吸 */
-.netease-matching-disc::after {
-    content: "";
-    position: absolute;
-    inset: 7px;
-    border-radius: 50%;
-    background: var(--primary-color);
-    animation: netease-pulse 1.6s ease-in-out infinite;
+/* 尚未开始计数（拉曲目/连接账号）时转慢一点，表示「在准备」而非「在推进」 */
+.netease-matching-spin.slow {
+    animation-duration: 1.8s;
 }
 
-.netease-matching-disc svg {
-    position: relative;
-    z-index: 1;
+.netease-matching-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .netease-matching-title {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--text-color);
 }
@@ -3173,9 +3031,11 @@ body.in-desktop-lyrics-window {
     color: var(--text-tertiary);
 }
 
-.netease-matching-panel .netease-progress {
-    width: 280px;
-    margin-bottom: 10px;
+/* 状态条里的进度条：压扁、靠右，宽度自适应剩余空间 */
+.netease-matching-strip .netease-progress {
+    flex: 1;
+    max-width: 280px;
+    margin: 0;
 }
 
 /* 匹配完成后列表整体淡入 */
@@ -3205,4 +3065,255 @@ body.in-desktop-lyrics-window {
         transparent 70%
     );
     animation: netease-shimmer 1.4s linear infinite;
+}
+
+/* ================= 歌单音源修复 / 重新匹配弹窗 ================= */
+
+/* 弹窗本体：比默认面板宽（前后两列对比需要横向空间），高度更慷慨，
+   行列表自己滚动（footer 摘要始终可见） */
+.sheet-fix-body {
+    width: 660px;
+    max-height: 74vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.sheet-fix-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+.sheet-fix-head-sub {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-tertiary);
+    margin-left: 6px;
+}
+
+/* 检查 / 匹配阶段：进度说明 + 复用 netease-progress 进度条 */
+.sheet-fix-stage {
+    padding: 18px 0 10px;
+    flex-shrink: 0;
+}
+
+.sheet-fix-stage-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-color);
+}
+
+.sheet-fix-stage-count {
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+
+.sheet-fix-stage-spin {
+    display: inline-flex;
+    animation: netease-spin 1.2s linear infinite;
+    color: var(--primary-color);
+}
+
+.sheet-fix-stage-hint {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+/* 匹配结果摘要行 */
+.sheet-fix-summary {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+/* 对比行列表：滚动区 */
+.sheet-fix-list {
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
+    border-top: 1px solid var(--divider);
+}
+
+.sheet-fix-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 2px;
+    border-bottom: 1px solid var(--divider);
+}
+
+.sheet-fix-check {
+    flex-shrink: 0;
+}
+
+.sheet-fix-check.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+/* 前后两列各占一半，中间箭头 */
+.sheet-fix-cell {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sheet-fix-cell-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.sheet-fix-cell-text {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.sheet-fix-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sheet-fix-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.sheet-fix-ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 音源小徽标（与列表里的 music-row-source 同视觉） */
+.sheet-fix-src {
+    flex-shrink: 0;
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 1;
+    border: 1px solid var(--divider);
+    border-radius: 4px;
+    padding: 2px 5px;
+}
+
+/* 中间的 → */
+.sheet-fix-arrow {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+}
+
+/* 失效原因红标（原曲列） */
+.sheet-fix-tag {
+    align-self: flex-start;
+    font-size: 10px;
+    line-height: 1;
+    border-radius: 4px;
+    padding: 2px 5px;
+}
+
+.sheet-fix-tag.danger {
+    color: var(--primary-color);
+    background: rgba(236, 65, 65, 0.1);
+}
+
+/* 右列灰字说明（未命中 / 重复 / 与原曲一致） */
+.sheet-fix-note {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 相似度徽标：过线绿色，低置信琥珀 */
+.sheet-fix-score {
+    flex-shrink: 0;
+    align-self: flex-start;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    border-radius: 4px;
+    padding: 2px 6px;
+    background: rgba(52, 199, 89, 0.15);
+    color: #34c759;
+}
+
+.sheet-fix-score.low {
+    background: rgba(255, 159, 10, 0.15);
+    color: #ff9f0a;
+}
+
+/* 错误阶段 */
+.sheet-fix-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 28px 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: center;
+}
+
+.sheet-fix-error button {
+    margin-top: 4px;
+}
+
+/* 底部：全选/已选 + 取消/替换 */
+.sheet-fix-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    flex-shrink: 0;
+}
+
+.sheet-fix-footer-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sheet-fix-selected {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+.sheet-fix-footer-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* 选择音源一步：整行可点 */
+.sheet-fix-row.clickable {
+    cursor: pointer;
+}
+
+.sheet-fix-row.clickable:hover {
+    background: var(--hover-bg);
 }

@@ -1,19 +1,18 @@
 import React, { useEffect, useState } from "react";
 import Cover from "@/components/base/Cover";
+import Icon from "@/components/base/Icon";
 import MusicList from "@/components/base/MusicList";
 import { getPluginByMedia, pluginCall } from "@/core/ipc";
 import { navigate } from "@/core/router";
+import { showContextMenu } from "@/components/base/ContextMenu";
 import { IPagedFetchResult, usePagedMusicList } from "@/hooks/usePagedMusicList";
 
 /**
  * 歌手详情页：作品（单曲）/ 专辑 两个 tab
  *
  * 单曲列表走 usePagedMusicList 的无限滚动模式：滚到底部自动续拉（去重、串行、
- * 失败可重试都在 hook 里），不再有点按钮翻页；专辑 tab 仍是整屏卡片 + 手动加载更多。
+ * 失败可重试都在 hook 里）；专辑 tab 仍是整屏卡片 + 手动加载更多。
  */
-
-/** 一次续拉的数据量（音源页条数不定，这里按「缺口 = 60 条」滚动补） */
-const ARTIST_LOAD_CHUNK = 60;
 
 export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistItemBase }) {
     const { artistItem } = props;
@@ -21,6 +20,8 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
     const [albums, setAlbums] = useState<IArtist.IAlbumItem[]>([]);
     // 进页面就要拉数据，初始即加载态：否则 effect 首帧置位前会先闪一帧空态
     const [albumLoading, setAlbumLoading] = useState(() => !!artistItem);
+    /** 多选模式：入口在头部「…」更多菜单里，状态由头部和 MusicList 共享（同歌单/榜单详情页） */
+    const [selectMode, setSelectMode] = useState(false);
 
     /** 拉音源第 page 页（type 决定取单曲还是专辑） */
     const fetchArtistWorksPage = async (page: number): Promise<IPagedFetchResult<any>> => {
@@ -42,8 +43,6 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
             type === "music" && artistItem
                 ? fetchArtistWorksPage(page)
                 : Promise.resolve({ items: [] as IMusic.IMusicItem[], isEnd: true }),
-        defaultPageSize: ARTIST_LOAD_CHUNK,
-        storageKey: "pagedList.pageSize.artistMusic",
         resetKey: `${artistItem?.platform ?? ""}|${artistItem?.id ?? ""}|${type}`,
     });
 
@@ -86,6 +85,28 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                         <div className="media-header-desc">{artistItem.description}</div>
                     )}
                 </div>
+                {type === "music" && musicList.items.length > 0 && (
+                    <div className="media-header-actions">
+                        <button
+                            className="btn-ghost media-header-more"
+                            title="更多操作"
+                            onClick={(e) => {
+                                // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                showContextMenu(rect.left, rect.bottom + 8, [
+                                    {
+                                        title: "多选",
+                                        icon: "check",
+                                        onClick: () => setSelectMode(true),
+                                    },
+                                ]);
+                            }}
+                        >
+                            <Icon name="more" size={16} />
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div className="search-tabs">
@@ -108,12 +129,14 @@ export default function ArtistDetailPage(props: { artistItem?: IArtist.IArtistIt
                     musicList={musicList.items}
                     loading={musicList.loading}
                     loadingMore={musicList.loadingMore}
-                    autoLoad
                     isEnd={musicList.isEnd}
                     stalled={musicList.stalled}
                     onRetry={musicList.retry}
                     onLoadMore={musicList.loadMore}
+                    searchable
                     listId={`artist:${artistItem?.platform}/${artistItem?.id}`}
+                    selectMode={selectMode}
+                    onSelectModeChange={setSelectMode}
                 />
             ) : (
                 <div className="card-grid">

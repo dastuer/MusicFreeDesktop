@@ -14,6 +14,7 @@ import {
 } from "@/core/downloadManager";
 import { ipcInvoke } from "@/core/ipc";
 import { TrackPlayerSingleton } from "@/core/trackPlayer";
+import { ListSearchBox, useListSearch } from "@/hooks/useListSearch";
 
 /**
  * 下载管理：队列/进度/已完成文件操作
@@ -139,12 +140,20 @@ export default function DownloadingPage() {
         (t) => t.status === "pending" || t.status === "running",
     ).length;
 
+    /** 局部搜索：按歌名 / 歌手 / 专辑过滤当前任务列表 */
+    const search = useListSearch(tasks.map((t) => t.musicItem));
+    const matchedItems = new Set(search.filteredList);
+    const visibleTasks = search.isSearching
+        ? tasks.filter((t) => matchedItems.has(t.musicItem))
+        : tasks;
+
     return (
         <div>
             <MediaHeaderBar
                 count={tasks.length}
                 activeCount={activeCount}
                 downloadDir={downloadDir}
+                search={search}
                 onClearCompleted={async () => {
                     await clearCompletedDownloads();
                     setTasks(await refreshDownloadTasks());
@@ -152,7 +161,7 @@ export default function DownloadingPage() {
                 }}
             />
 
-            {tasks.map((task) => (
+            {visibleTasks.map((task) => (
                 <div
                     key={task.id}
                     className="music-row"
@@ -230,8 +239,9 @@ export default function DownloadingPage() {
                     <div
                         style={{
                             display: "flex",
-                            gap: 4,
+                            gap: 12,
                             justifyContent: "flex-end",
+                            alignItems: "center",
                         }}
                     >
                         {task.status === "failed" && (
@@ -244,30 +254,13 @@ export default function DownloadingPage() {
                             />
                         )}
                         {task.status === "completed" && (
-                            <>
-                                <Icon
-                                    name="play"
-                                    size={16}
-                                    title="播放"
-                                    style={{ cursor: "pointer", color: "var(--text-secondary)" }}
-                                    onClick={() => {
-                                        if (task.filePath) {
-                                            TrackPlayerSingleton.play({
-                                                ...task.musicItem,
-                                                localPath: task.filePath,
-                                                platform: "本地音乐",
-                                            } as any);
-                                        }
-                                    }}
-                                />
-                                <Icon
-                                    name="open"
-                                    size={16}
-                                    title="在文件夹中显示"
-                                    style={{ cursor: "pointer", color: "var(--text-secondary)" }}
-                                    onClick={() => openDownloadInFolder(task.id)}
-                                />
-                            </>
+                            <Icon
+                                name="open"
+                                size={16}
+                                title="在文件夹中显示"
+                                style={{ cursor: "pointer", color: "var(--text-secondary)" }}
+                                onClick={() => openDownloadInFolder(task.id)}
+                            />
                         )}
                         <Icon
                             name="trash"
@@ -279,6 +272,14 @@ export default function DownloadingPage() {
                     </div>
                 </div>
             ))}
+
+            {search.isSearching && (
+                <div className="music-search-result">
+                    {visibleTasks.length
+                        ? `找到 ${visibleTasks.length} 个包含「${search.trimmedKeyword}」的任务`
+                        : "没有找到匹配的任务"}
+                </div>
+            )}
 
             {!tasks.length && (
                 <div className="empty-hint">
@@ -296,6 +297,7 @@ function MediaHeaderBar(props: {
     count: number;
     activeCount: number;
     downloadDir: string;
+    search: ReturnType<typeof useListSearch>;
     onClearCompleted: () => void;
 }) {
     return (
@@ -329,6 +331,14 @@ function MediaHeaderBar(props: {
                                 <Icon name="close" size={13} />
                                 清除已完成
                             </button>
+                        )}
+                        {props.count > 0 && (
+                            <ListSearchBox
+                                keyword={props.search.keyword}
+                                onInput={props.search.handleInput}
+                                onComposition={props.search.handleComposition}
+                                onClear={props.search.clear}
+                            />
                         )}
                     </div>
                 </div>

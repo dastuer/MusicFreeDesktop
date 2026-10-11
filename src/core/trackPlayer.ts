@@ -60,6 +60,34 @@ export interface IQualitySwapFailedPayload {
     reason: string;
 }
 
+/** resolveMediaUrl 成功时的返回；预加载任务里也存这一份 */
+interface IResolvedMediaSource {
+    src: string;
+    source?: IPlugin.IMediaSourceResult;
+    /** 实际命中直链的音质档；本地文件 / 条目自带直链没有档位概念，为 null */
+    quality: IMusic.IQualityKey | null;
+}
+
+/**
+ * 一次「预载下一首」的任务：提前解析音源、并用影子 <audio> 预缓冲。
+ * 到点交接时，解析与缓冲这两段最耗时的等待都已经在背景里完成了。
+ */
+interface IPreloadTask {
+    musicItem: IMusic.IMusicItem;
+    /** 规划时的队列版本：对不上说明队列动过，随机挑定的那首可能已不在原位 */
+    queueVersion: number;
+    /** 「下一首」是随机模式临场定下的：skipToNext 要采纳这个决定而不是再随机一次 */
+    fromShuffle: boolean;
+    /** 预载时的默认音质：期间用户改过音质的话，备好的音源就过期了 */
+    qualityRequest: IMusic.IQualityKey;
+    /** 音源解析 + 影子挂载的收尾（内部全捕获，永不 reject） */
+    done: Promise<void>;
+    /** 解析成功后挂上的影子 <audio>：paused 只缓冲不出声；解析失败 / 影子报错时为 null */
+    audio: HTMLAudioElement | null;
+    /** 解析结果：失败为 null */
+    resolved: IResolvedMediaSource | null;
+}
+
 /**
  * 单次 getMediaSource 的最长等待。
  * 换歌时旧歌已经被停掉，等待期是静音的，所以不能让一个卡死的音源拖满 pluginCall 的 30s。
@@ -78,6 +106,12 @@ const QUALITY_SWAP_READY_TIMEOUT = 15000;
  * 位置落在已缓冲范围内时瞬时完成；超出范围要重新取流，等不到就放弃切换。
  */
 const QUALITY_SWAP_SEEK_TIMEOUT = 8000;
+
+/**
+ * 距当前这首歌播完还剩多少秒（墙钟时间，倍速已折算）就开始预载下一首。
+ * 要盖住「音源解析（慢插件可到 10s+）+ 首段缓冲」的耗时，又不想太早白发流量，20s 是折中。
+ */
+const PRELOAD_AHEAD_SECONDS = 20;
 
 /** 连续 N 首都播不出来就停下，不再自动往后跳（否则坏音源会把整个歌单空转一圈） */
 const MAX_AUTO_SKIP = 3;
@@ -186,6 +220,8 @@ function resolveQualityLadder(first: IMusic.IQualityKey): IMusic.IQualityKey[] {
     }
     return ladder.slice(0, 3);
 }
+
+export { resolveQualityLadder };
 
 /** ---------- jotai atoms ---------- */
 /** 音量默认值：没存过、或存的不是数字时用 */
@@ -309,6 +345,16 @@ class TrackPlayer extends EventEmitter {
     private swapAudio: HTMLAudioElement | null = null;
     /** 摘掉影子元素上「等缓冲 / 等 seek」监听的收尾函数，取消切换时由 cancelQualitySwap 调用 */
     private swapWaitCleanup: (() => void) | null = null;
+    /**
+     * 队列版本号：播放队列每次增删 / 重排 / 整队替换都自增。
+     * 预加载把它记进计划：到点交接前对一下，版本变了说明「接下来那首」的推算可能已过期。
+     */
+    private _queueVersion = 0;
+    /**
+     * 在途的预加载任务（可能没有）：临近播完时提前解析下一首的音源并预缓冲，
+     * 到点直接交接，详见 maybePreloadNext / takePreloadFor。
+     */
+    private preload: IPreloadTask | null = null;
     /** 播放停滞自救用的定时器与次数（见 onAudioStall） */
     private stallTimer: ReturnType<typeof setTimeout> | null = null;
     private stallNudges = 0;
@@ -500,6 +546,8 @@ class TrackPlayer extends EventEmitter {
         }
         // 这里不落盘：进度只在**退出前**记一次（见 collectSessionProgress）。
         // 播放中反复写文件既没有必要，也会在音源解析 / 网络抖动的窗口里写出坏位置。
+        // 顺手看看是不是该预载下一首了（每秒也就几次，进来先被轻量条件挡掉）
+        this.maybePreloadNext();
     };
 
     private clearStallWatch = () => {
@@ -874,6 +922,217 @@ class TrackPlayer extends EventEmitter {
         }
     }
 
+    /** ---------- 预载下一首（无缝切歌） ---------- */
+
+    /**
+     * 临近播完时把下一首要做的两件慢事提前做掉：解析音源（插件请求，慢插件 10s+）、
+     * 首段缓冲。到点换歌时这两步都已完成，交接只剩换引用 + play()，听感上无缝。
+     *
+     * 触发点在 timeupdate：距播完不足 PRELOAD_AHEAD_SECONDS（墙钟，倍速已折算）就开始，
+     * 且整首歌内只发一次。预载复用了无缝切音质的影子元素套路：paused 只缓冲不出声，
+     * 生产监听照样挂着但事件被 `e.target !== this.audio` 挡住，交接前影子是"隐形"的。
+     *
+     * 与主进程的写穿缓存天然配合：影子的连接不断，MediaDownloader 就会把整首下完落盘，
+     * 交接后续播到缓冲之外时多半直接命中完整缓存。
+     */
+    private maybePreloadNext() {
+        if (this.preload || this.isLoading || this.swapSeq) {
+            return;
+        }
+        const audio = this.audio;
+        if (!audio?.src) {
+            return;
+        }
+        const duration = audio.duration;
+        if (!Number.isFinite(duration) || duration <= 0) {
+            return;
+        }
+        const remaining = (duration - (audio.currentTime || 0)) / (this._rate || 1);
+        if (remaining > PRELOAD_AHEAD_SECONDS) {
+            return;
+        }
+        const plan = this.planNextTrack();
+        if (plan) {
+            this.startPreload(plan.musicItem, plan.fromShuffle);
+        }
+    }
+
+    /**
+     * 「当前这首播完之后该播哪首」的规划，与 onEnded → skipToNext 的实际走向同一套判据：
+     * 待播登记优先；单曲循环没有下一首；队列空、off 模式到队尾就停。
+     *
+     * 随机模式的下一首本来由临播时的一次随机数决定，这里提前把随机数定下来存进计划，
+     * skipToNext 到点直接采纳（见 takePlannedShuffleNext）——否则临播再随机一次，
+     * 挑中的多半不是备好的那首，无缝就落空了。窗口期内队列动过的话 queueVersion
+     * 对不上，计划作废、按老路随机。
+     */
+    private planNextTrack(): { musicItem: IMusic.IMusicItem; fromShuffle: boolean } | null {
+        if (this._repeatMode === "single") {
+            return null;
+        }
+        const pendingIndex = this.pendingNextIndex();
+        if (pendingIndex >= 0) {
+            return { musicItem: this._playList[pendingIndex], fromShuffle: false };
+        }
+        const len = this._playList.length;
+        if (!len) {
+            return null;
+        }
+        const curIndex = this.getMusicIndexInPlayList(this._currentMusic);
+        if (curIndex === len - 1 && this._repeatMode === "off" && len > 1) {
+            return null;
+        }
+        let nextIndex: number;
+        if (this._repeatMode === "queue") {
+            if (len === 1) {
+                nextIndex = curIndex;
+            } else {
+                nextIndex = curIndex;
+                while (nextIndex === curIndex) {
+                    nextIndex = Math.floor(Math.random() * len);
+                }
+            }
+        } else {
+            nextIndex = curIndex < 0 ? 0 : (curIndex + 1) % len;
+        }
+        const musicItem = this._playList[nextIndex];
+        if (!musicItem || this.isCurrentMusic(musicItem)) {
+            // 下一首就是当前这首（单曲队列循环到自己）：重新起播即可，不值得备第二份音源
+            return null;
+        }
+        return { musicItem, fromShuffle: this._repeatMode === "queue" };
+    }
+
+    /**
+     * 发起预载：解析音源 → 挂到影子 <audio> 上预缓冲（paused）。
+     * 全程在后台，失败静默吞掉——到点交接时发现没备好，照旧走完整加载路径。
+     */
+    private startPreload(musicItem: IMusic.IMusicItem, fromShuffle: boolean) {
+        const task: IPreloadTask = {
+            musicItem,
+            queueVersion: this._queueVersion,
+            fromShuffle,
+            qualityRequest: getQuality(),
+            done: Promise.resolve(),
+            audio: null,
+            resolved: null,
+        };
+        this.preload = task;
+        console.log(`[trackPlayer] 预载下一首：${musicItem.title ?? musicItem.id}`);
+        task.done = (async () => {
+            try {
+                const resolved = await this.resolveMediaUrl(musicItem);
+                if (this.preload !== task) {
+                    // 已被取消 / 认领：结果作废，影子也不会挂上来
+                    return;
+                }
+                if (!resolved) {
+                    console.warn(
+                        `[trackPlayer] 预载失败：${musicItem.title ?? musicItem.id} 没有解析出可播放的音源`,
+                    );
+                    return;
+                }
+                const shadow = new Audio();
+                shadow.preload = "auto";
+                shadow.volume = this.audio?.volume ?? getStoredVolume();
+                shadow.playbackRate = this._rate;
+                // 生产监听照挂：交接前事件被 target 过滤，交接后天然接手进度 / 状态
+                this.attachAudioListeners(shadow);
+                // 预载阶段的加载失败在这里静默消化：置空结果，交接时回退到完整加载路径。
+                // 自摘监听：retireAudioElement 里的 load() 会再引发 error，不能接成死循环。
+                const onError = () => {
+                    shadow.removeEventListener("error", onError);
+                    if (this.preload !== task) {
+                        return;
+                    }
+                    task.resolved = null;
+                    task.audio = null;
+                    this.retireAudioElement(shadow);
+                };
+                shadow.addEventListener("error", onError);
+                shadow.src = resolved.src;
+                task.resolved = resolved;
+                task.audio = shadow;
+            } catch (e) {
+                console.warn("[trackPlayer] 预载下一首出错", e);
+            }
+        })();
+    }
+
+    /** 释放一个预载任务的影子元素（退场 + 结果置空） */
+    private discardPreloadShadow(task: IPreloadTask) {
+        const shadow = task.audio;
+        task.audio = null;
+        task.resolved = null;
+        if (shadow) {
+            this.retireAudioElement(shadow);
+        }
+    }
+
+    /**
+     * 作废预加载：影子退场，在途解析的结果作废（任务自身的身份检查会让它静默收场）。
+     * 所有「接下来要播的歌变了」的场景——换歌、改音质、清队列——都该调它。
+     */
+    private cancelPreload() {
+        const task = this.preload;
+        if (!task) {
+            return;
+        }
+        this.preload = null;
+        this.discardPreloadShadow(task);
+    }
+
+    /**
+     * play() 入口处认领预载：
+     *  - 目标正是预载的那首（且默认音质没变过）：等解析收尾，接过影子做无缝交接；
+     *  - 目标对不上 / 音质改过：作废预载，返回 null 走完整加载路径。
+     *
+     * @returns "failed" 表示预载阶段已把全部音质档试完仍一无所获——现场重解析只会
+     *   原样再失败一轮，调用方直接按「无音源」收场，别再静音干等一整轮。
+     */
+    private async takePreloadFor(
+        target: IMusic.IMusicItem,
+        playId: string,
+    ): Promise<"failed" | { resolved: IResolvedMediaSource; audio: HTMLAudioElement } | null> {
+        const task = this.preload;
+        if (
+            !task ||
+            playListKey(task.musicItem) !== playListKey(target) ||
+            task.qualityRequest !== getQuality()
+        ) {
+            this.cancelPreload();
+            return null;
+        }
+        // 认领：从预载状态里摘出来，影子的去留从此由本次 play() 负责
+        this.preload = null;
+        await task.done;
+        if (this.pendingPlayId !== playId) {
+            // 等解析收尾的空档里被新的播放请求 / 暂停取消取代
+            this.discardPreloadShadow(task);
+            return null;
+        }
+        if (!task.resolved || !task.audio) {
+            return "failed";
+        }
+        return { resolved: task.resolved, audio: task.audio };
+    }
+
+    /**
+     * skipToNext 采纳预载时定下的随机决定（仅随机模式）：预载备好的歌就是这次要播的歌，
+     * 按老路再随机一次反而多半错过它。队列版本对不上（窗口期内动过队列）就作废。
+     */
+    private takePlannedShuffleNext(): IMusic.IMusicItem | null {
+        const task = this.preload;
+        if (
+            task?.fromShuffle &&
+            this._repeatMode === "queue" &&
+            task.queueVersion === this._queueVersion
+        ) {
+            return task.musicItem;
+        }
+        return null;
+    }
+
     /** 还能往下降的下一档音质；已在底档 / 本地文件 / 条目自带直链（无档位概念）返回 null */
     private lowerQualityForRetry(musicItem: IMusic.IMusicItem): IMusic.IQualityKey | null {
         if (musicItem.localPath) {
@@ -944,6 +1203,8 @@ class TrackPlayer extends EventEmitter {
         } as IPlayFailurePayload);
 
         if (!willSkip) {
+            // 播放就此停下：预载的"下一首"跟着作废，别让影子连着音源白白挂着
+            this.cancelPreload();
             setAtom(musicStateAtom, this._currentMusic ? "paused" : "stopped");
             return;
         }
@@ -992,6 +1253,7 @@ class TrackPlayer extends EventEmitter {
         // 队列空了、只剩这一首"孤儿"还在听（清空过播放列表）：播完就到头了，
         // 别再往下跳（skipToNext 无处可跳，只会把状态停在 paused 让人以为卡住了）。
         if (this._playList.length === 0) {
+            this.cancelPreload();
             this.emit(TrackPlayerEvents.PlayEnd);
             setAtom(musicStateAtom, "stopped");
             return;
@@ -1004,6 +1266,7 @@ class TrackPlayer extends EventEmitter {
             this._playList.length > 1
         ) {
             // 列表循环模式下回到第一首; off 模式播放完结束
+            this.cancelPreload();
             this.emit(TrackPlayerEvents.PlayEnd);
             setAtom(musicStateAtom, "stopped");
             return;
@@ -1094,6 +1357,7 @@ class TrackPlayer extends EventEmitter {
         }
         list.splice(insertAt, 0, ...valid);
         this._playList = list;
+        this._queueVersion += 1;
         setAtom(playListAtom, this._playList);
         if (valid.length) {
             this.notifyPlayListAdded();
@@ -1175,6 +1439,7 @@ class TrackPlayer extends EventEmitter {
         const list = [...this._playList];
         list.splice(index, 1);
         this._playList = list;
+        this._queueVersion += 1;
         setAtom(playListAtom, this._playList);
         this.persistPlayList();
         // 待播登记一起作废：歌都不在队列里了，没有「下一首播它」可言
@@ -1219,6 +1484,72 @@ class TrackPlayer extends EventEmitter {
         const [moved] = list.splice(from, 1);
         list.splice(to, 0, moved);
         this._playList = list;
+        this._queueVersion += 1;
+        setAtom(playListAtom, this._playList);
+        this.persistPlayList();
+    }
+
+    /**
+     * 歌单内音源替换后同步播放队列：同一首歌（platform+id）原位换成新条目。
+     *
+     * - 正在播放 / 解析中的那首不动：音频还挂在旧源上，换引用只会让界面与声音对不上；
+     *   等它播完或用户重新整队播放时自然用上歌单里的新条目。
+     * - 暂停 / 停止中的当前曲连同 `_currentMusic` 一起换，并摘掉已解析的旧音源，
+     *   下次按播放会重新解析新条目（而不是接着播旧的那条失效链接）。
+     * - 「下一首播放」的待播登记跟着换 key：登记的是这首歌，源换了登记也得跟上。
+     */
+    replaceMusicInQueue(
+        replacements: { from: IMusic.IMusicItem; to: IMusic.IMusicItem }[],
+    ) {
+        if (!replacements.length || !this._playList.length) {
+            return;
+        }
+        const map = new Map(
+            replacements
+                .filter((r) => playListKey(r.from) !== playListKey(r.to))
+                .map((r) => [playListKey(r.from), r.to] as const),
+        );
+        if (!map.size) {
+            return;
+        }
+        const currentKey = this._currentMusic ? playListKey(this._currentMusic) : "";
+        const state = store.get(musicStateAtom);
+        const currentBusy = currentKey !== "" && (state === "playing" || state === "loading");
+        let changed = false;
+        const list = this._playList.map((it) => {
+            const to = map.get(playListKey(it));
+            if (!to || (playListKey(it) === currentKey && currentBusy)) {
+                return it;
+            }
+            changed = true;
+            return to;
+        });
+        if (!changed) {
+            return;
+        }
+        this._playList = list;
+        this._queueVersion += 1;
+        if (this._currentMusic && map.has(currentKey) && !currentBusy) {
+            const to = map.get(currentKey)!;
+            this._currentMusic = to;
+            setAtom(currentMusicAtom, to);
+            // 摘掉已解析的旧音源：否则 togglePlay 看到 src 还在会直接 resume 旧链接
+            this.detachAudio();
+            // 历史末尾就是当前这首，引用一起换，按「上一首」时的判断才对得上
+            const last = this._history[this._history.length - 1];
+            if (last && playListKey(last) === currentKey) {
+                this._history[this._history.length - 1] = to;
+            }
+        }
+        if (this._pendingNext.length) {
+            this._pendingNext = Array.from(
+                new Set(
+                    this._pendingNext.map((k) =>
+                        map.has(k) ? playListKey(map.get(k)!) : k,
+                    ),
+                ),
+            );
+        }
         setAtom(playListAtom, this._playList);
         this.persistPlayList();
     }
@@ -1234,6 +1565,7 @@ class TrackPlayer extends EventEmitter {
      */
     clearPlayList() {
         this._playList = [];
+        this._queueVersion += 1;
         setAtom(playListAtom, []);
         // 待播登记跟着队列一起作废（否则当前这首播完还会去找那首已经不在的歌）
         this._pendingNext = [];
@@ -1250,6 +1582,8 @@ class TrackPlayer extends EventEmitter {
         this.isLoading = false;
         // 在途的音质切换一样作废：歌都不要了，影子交接上来只会凭空出声
         this.cancelQualitySwap();
+        // 预载的下一首也是：队列都清了，没有"接下来"可言
+        this.cancelPreload();
         this.autoSkipCount = 0;
         setAtom(currentMusicAtom, null);
         setAtom(musicStateAtom, "stopped");
@@ -1276,12 +1610,7 @@ class TrackPlayer extends EventEmitter {
         musicItem: IMusic.IMusicItem,
         qualityOverride?: IMusic.IQualityKey,
         excludeUrl?: string,
-    ): Promise<{
-        src: string;
-        source?: IPlugin.IMediaSourceResult;
-        /** 实际命中直链的音质档；本地文件 / 条目自带直链没有档位概念，为 null */
-        quality: IMusic.IQualityKey | null;
-    } | null> {
+    ): Promise<IResolvedMediaSource | null> {
         if (musicItem.localPath) {
             return { src: buildLocalMediaUrl(musicItem.localPath), quality: null };
         }
@@ -1522,14 +1851,33 @@ class TrackPlayer extends EventEmitter {
             this.beginLoading();
         }
 
+        // 预载复用：目标正是预载的那首（默认音质也没改过）就不重新解析，
+        // 直接接过预缓冲好的影子元素无缝交接；对不上就顺手把预载作废。
+        // 音质降级重试（qualityOverride）不许复用——备好的是默认音质的音源。
+        const preloaded =
+            willLoad && !qualityOverride ? await this.takePreloadFor(target, playId) : null;
+        if (this.pendingPlayId !== playId) {
+            // 等预载收尾的空档里被新的播放请求 / 暂停取消取代
+            return;
+        }
+
         try {
-            const resolved = await this.resolveMediaUrl(
-                target,
-                qualityOverride,
-                // 降级重试时排除刚失败的那条直链：不少音源各档返回同一条链，
-                // 换档不换链就别再试它（正常播放不排除，给瞬时网络问题留重来的机会）
-                qualityOverride ? (this.resolvedSourceUrl ?? undefined) : undefined,
-            );
+            if (preloaded === "failed") {
+                // 预载阶段已把全部音质档试完仍一无所获，现场重解析只会原样再失败一轮
+                await this.handlePlayFailure(target, "音源没有返回可播放的链接", {
+                    allowQualityRetry: false,
+                });
+                return;
+            }
+            const resolved =
+                preloaded?.resolved ??
+                (await this.resolveMediaUrl(
+                    target,
+                    qualityOverride,
+                    // 降级重试时排除刚失败的那条直链：不少音源各档返回同一条链，
+                    // 换档不换链就别再试它（正常播放不排除，给瞬时网络问题留重来的机会）
+                    qualityOverride ? (this.resolvedSourceUrl ?? undefined) : undefined,
+                ));
             if (this.pendingPlayId !== playId) {
                 // 已经被后面的播放请求取代（连点下一首、快速点列表），丢弃这次结果
                 return;
@@ -1547,12 +1895,26 @@ class TrackPlayer extends EventEmitter {
             this.resolvedSourceUrl = resolved.source?.url ?? null;
             // 播放栏徽标同步为实际命中的档位（可能比请求的低，也可能没有档位概念）
             setAtom(playingQualityAtom, resolved.quality);
-            const audio = this.audio;
+            const audio = preloaded ? preloaded.audio : this.audio;
             if (!audio) {
                 return;
             }
-            audio.src = resolved.src;
-            audio.playbackRate = this._rate;
+            if (preloaded) {
+                // ===== 无缝交接 =====
+                // 影子在预载阶段就已挂上音源、完成首段缓冲，这里只换引用不重新加载：
+                // 旧元素退场、影子接着出声，中间不再有解析与缓冲的静默期。
+                const old = this.audio;
+                this.clearPendingSeek();
+                this.audio = audio;
+                audio.playbackRate = this._rate;
+                audio.volume = old?.volume ?? getStoredVolume();
+                if (old && old !== audio) {
+                    this.retireAudioElement(old);
+                }
+            } else {
+                audio.src = resolved.src;
+                audio.playbackRate = this._rate;
+            }
             // 紧接着 src 赋值就摆进度：此时还处于 HAVE_NOTHING，浏览器会把它当成
             // 「默认起播位置」，元数据一到就按这个偏移取流（见 applyStartPosition）
             this.applyStartPosition(audio, resumePosition);
@@ -1659,6 +2021,13 @@ class TrackPlayer extends EventEmitter {
             await this.play(this._playList[pendingIndex], true);
             return;
         }
+        // 随机模式下预载时已经把随机数定下了（planNextTrack）：直接播计划中的那首，
+        // 让预载的解析与缓冲作数；按老路临播再随机一次，多半挑不中备好的歌。
+        const planned = this.takePlannedShuffleNext();
+        if (planned) {
+            await this.play(planned, true);
+            return;
+        }
         const nextIndex = await this.getNextIndex(1);
         if (nextIndex >= 0) {
             await this.play(this._playList[nextIndex], true);
@@ -1755,6 +2124,7 @@ class TrackPlayer extends EventEmitter {
         if (!alreadyThisList) {
             this._playList = toQueueableList(newPlayList);
             this._currentListId = listId;
+            this._queueVersion += 1;
             // 整队换掉之后「排在当前这首后面」这个约定已经不成立了：待播登记作废
             // （没换队列时不动——上面 alreadyThisList 为真就是在同一份列表里继续点歌）
             this._pendingNext = [];

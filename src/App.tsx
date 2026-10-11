@@ -9,6 +9,7 @@ import AddToSheetPanelHost from "./components/base/AddToSheetPanel";
 import PromptDialogHost from "./components/base/PromptDialog";
 import UpdateDialogHost from "./components/base/UpdateDialog";
 import DownloadPanelHost from "./components/base/DownloadPanel";
+import SheetFixPanelHost from "./components/base/SheetFixPanel";
 import SearchHistoryPanel from "./components/base/SearchHistoryPanel";
 import Icon from "./components/base/Icon";
 import {
@@ -291,6 +292,7 @@ export default function App() {
             <PromptDialogHost />
             <UpdateDialogHost />
             <DownloadPanelHost />
+            <SheetFixPanelHost />
             <ContextMenuHost />
             <ToastHost />
         </div>

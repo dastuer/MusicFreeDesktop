@@ -8,6 +8,7 @@ import React, {
 import Cover from "@/components/base/Cover";
 import Icon from "@/components/base/Icon";
 import SourceSwitcher from "@/components/base/SourceSwitcher";
+import { showToast } from "@/components/base/Toast";
 import { uniqueById } from "@/core/collections";
 import { SerializedPlugin } from "@/core/ipc";
 import {
@@ -29,6 +30,11 @@ import { navigate } from "@/core/router";
  * 发现音乐（首页）：推荐歌单 + 排行榜
  * 支持切换数据来源（音源插件）：默认「自动」= 默认音源优先，逐个降级尝试 + 超时控制，
  * 指定音源时只用该插件，且能区分「不支持该能力」与「加载失败」两种空态。
+ *
+ * 数据策略是「缓存优先」：只要模块级快照（见 core/pageSnapshot）里有这个音源的
+ * 上次数据，进入页面就原样展示，不再自动打接口；数据更新只由三个入口触发——
+ * 手动点分区标题右侧的刷新按钮、切换音源、冷启动（首次进入/失败重试）。
+ * 手动刷新是「无感」的：按钮转圈提示进行中，旧内容保留到新数据到达，失败只 toast。
  */
 
 const SHEET_TAGS_METHOD = "getRecommendSheetTags";
@@ -152,12 +158,44 @@ function SourceNote(props: { children: React.ReactNode }) {
     return <div className="source-note">{props.children}</div>;
 }
 
+/**
+ * 分区标题右侧的刷新按钮：替代原先的「数据来源：xxx」文字。来源信息收进悬停
+ * 提示；刷新中转圈并禁点。刷新是分区级的「无感」操作——旧内容保留到新数据到达，
+ * 所以不需要额外的加载占位。
+ */
+function SectionRefreshButton(props: {
+    /** 悬停提示里展示的数据来源（插件名），可能为空（还没成功加载过） */
+    sourceName: string;
+    refreshing: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            className="section-refresh-btn"
+            title={
+                props.sourceName
+                    ? `刷新（数据来源：${props.sourceName}）`
+                    : "刷新"
+            }
+            disabled={props.refreshing || props.disabled}
+            onClick={props.onClick}
+        >
+            <Icon
+                name="refresh"
+                size={14}
+                className={props.refreshing ? "refreshing" : undefined}
+            />
+            <span>刷新</span>
+        </button>
+    );
+}
+
 export default function HomePage() {
     // 有快照就直接从快照起手：loading 初值为 false，首帧就是内容而不是加载态
     const [initial] = useState(readSnapshot);
     const [hasSnapshot, setHasSnapshot] = useState(!!initial);
     const [plugins, setPlugins] = useState<SerializedPlugin[]>(initial?.plugins ?? []);
-    const [sourceHash, setSourceHash] = useState(() => getBrowseSource());
     const [tagGroups, setTagGroups] = useState<ITagGroup[]>(initial?.tagGroups ?? []);
     // 「更多分类」浮窗：打开状态 + 当前看的是哪个一级分组（浮窗是临时的，不进快照）
     const [moreOpen, setMoreOpen] = useState(false);
@@ -169,50 +207,40 @@ export default function HomePage() {
     const [topLists, setTopLists] = useState<IMusic.IMusicSheetGroupItem[]>(
         initial?.topLists ?? [],
     );
+    const [tagSource, setTagSource] = useState(initial?.tagSource ?? "");
+    const [topListSource, setTopListSource] = useState(initial?.topListSource ?? "");
     const [loading, setLoading] = useState(!initial);
     const [failed, setFailed] = useState(false);
     const [sheetFailed, setSheetFailed] = useState(false);
     const [topListFailed, setTopListFailed] = useState(false);
-    const [reloadKey, setReloadKey] = useState(0);
-    const [tagSource, setTagSource] = useState(initial?.tagSource ?? "");
-    const [topListSource, setTopListSource] = useState(initial?.topListSource ?? "");
+    // 两个分区各自的手动刷新进行中标记：按钮转圈用，与冷启动 loading 互不干扰
+    const [sheetRefreshing, setSheetRefreshing] = useState(false);
+    const [topListRefreshing, setTopListRefreshing] = useState(false);
+    const [sourceHash, setSourceHash] = useState(() => getBrowseSource());
 
-    const changeSource = (hash: string) => {
-        // 共用偏好：这里改了，排行榜页（重挂载时）同步生效
-        setBrowseSource(hash);
-        setSourceHash(hash);
-        // 即将展示的是另一个音源的数据，不能沿用当前快照，照常走加载态
-        setHasSnapshot(false);
-        /**
-         * 这一帧必须就把 loading 打上，不能等下面那个 effect 去做。
-         * 两个理由：一是少一帧「新音源已选中、屏幕上还是旧音源内容」；
-         * 二是快照 effect 在同一个提交里紧接着执行，它读到的 loading 是本次渲染的
-         * 闭包值——不为 true 的话它会拿着旧的 tagGroups/topLists/sheets 写进新音源的
-         * 快照里，等于串源。
-         */
-        setLoading(true);
-        // 歌单是另一个 effect 拉的，会一直留到新请求返回；不清掉同样会被写进新音源快照
-        setSheets([]);
-        // 新音源的分组结构完全不同，开着的浮窗直接收掉
-        setMoreOpen(false);
-    };
-
-    useEffect(() => {
-        let cancelled = false;
-        (async () => {
-            // 有快照时这一轮是「后台刷新」：不切加载态、不清空已有内容。
-            // 否则每次回到首页都要先空屏等插件请求，从内容页切回来就会白闪一下。
-            if (!hasSnapshot) {
+    /**
+     * 拉取分类 + 排行榜（不含标签下的歌单，那个跟着选中标签走）。只在冷启动
+     * （首次进入 / 切换音源 / 失败重试）和手动刷新时调用：页面带着快照挂载时
+     * 完全不请求，数据更新交给用户点刷新按钮。
+     *
+     * silent=true 是手动刷新：不进全页 loading、不闪错误态，旧内容保留到新数据
+     * 到达，失败只 toast——按钮上已有转圈提示，页面大改反而晃眼。
+     * silent=false 是冷启动：整页走骨架屏，两个区块都失败才报「加载失败」。
+     */
+    const loadAll = useCallback(
+        async (opts: { silent: boolean }) => {
+            const silent = opts.silent;
+            if (!silent) {
                 setLoading(true);
                 setFailed(false);
                 setSheetFailed(false);
                 setTopListFailed(false);
+            } else {
+                setSheetRefreshing(true);
+                setTopListRefreshing(true);
             }
 
             const all = await getEnabledPlugins();
-            if (cancelled) {
-                return;
-            }
             setPlugins(all);
 
             const sheetPlugins = pickSourcePlugins(all, SHEET_TAGS_METHOD, sourceHash);
@@ -228,10 +256,8 @@ export default function HomePage() {
                     ? tryPluginMethod(topListPlugins, TOPLIST_METHOD)
                     : Promise.resolve(null),
             ]);
-            if (cancelled) {
-                return;
-            }
 
+            let firstTag: ICommon.IUnique | null = null;
             if (tagResult) {
                 setTagSource(tagResult.pluginName);
                 const groups = tagResult.data?.data ?? [];
@@ -254,12 +280,12 @@ export default function HomePage() {
                     normalized.push({ title: "热门", data: uniqueById(pinned) });
                 }
                 setTagGroups(normalized);
-                const firstTag = normalized[0]?.data[0] ?? null;
+                firstTag = normalized[0]?.data[0] ?? null;
                 setActiveTag(firstTag);
                 if (!firstTag) {
                     setSheets([]);
                 }
-            } else if (!hasSnapshot) {
+            } else if (!silent) {
                 // 切换音源后必须清空旧数据，否则会残留上一个音源的结果
                 setTagSource("");
                 setTagGroups([]);
@@ -270,13 +296,12 @@ export default function HomePage() {
             if (topListResult) {
                 setTopListSource(topListResult.pluginName);
                 setTopLists((topListResult.data ?? []).slice(0, 2));
-            } else if (!hasSnapshot) {
+            } else if (!silent) {
                 setTopListSource("");
                 setTopLists([]);
             }
 
-            // 刷新失败时沿用快照内容：数据是好的、只是没拿到最新的，不该闪成错误态
-            if (!hasSnapshot) {
+            if (!silent) {
                 setSheetFailed(!tagResult && sheetCapable.length > 0);
                 setTopListFailed(!topListResult && topListPlugins.length > 0);
                 setFailed(
@@ -284,23 +309,72 @@ export default function HomePage() {
                         !topListResult &&
                         (sheetCapable.length > 0 || topListPlugins.length > 0),
                 );
+                setLoading(false);
+            } else {
+                // 手动刷新失败：内容还在，只是没拿到新的，说一声就好
+                setSheetRefreshing(false);
+                setTopListRefreshing(false);
+                if (!tagResult || !topListResult) {
+                    const failedNames = [
+                        !tagResult && "推荐歌单",
+                        !topListResult && "排行榜",
+                    ]
+                        .filter(Boolean)
+                        .join("、");
+                    showToast(`${failedNames}刷新失败（网络超时或插件不可用）`);
+                }
             }
-            setLoading(false);
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [reloadKey, sourceHash]);
 
-    useEffect(() => {
-        if (!activeTag) {
+            // 分类刷新后选中的标签换成了新分类的第一个，歌单要跟着补拉
+            if (firstTag) {
+                void fetchSheetsRef.current(firstTag);
+            }
+        },
+        // fetchSheets 通过 ref 取最新引用，避免两条 useCallback 互相依赖
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [sourceHash],
+    );
+
+    /** 手动刷新：防并发即可。两个分区数据同源（同一音源插件），一并重新拉取；
+     *  选中的标签被刷新后可能指向新分类的第一个，歌单补拉由 loadAll 内部完成 */
+    const refreshData = () => {
+        if (sheetRefreshing || topListRefreshing) {
             return;
         }
-        let cancelled = false;
-        (async () => {
+        void loadAll({ silent: true });
+    };
+
+    // 冷启动：只在无快照（首次进入 / 切换音源后）时跑。有快照的挂载一行请求
+    // 都不发，页面直接展示快照内容，等用户点刷新按钮才重新拉接口。
+    useEffect(() => {
+        if (!hasSnapshot) {
+            void loadAll({ silent: false });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hasSnapshot, sourceHash]);
+
+    /**
+     * 拉某个分类标签下的歌单列表。显式函数而非 effect 级联：effect 版在每次
+     * activeTag 变化时都会请求，连同带着快照挂载的那一次——那正是这次要去掉的
+     * 「每次进页面都打接口」。入口只有三个：冷启动拿到新分类、用户点选标签、
+     * 手动刷新分类后选中的标签变了。
+     *
+     * 请求失败时保留当前列表：切回页面时首屏就是快照里的歌单，这时候清空会让
+     * 内容闪没一下，与本次要修的白闪是同一种现象。
+     *
+     * 快速连点标签时两个请求并发，用单调递增的序号保证只有最后一个请求的响应
+     * 能落到 state 上——否则先点 A（慢）再点 B（快），A 的结果会覆盖 B 的。
+     */
+    const sheetsRequestSeq = useRef(0);
+    const fetchSheets = useCallback(
+        async (tag: ICommon.IUnique | null) => {
+            if (!tag) {
+                return;
+            }
+            const seq = ++sheetsRequestSeq.current;
             const all = await getEnabledPlugins();
             const sheetPlugins = pickSourcePlugins(all, SHEET_LIST_METHOD, sourceHash);
-            if (cancelled) {
+            if (seq !== sheetsRequestSeq.current) {
                 return;
             }
             if (!sheetPlugins.length) {
@@ -311,25 +385,44 @@ export default function HomePage() {
                 sheetPlugins,
                 SHEET_LIST_METHOD,
                 12000,
-                activeTag,
+                tag,
                 1,
             );
-            if (cancelled) {
+            if (seq !== sheetsRequestSeq.current) {
                 return;
             }
-            // 请求失败时保留当前列表：切回页面时首屏就是快照里的歌单，
-            // 这时候清空会让内容闪没一下，与本次要修的白闪是同一种现象
             if (result) {
                 setTagSource(result.pluginName);
                 setSheets(
                     uniqueById((result?.data?.data ?? []) as ISheetCard[]).slice(0, 18),
                 );
             }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [activeTag?.id, sourceHash]);
+        },
+        [sourceHash],
+    );
+    /** loadAll 依赖本函数但定义在其后，用 ref 中转取最新引用，避免循环依赖 */
+    const fetchSheetsRef = useRef(fetchSheets);
+    fetchSheetsRef.current = fetchSheets;
+
+    const changeSource = (hash: string) => {
+        // 共用偏好：这里改了，排行榜页（重挂载时）同步生效
+        setBrowseSource(hash);
+        setSourceHash(hash);
+        // 即将展示的是另一个音源的数据，不能沿用当前快照，照常走加载态
+        setHasSnapshot(false);
+        /**
+         * 这一帧必须就把 loading 打上，不能等下面那个 effect 去做。
+         * 两个理由：一是少一帧「新音源已选中、屏幕上还是旧音源内容」；
+         * 二是快照 effect 在同一个提交里紧接着执行，它读到的 loading 是本次渲染的
+         * 闭包值——不为 true 的话它会拿着旧的 tagGroups/topLists/sheets 写进新音源的
+         * 快照里，等于串源。
+         */
+        setLoading(true);
+        // 歌单留到新请求返回；不清掉同样会被写进新音源快照
+        setSheets([]);
+        // 新音源的分组结构完全不同，开着的浮窗直接收掉
+        setMoreOpen(false);
+    };
 
     // 内容每次变化都同步一份到模块级快照：下次挂载（切回本页）直接渲染，不白屏。
     // 加载中与失败态不记——失败时保留上一次的好快照，没有快照就让下次重新冷启动并照常报错。
@@ -503,7 +596,7 @@ export default function HomePage() {
                     <div style={{ marginTop: 12 }}>
                         <button
                             className="btn-primary"
-                            onClick={() => setReloadKey((k) => k + 1)}
+                            onClick={() => void loadAll({ silent: false })}
                         >
                             <Icon name="forward" size={14} />
                             重新加载
@@ -516,9 +609,13 @@ export default function HomePage() {
                 <section className="home-section">
                     <div className="section-title">
                         推荐歌单
-                        {tagSource && (
-                            <span className="section-source">数据来源：{tagSource}</span>
-                        )}
+                        <SectionRefreshButton
+                            sourceName={tagSource}
+                            refreshing={sheetRefreshing}
+                            /* 音源不支持该能力时刷新无意义，禁掉 */
+                            disabled={sheetStatus === "unsupported"}
+                            onClick={refreshData}
+                        />
                     </div>
                     {sheetNote ? (
                         <SourceNote>{sheetNote}</SourceNote>
@@ -534,7 +631,10 @@ export default function HomePage() {
                                         <button
                                             key={tag.id}
                                             className={`sheet-tag-pill${activeTag?.id === tag.id ? " active" : ""}`}
-                                            onClick={() => setActiveTag(tag)}
+                                            onClick={() => {
+                                                setActiveTag(tag);
+                                                void fetchSheets(tag);
+                                            }}
                                         >
                                             {(tag as any).title}
                                         </button>
@@ -590,6 +690,7 @@ export default function HomePage() {
                                                         className={`sheet-tag-popover-pill${activeTag?.id === tag.id ? " active" : ""}`}
                                                         onClick={() => {
                                                             setActiveTag(tag);
+                                                            void fetchSheets(tag);
                                                             setMoreOpen(false);
                                                         }}
                                                     >
@@ -652,10 +753,16 @@ export default function HomePage() {
                         >
                             <div className="section-title">
                                 排行榜{group.title ? ` · ${group.title}` : ""}
-                                {topListSource && (
-                                    <span className="section-source">
-                                        数据来源：{topListSource}
-                                    </span>
+                                {/* 多个榜单分组共用一个刷新入口：都来自同一次
+                                    getTopLists 调用，只在第一个分组上放按钮 */}
+                                {gi === 0 && (
+                                    <SectionRefreshButton
+                                        sourceName={topListSource}
+                                        refreshing={topListRefreshing}
+                                        /* 音源不支持该能力时刷新无意义，禁掉 */
+                                        disabled={topListStatus === "unsupported"}
+                                        onClick={refreshData}
+                                    />
                                 )}
                             </div>
                             <div className="card-grid">

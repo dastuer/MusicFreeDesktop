@@ -1,8 +1,12 @@
 import { pluginCall, SerializedPlugin, getSortedSearchablePlugins } from "./ipc";
+import { getQuality } from "./appConfig";
 import { INeteaseSong } from "./netease";
 import {
     flushMatchCache,
     getCachedMatch,
+    ICachedMatch,
+    fingerprintOf,
+    isCachedMatchFresh,
     isCachedMatchValid,
     putCachedMatch,
 } from "./neteaseMatchCache";
@@ -16,6 +20,10 @@ import {
  * 用「专辑一致 + 时长差≤3s」复核（歌手名转写会误杀，如 Gyubin↔규빈）。
  *
  * 视频源（B 站类）默认排除：时长对不上，命中率极低还拖慢整体。
+ *
+ * 可播性闸门：赢家（及详情复核的备选）必须现场通过 getMediaSource 拿到可播放的
+ * 直链才采信，拿不到的源（插件残废 / 曲目下架 / 仅 VIP）按分数顺位补位——
+ * 匹配结果里不再混进「看着命中了、其实播不了」的曲目。
  */
 
 const VIDEO_SOURCE = /哔哩|bilibili|b站|youtube/i;
@@ -136,6 +144,56 @@ interface IScored {
     ds: number;
 }
 
+/** 采信闸门：总分过线且标题、歌手相似度都达标 */
+function isPassing(s: IScored) {
+    return s.total >= MIN_SCORE && s.ts >= 0.8 && s.as >= 0.6;
+}
+
+/**
+ * 可播性探测的最长等待。匹配阶段只是「验证」，不值得为一个死源等满 pluginCall 的 30s。
+ */
+const PROBE_TIMEOUT = 8000;
+
+/** 探测用的音质序列：默认音质优先，拿不到再用 standard 兜底（不少插件只备了标准档） */
+function probeQualities(): IMusic.IQualityKey[] {
+    const quality = getQuality();
+    return quality === "standard" ? ["standard"] : [quality, "standard"];
+}
+
+/**
+ * 探测一个候选能不能真的拿到可播放的直链（与播放时同一条 getMediaSource 通道）。
+ * 条目自带直链（item.url）直接算可播；两档都拿不到链接视为不可播。
+ */
+async function probePlayable(
+    plugin: SerializedPlugin,
+    item: IMusic.IMusicItem,
+): Promise<boolean> {
+    if (item.url) {
+        return true;
+    }
+    if (!plugin.supportedMethods.includes("getMediaSource")) {
+        return false;
+    }
+    for (const quality of probeQualities()) {
+        try {
+            const source = await Promise.race([
+                pluginCall(plugin.hash, "getMediaSource", item, quality) as Promise<
+                    IPlugin.IMediaSourceResult | null
+                >,
+                new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error("音源响应超时")), PROBE_TIMEOUT),
+                ),
+            ]);
+            if (source?.url) {
+                return true;
+            }
+        } catch {
+            // 这一档拿不到/超时：换 standard 再试一次
+        }
+    }
+    return false;
+}
+
 export function scoreOf(song: INeteaseSong, cand: any): IScored {
     const ts = titleSim(song.name, cand.title);
     const as = artistSim(song.artists, cand.artist);
@@ -202,8 +260,17 @@ async function recheckViaDetail(
 export interface IMatchOptions {
     /** 并发数（每路串行按歌消费） */
     concurrency?: number;
-    /** 跳过映射缓存，全部重新匹配（刷新按钮语义）；新命中仍会回写缓存 */
-    ignoreCache?: boolean;
+    /**
+     * 上一轮的匹配结果（重置会话时保留的那份）。
+     * 拉到的曲目与上一轮完全一致（指纹逐首相同、音源插件未变）时整列表直接复用，
+     * 一首都不再搜索；有出入时只对没变的歌用映射缓存，变了的照常匹配。
+     */
+    previous?: ISongMatch[];
+    /**
+     * 限定参与匹配的音源插件 hash 列表（歌单音源管理的「选择音源 / 指定音源替换」用）。
+     * 不传或为空 = 全部可用音源；传入后会再过滤一遍（已卸载/禁用的自动剔除）。
+     */
+    sourceHashes?: string[];
     /** 每完成一首回调一次（含未命中），页面据此渐进渲染 */
     onResult?: (result: ISongMatch) => void;
     onProgress?: (done: number, total: number) => void;
@@ -215,8 +282,19 @@ export async function matchNeteaseSongs(
     songs: INeteaseSong[],
     options: IMatchOptions = {},
 ): Promise<ISongMatch[]> {
-    const { concurrency = 4, onResult, onProgress, shouldContinue, ignoreCache } = options;
-    const plugins = await getMatchableSourcePlugins();
+    const {
+        concurrency = 4,
+        onResult,
+        onProgress,
+        shouldContinue,
+        previous,
+        sourceHashes,
+    } = options;
+    let plugins = await getMatchableSourcePlugins();
+    if (sourceHashes?.length) {
+        const allowed = new Set(sourceHashes);
+        plugins = plugins.filter((p) => allowed.has(p.hash));
+    }
     if (!plugins.length) {
         throw new NoMatchSourceError();
     }
@@ -233,17 +311,51 @@ export async function matchNeteaseSongs(
     };
 
     /**
+     * 复用上一轮结果的判定：曲目列表与上一轮完全一致（数量 + 逐首指纹相同），
+     * 且上一轮每个命中的音源插件当前仍启用——此时音乐数据没变，匹配结果也不会变，
+     * 直接原样复用（含未命中），一首都不搜。任何出入都退化到逐首流程。
+     */
+    if (previous?.length) {
+        const prevBySongId = new Map(previous.map((m) => [m.song.id, m]));
+        const identical =
+            previous.length === songs.length &&
+            songs.every((s) => {
+                const prev = prevBySongId.get(s.id);
+                return !!prev && fingerprintOf(prev.song) === fingerprintOf(s);
+            }) &&
+            previous.every(
+                (m) =>
+                    m.status !== "matched" ||
+                    isCachedMatchValid({ item: m.item! }, plugins),
+            );
+        if (identical) {
+            for (const [index, song] of songs.entries()) {
+                const prev = prevBySongId.get(song.id)!;
+                if (shouldContinue && !shouldContinue()) {
+                    break;
+                }
+                report({ ...prev, fromCache: true });
+            }
+            flushMatchCache();
+            return results;
+        }
+    }
+
+    /**
      * 缓存优先：命中映射缓存的直接出结果（该曲目所属音源插件仍在启用列表才有效，
      * 插件被卸载/禁用后视为失效重新匹配），只有没缓存的才进队列做完整匹配。
-     * ignoreCache（刷新按钮）时全部进队列。
+     * 旧版本写入的缓存条目没有可播性标记（verified），进队列走 worker 补验——
+     * 探测通过才采信（并回写标记），播不了的当作没缓存过重新匹配。
      */
-    const queue: { song: INeteaseSong; index: number }[] = [];
-    if (ignoreCache) {
-        queue.push(...songs.map((song, index) => ({ song, index })));
-    } else {
-        for (const [index, song] of songs.entries()) {
-            const cached = getCachedMatch(song.id);
-            if (cached && isCachedMatchValid(cached, plugins)) {
+    const queue: { song: INeteaseSong; index: number; cached?: ICachedMatch }[] = [];
+    for (const [index, song] of songs.entries()) {
+        const cached = getCachedMatch(song.id);
+        if (
+            cached &&
+            isCachedMatchValid(cached, plugins) &&
+            isCachedMatchFresh(cached, song)
+        ) {
+            if (cached.verified) {
                 if (!shouldContinue || shouldContinue()) {
                     report(
                         finalize(
@@ -262,8 +374,10 @@ export async function matchNeteaseSongs(
                     );
                 }
             } else {
-                queue.push({ song, index });
+                queue.push({ song, index, cached });
             }
+        } else {
+            queue.push({ song, index });
         }
     }
 
@@ -305,11 +419,32 @@ export async function matchNeteaseSongs(
         }
 
         perSource.sort((a, b) => b.score.total - a.score.total);
-        let winner = perSource[0];
 
-        // 没过线的拿详情复核：专辑一致 + 时长差≤3s 才翻案
-        if (winner && !(winner.score.total >= MIN_SCORE && winner.score.ts >= 0.8 && winner.score.as >= 0.6)) {
-            for (const cand of perSource.slice(0, 3)) {
+        /**
+         * 可播性闸门：按分数从高到低逐个探测「拿不拿得到可播放的直链」，
+         * 不可播的源直接跳过、由下一位顶上。最多探测 3 个（与详情复核窗口一致）；
+         * 已有过线的可播候选就不再多探——典型情况每首歌只多一次 getMediaSource。
+         */
+        const playableSources: typeof perSource = [];
+        for (const entry of perSource.slice(0, 3)) {
+            if (playableSources.some((p) => isPassing(p.score))) {
+                break;
+            }
+            if (shouldContinue && !shouldContinue()) {
+                break;
+            }
+            if (
+                await probePlayable(entry.plugin, toMusicItem(entry.plugin.platform, entry.cand))
+            ) {
+                playableSources.push(entry);
+            }
+        }
+
+        let winner = playableSources[0];
+
+        // 没过线的拿详情复核：专辑一致 + 时长差≤3s 才翻案（只在真能播的候选里翻）
+        if (winner && !isPassing(winner.score)) {
+            for (const cand of playableSources) {
                 const info = await recheckViaDetail(cand.plugin, cand.cand, song);
                 if (!info) {
                     continue;
@@ -338,7 +473,7 @@ export async function matchNeteaseSongs(
             }
         }
 
-        if (winner && winner.score.total >= MIN_SCORE && winner.score.ts >= 0.8 && winner.score.as >= 0.6) {
+        if (winner && isPassing(winner.score)) {
             return finalize(
                 {
                     song,
@@ -351,11 +486,15 @@ export async function matchNeteaseSongs(
                 index,
             );
         }
+        // 未命中线索取最高分的候选：它是「本来最像的一首」，即使因为不可播没被采信
+        const hint = winner ?? perSource[0];
         return {
             song,
             status: "missed",
-            bestTitle: winner
-                ? `「${winner.cand.title}」${winner.cand.artist ?? ""}（${winner.plugin.platform}，${winner.score.total.toFixed(2)} 分）`
+            bestTitle: hint
+                ? `「${hint.cand.title}」${hint.cand.artist ?? ""}（${hint.plugin.platform}，${hint.score.total.toFixed(2)} 分${
+                    winner ? "" : "，但拿不到可播放的链接"
+                  }）`
                 : undefined,
         };
     }
@@ -369,7 +508,13 @@ export async function matchNeteaseSongs(
             } else {
                 seenKeys.set(key, index);
                 if (!match.fromCache) {
-                    putCachedMatch(match.song.id, match.item, match.score ?? 0, match.viaDetail);
+                    putCachedMatch(
+                        match.song.id,
+                        match.item,
+                        match.score ?? 0,
+                        match.viaDetail,
+                        fingerprintOf(match.song),
+                    );
                 }
             }
         }
@@ -379,6 +524,40 @@ export async function matchNeteaseSongs(
     async function worker() {
         while (queue.length && (!shouldContinue || shouldContinue())) {
             const next = queue.shift()!;
+            if (next.cached) {
+                // 旧缓存补验：直链现在拿得到才采信（回写 verified 标记，下次走快路），
+                // 拿不到就当没缓存过，降级走完整匹配
+                const plugin = plugins.find(
+                    (p) => p.platform === next.cached!.item.platform,
+                );
+                if (plugin && (await probePlayable(plugin, next.cached.item))) {
+                    putCachedMatch(
+                        next.song.id,
+                        next.cached.item,
+                        next.cached.score,
+                        next.cached.viaDetail,
+                        fingerprintOf(next.song),
+                    );
+                    if (!shouldContinue || shouldContinue()) {
+                        report(
+                            finalize(
+                                {
+                                    song: next.song,
+                                    status: "matched",
+                                    fromCache: true,
+                                    item: next.cached.item,
+                                    matchedPlatform: next.cached.item.platform,
+                                    score: next.cached.score,
+                                    viaDetail: next.cached.viaDetail,
+                                    low: next.cached.score < MIN_SCORE + 0.07,
+                                },
+                                next.index,
+                            ),
+                        );
+                    }
+                    continue;
+                }
+            }
             const result = await matchOne(next.song, next.index);
             // 已取消时结果不再外报，避免页面卸载后还刷状态
             if (!shouldContinue || shouldContinue()) {

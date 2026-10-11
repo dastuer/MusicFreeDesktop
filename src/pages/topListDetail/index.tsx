@@ -8,14 +8,11 @@ import { showToast } from "@/components/base/Toast";
 import { usePagedMusicList } from "@/hooks/usePagedMusicList";
 
 /**
- * 榜单详情页：与歌单详情页同一套交互 ——
- *  - getTopListDetail 按音源页码加载，展示层走 usePagedMusicList 的「每页 N 条」分页
+ * 榜单详情页：
+ *  - getTopListDetail 按音源页码加载，列表走 usePagedMusicList 的无限滚动——
+ *    滚到底部自动续拉下一页，尾部展示加载中
  *  - 头部功能按钮（播放全部 / 收藏全部 / 下载全部 / … 菜单里的多选）
  */
-
-/** 每页条数偏好按列表分开记忆（与歌单 / 搜索页各存一份） */
-const TOPLIST_PAGE_SIZE_KEY = "pagedList.pageSize.topListDetail";
-const TOPLIST_DEFAULT_PAGE_SIZE = 40;
 
 export default function TopListDetailPage(props: { topListItem?: IMusic.IMusicSheetItem }) {
     const { topListItem } = props;
@@ -72,10 +69,7 @@ export default function TopListDetailPage(props: { topListItem?: IMusic.IMusicSh
 
     const list = usePagedMusicList<IMusic.IMusicItem>({
         fetchPage,
-        defaultPageSize: TOPLIST_DEFAULT_PAGE_SIZE,
-        storageKey: TOPLIST_PAGE_SIZE_KEY,
         resetKey: `${topListItem?.platform ?? ""}|${topListItem?.id ?? ""}`,
-        expectedTotal: worksNum,
     });
 
     /** 多选模式：入口在头部「…」更多菜单里，状态提到页面这一层，由 MediaHeader 和 MusicList 共享 */
@@ -130,22 +124,15 @@ export default function TopListDetailPage(props: { topListItem?: IMusic.IMusicSh
             <MusicList
                 musicList={list.items}
                 loading={list.loading}
+                loadingMore={list.loadingMore}
+                isEnd={list.isEnd}
+                stalled={list.stalled}
+                onRetry={list.retry}
+                onLoadMore={list.loadMore}
                 listId={listId}
                 searchable
                 selectMode={selectMode}
                 onSelectModeChange={setSelectMode}
-                pagination={{
-                    currentPage: list.currentPage,
-                    totalPages: list.totalPages,
-                    pageSize: list.pageSize,
-                    pageSizeOptions: list.pageSizeOptions,
-                    hasMore: list.hasMore,
-                    stalled: list.stalled,
-                    loadingMore: list.loadingMore,
-                    expectedTotal: worksNum,
-                    onPageChange: list.goToPage,
-                    onPageSizeChange: list.changePageSize,
-                }}
             />
         </div>
     );

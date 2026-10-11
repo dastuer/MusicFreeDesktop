@@ -23,10 +23,13 @@ import {
 import { ipcInvoke } from "@/core/ipc";
 import { navigateToArtist } from "@/utils/artistNav";
 import { showToast } from "./Toast";
+import { useListSearch } from "@/hooks/useListSearch";
+import type { TSheetFixMode } from "@/core/sheetSourceFix";
 
 /**
  * 歌曲列表（桌面端表格形态）：多选框 / 序号 / 封面+歌名+歌手两行主列 / 专辑 / 操作+时长
- * 支持单击播放（整个列表换进播放列表）、右键菜单、多选批量下载/收藏
+ * 支持单击播放（整个列表换进播放列表）、右键菜单、多选批量下载/收藏；
+ * 数据统一走无限滚动：滚到底部（提前 600px）自动向数据源续拉，尾部展示加载中。
  */
 
 /** 首屏渲染行数 / 每次追加行数 */
@@ -58,61 +61,25 @@ function musicKey(musicItem: IMusic.IMusicItem) {
     return `${musicItem.platform}-${musicItem.id}`;
 }
 
-/** 分页器里的一项：页码 / 中间省略 / 末尾还有更多 */
-type PageItem = number | "gap" | "more";
-
-/**
- * 页码列表：页数不多就全列出来，多则只给「首页 + 当前页附近 + 末页」。
- * `hasMore` 表示音源还有更多页（总数未知时用），末尾补一个省略号。
- */
-function buildPageItems(current: number, total: number, hasMore: boolean): PageItem[] {
-    const items: PageItem[] = [];
-    if (total <= 7) {
-        for (let p = 1; p <= total; p++) {
-            items.push(p);
-        }
-    } else {
-        items.push(1);
-        const from = Math.max(2, current - 1);
-        const to = Math.min(total - 1, current + 1);
-        if (from > 2) {
-            items.push("gap");
-        }
-        for (let p = from; p <= to; p++) {
-            items.push(p);
-        }
-        if (to < total - 1) {
-            items.push("gap");
-        }
-        items.push(total);
-    }
-    if (hasMore) {
-        items.push("more");
-    }
-    return items;
-}
-
 interface IMusicListProps {
-    musicList: IMusic.IMusicItem[];
+    /** 列表数据；纯骨架占位（loading 且无数据）时可省略 */
+    musicList?: IMusic.IMusicItem[];
     /** 是否显示封面列（网格行样式） */
     showIndex?: boolean;
+    /** 滚动到底部（提前 600px）时自动调用，向数据源续拉下一批 */
     onLoadMore?: () => void;
-    /** 没有更多了：无限滚动下停止续拉，并在尾部显示「没有更多了」 */
+    /** 没有更多了：停止续拉，并在尾部显示「没有更多了」 */
     isEnd?: boolean;
-    /** 续拉被「卡住」：插件原地踏步或连续失败熔断。autoLoad 下显示手动重试入口 */
+    /** 续拉被「卡住」：插件原地踏步或连续失败熔断。显示手动重试入口 */
     stalled?: boolean;
     /** stalled 时点击重试（不传则按「没有更多了」收尾） */
     onRetry?: () => void;
     /** 首屏 / 重置加载（配合骨架屏） */
     loading?: boolean;
+    /** 骨架屏占位行数（默认 8）：匹配等已知曲目总数的场景传入，让骨架高度贴近最终列表 */
+    skeletonRows?: number;
     /** 追加加载中：列表尾部显示转圈 +「加载中…」 */
     loadingMore?: boolean;
-    /**
-     * 无限滚动：滚到底部（提前 600px）自动调用 onLoadMore 续拉数据，
-     * 尾部显示加载中动画，拉完接着判断是否还在视口内。
-     * 不传时保持老行为：底部显示可点的「加载更多」文字。
-     */
-    autoLoad?: boolean;
     className?: string;
     renderHeader?: React.ReactNode;
     /** 是否启用多选（默认启用） */
@@ -136,10 +103,13 @@ interface IMusicListProps {
     /** 喜欢/移除等操作后的回调（页面刷新用） */
     onMusicChanged?: () => void;
     /**
-     * 传入即启用「每页 N 条」分页模式：只渲染当前页，底部换成页码分页器。
-     * 不传时保持老行为（首屏 150 行的分片渲染 + 手动「加载更多」）。
+     * 音源管理入口（「我的歌单」详情页传入）：
+     *  - 右键单首时以 [musicItem] 调用，多选工具条以选中集合调用；
+     *  - mode: repair 修复音源（探测失效的才配）/ rematch 重新匹配（全部重配）/
+     *    replacer 替换音源（指定一个音源查找并替换）。
+     * 传入后右键菜单与多选工具条才展示这些入口。
      */
-    pagination?: IMusicListPagination;
+    onSourceFix?: (mode: TSheetFixMode, musicItems: IMusic.IMusicItem[]) => void;
     /**
      * 这份列表的稳定标识（歌单 / 专辑 / 榜单 / 本地音乐…各给各的）。
      * 点行播放时带进播放队列，队列已经是这份列表就不再重复整队替换、也不重复提示。
@@ -156,36 +126,16 @@ interface IMusicListProps {
     onSelectModeChange?: (selectMode: boolean) => void;
 }
 
-export interface IMusicListPagination {
-    currentPage: number;
-    totalPages: number;
-    pageSize: number;
-    pageSizeOptions: number[];
-    /** 音源还有更多，下一页可能还要联网拉 */
-    hasMore: boolean;
-    /** 只是拉不到新数据而停下（不是音源说没有），此时不能宣称「共 N 首」 */
-    stalled?: boolean;
-    loadingMore: boolean;
-    /**
-     * 音源声明的总条数（歌单侧是 `sheetItem.worksNum`）。
-     * 插件协议里搜索返回**没有**总数字段，此时传 undefined：
-     * 页数显示成 `1 / 2+`（+ 表示后面还有），条数显示成「已加载 N 首」而不是假的「共 N 首」。
-     */
-    expectedTotal?: number;
-    onPageChange: (page: number) => void;
-    onPageSizeChange: (size: number) => void;
-}
-
 export default function MusicList(props: IMusicListProps) {
     const {
-        musicList,
+        musicList = [],
         onLoadMore,
         isEnd = true,
         stalled = false,
         onRetry,
         loading = false,
         loadingMore = false,
-        autoLoad = false,
+        skeletonRows,
         className,
         selectable = true,
         localMode = false,
@@ -194,7 +144,7 @@ export default function MusicList(props: IMusicListProps) {
         onRemove,
         onRemoveMany,
         onMusicChanged,
-        pagination,
+        onSourceFix,
         listId,
         searchable = false,
         selectMode: selectModeProp,
@@ -220,31 +170,18 @@ export default function MusicList(props: IMusicListProps) {
     };
     /**
      * 搜索关键词：按标题 / 歌手 / 专辑过滤当前已加载的歌曲。
-     * `searchKeyword` 是输入框显示值（跟随打字）；`appliedKeyword` 才真正参与过滤——
      * 输入法拼写（拼音合成）过程中不更新，等候选上屏（compositionEnd）才触发搜索。
      */
-    const [searchKeyword, setSearchKeyword] = useState("");
-    const [appliedKeyword, setAppliedKeyword] = useState("");
-    const composingRef = useRef(false);
-
-    const handleSearchInput = (value: string) => {
-        setSearchKeyword(value);
-        if (!composingRef.current) {
-            setAppliedKeyword(value);
-        }
-    };
-
-    const handleSearchComposition = (value: string, composing: boolean) => {
-        composingRef.current = composing;
-        if (!composing) {
-            setAppliedKeyword(value);
-        }
-    };
-
-    const clearSearch = () => {
-        setSearchKeyword("");
-        setAppliedKeyword("");
-    };
+    const {
+        keyword: searchKeyword,
+        appliedKeyword,
+        trimmedKeyword,
+        isSearching,
+        filteredList,
+        handleInput: handleSearchInput,
+        handleComposition: handleSearchComposition,
+        clear: clearSearch,
+    } = useListSearch(musicList);
     /**
      * 分片渲染：本地音乐动辄上千首，一次性铺满 DOM 会让切页卡住。
      * 首屏只渲染前 150 行，滚到底部哨兵再追加 150 行。
@@ -291,45 +228,26 @@ export default function MusicList(props: IMusicListProps) {
 
     const visibleList =
         musicList.length > visibleCount ? musicList.slice(0, visibleCount) : musicList;
+    /** 搜索时在过滤结果里分片渲染；平时渲染已加载条目的前 visibleCount 行 */
+    const rowList = isSearching ? filteredList.slice(0, visibleCount) : visibleList;
 
-    /** 搜索过滤：匹配标题 / 别名 / 歌手 / 专辑（不分页限制，在全量已加载列表里找） */
-    const trimmedKeyword = appliedKeyword.trim();
-    const isSearching = trimmedKeyword.length > 0;
-    const filteredList = useMemo(() => {
-        if (!isSearching) {
-            return musicList;
-        }
-        const kw = trimmedKeyword.toLowerCase();
-        return musicList.filter((it) =>
-            [it.title, it.alias, it.artist, it.album].some(
-                (v) => typeof v === "string" && v.toLowerCase().includes(kw),
-            ),
-        );
-    }, [musicList, isSearching, trimmedKeyword]);
-
-    /**
-     * 分页模式：只把当前页交给渲染，序号仍按全量列表连续编号。
-     * 此时不走 visibleCount 分片（一页最多 200 行，不需要再切）。
-     * 搜索时忽略分页：直接在过滤结果里分片渲染，序号从 1 连续编号。
-     */
-    const pageStart = pagination ? (pagination.currentPage - 1) * pagination.pageSize : 0;
-    const rowList = isSearching
-        ? filteredList.slice(0, visibleCount)
-        : pagination
-          ? musicList.slice(pageStart, pageStart + pagination.pageSize)
-          : visibleList;
-    const rowOffset = isSearching || !pagination ? 0 : pageStart;
-    /** 搜索时没有「页」的概念，全选按钮等文案按无分页处理 */
-    const pagingActive = !!pagination && !isSearching;
     /**
      * 骨架屏：有加载在跑、但当前一行都渲染不出来时顶上——
-     * 首屏加载（loading）和分页换页数据未到（loadingMore 且本页为空）都算。
+     * 首屏加载（loading）和续拉数据未到（loadingMore 且列表为空）都算。
      * 已有内容时的追加加载仍走底部「加载中…」提示，不闪骨架。
      */
     const showSkeleton =
-        !isSearching &&
-        rowList.length === 0 &&
-        (loading || (!!pagination && pagination.loadingMore));
+        !isSearching && rowList.length === 0 && (loading || loadingMore);
+
+    /**
+     * 骨架行数：默认 8 行；传入 skeletonRows 时按预期行数撑起骨架，
+     * 但不超过真实渲染的分片上限（visibleCount）——否则长列表完成后
+     * 行数从骨架回落，反而造成跳动。
+     */
+    const skeletonCount = Math.min(
+        skeletonRows ?? SKELETON_WIDTHS.length,
+        visibleCount,
+    );
 
     /**
      * 无限滚动：数据哨兵进入视口 → 向数据源续拉。
@@ -339,8 +257,6 @@ export default function MusicList(props: IMusicListProps) {
      */
     const allRowsRendered = visibleCount >= musicList.length;
     const canAutoLoad =
-        autoLoad &&
-        !pagination &&
         !isSearching &&
         !!onLoadMore &&
         !loading &&
@@ -424,11 +340,10 @@ export default function MusicList(props: IMusicListProps) {
     };
 
     /**
-     * 「全选」的作用范围：分页模式下只作用于当前页，搜索时作用于过滤结果里已渲染的行。
-     * 否则在第 1 页点全选会连带把后面几十页没看见的歌一起选中，批量下载/删除容易出事。
+     * 「全选」的作用范围：搜索时作用于过滤结果里已渲染的行，平时是整份列表。
      * 手选不受影响——已选集合是跨页保留的。
      */
-    const selectableList = isSearching || pagination ? rowList : musicList;
+    const selectableList = isSearching ? rowList : musicList;
     const allSelected =
         selectableList.length > 0 &&
         selectableList.every((it) => selectedKeys.has(musicKey(it)));
@@ -523,6 +438,16 @@ export default function MusicList(props: IMusicListProps) {
         clearSelection();
     };
 
+    /** 多选批量音源管理：交给详情页弹音源选择 + 对比确认弹窗 */
+    const runSourceFix = (mode: TSheetFixMode) => {
+        if (!selectedItems.length) {
+            showToast("请先选择歌曲");
+            return;
+        }
+        onSourceFix?.(mode, selectedItems);
+        clearSelection();
+    };
+
     const openInFinder = (musicItem: IMusic.IMusicItem) => {
         if (!musicItem.localPath) {
             showToast("该歌曲没有本地文件");
@@ -596,6 +521,27 @@ export default function MusicList(props: IMusicListProps) {
                     }),
             },
         ];
+
+        // 「我的歌单」里的音源管理：单首修复 / 重配 / 替换音源（详情页传入口才显示）
+        if (userSheetMode && onSourceFix) {
+            items.push(
+                {
+                    title: "重新匹配音乐",
+                    icon: "refresh",
+                    onClick: () => onSourceFix("rematch", [musicItem]),
+                },
+                {
+                    title: "替换音源",
+                    icon: "forward",
+                    onClick: () => onSourceFix("replacer", [musicItem]),
+                },
+                {
+                    title: "修复音源",
+                    icon: "plugin",
+                    onClick: () => onSourceFix("repair", [musicItem]),
+                },
+            );
+        }
 
         if (localMode) {
             items.push(
@@ -725,32 +671,14 @@ export default function MusicList(props: IMusicListProps) {
                             )}
                         </div>
                     )}
-                    {!selectModeControlled && (
-                        <button
-                            className="btn-ghost"
-                            onClick={() =>
-                                changeSelectMode(!selectMode)
-                            }
-                        >
-                            <Icon name={selectMode ? "close" : "check"} size={13} />
-                            {selectMode ? "退出多选" : "多选"}
-                        </button>
-                    )}
+                    {/* 多选入口统一收进页面头部的「…」更多菜单（selectModeControlled 页面自己控制显隐） */}
                 </div>
             )}
             <div className="music-list-header">
                 {selectable && selectMode && (
                     <div
                         className={`music-row-check header-check${allSelected ? " checked" : ""}`}
-                        title={
-                            pagingActive
-                                ? allSelected
-                                    ? "取消全选本页"
-                                    : "全选本页"
-                                : allSelected
-                                  ? "取消全选"
-                                  : "全选"
-                        }
+                        title={allSelected ? "取消全选" : "全选"}
                         onClick={toggleSelectAll}
                     >
                         {allSelected && <Icon name="check" size={11} />}
@@ -763,10 +691,9 @@ export default function MusicList(props: IMusicListProps) {
             </div>
             {rowList.map((musicItem, index) => {
                 const playing = TrackPlayerSingleton.isCurrentMusic(musicItem);
-                const rowIndex = rowOffset + index;
+                const rowIndex = index;
                 const k = keyOf(musicItem, rowIndex);
                 const checked = selectMode && selectedKeys.has(k);
-                const liked = likedKeys.has(k);
                 return (
                     <div
                         key={`${k}-${rowIndex}`}
@@ -849,16 +776,6 @@ export default function MusicList(props: IMusicListProps) {
                             {musicItem.album}
                         </div>
                         <div className="music-row-actions">
-                            <span
-                                className={`music-action-btn like${liked ? " liked" : ""}`}
-                                title={liked ? "取消喜欢" : "喜欢"}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleToggleLike(musicItem);
-                                }}
-                            >
-                                <Icon name={liked ? "heartFilled" : "heart"} size={15} />
-                            </span>
                             {localMode ? (
                                 <>
                                     <span
@@ -894,7 +811,10 @@ export default function MusicList(props: IMusicListProps) {
             })}
             {showSkeleton && (
                 <div className="music-skeleton" aria-hidden>
-                    {SKELETON_WIDTHS.map((w, i) => (
+                    {Array.from(
+                        { length: skeletonCount },
+                        (_, i) => SKELETON_WIDTHS[i % SKELETON_WIDTHS.length],
+                    ).map((w, i) => (
                         <div className="music-skeleton-row" key={i}>
                             <div className="music-skeleton-bar music-skeleton-index" />
                             <div className="music-skeleton-main">
@@ -919,37 +839,20 @@ export default function MusicList(props: IMusicListProps) {
                     ))}
                 </div>
             )}
-            {!pagination && visibleCount < (isSearching ? filteredList.length : musicList.length) && (
+            {visibleCount < (isSearching ? filteredList.length : musicList.length) && (
                 <div ref={sentinelRef} className="music-list-sentinel" />
             )}
             {/* 无限滚动数据哨兵：已加载行全部渲染完、且还能续拉时挂在尾部，进视口即触发续拉 */}
             {canAutoLoad && <div ref={loadSentinelRef} className="music-list-sentinel" />}
             {/* 加载中（续拉，或首屏后仍有内容的加载）：转圈 + 文案 */}
-            {!pagination && (loadingMore || (loading && rowList.length > 0)) && (
+            {(loadingMore || (loading && rowList.length > 0)) && (
                 <div className="loading-hint music-list-loading">
                     <span className="music-list-spinner" aria-hidden />
                     加载中…
                 </div>
             )}
-            {/* 老式手动「加载更多」（非无限滚动、非自动加载中） */}
-            {!pagination &&
-                !autoLoad &&
-                !loading &&
-                !loadingMore &&
-                !isEnd &&
-                onLoadMore && (
-                    <div
-                        className="loading-hint"
-                        style={{ cursor: "pointer" }}
-                        onClick={onLoadMore}
-                    >
-                        加载更多
-                    </div>
-                )}
-            {/* 无限滚动续拉被卡住（插件原地踏步 / 连续失败）：手动重试入口 */}
-            {!pagination &&
-                autoLoad &&
-                !loading &&
+            {/* 续拉被卡住（插件原地踏步 / 连续失败）：手动重试入口 */}
+            {!loading &&
                 !loadingMore &&
                 stalled &&
                 !isEnd &&
@@ -962,10 +865,8 @@ export default function MusicList(props: IMusicListProps) {
                         加载中断，点击重试
                     </div>
                 )}
-            {/* 无限滚动到底：所有已加载行渲染完 + 音源报 isEnd，收尾提示 */}
-            {!pagination &&
-                autoLoad &&
-                !isSearching &&
+            {/* 滚动到底：所有已加载行渲染完 + 音源报 isEnd，收尾提示 */}
+            {!isSearching &&
                 !loading &&
                 !loadingMore &&
                 isEnd &&
@@ -980,107 +881,6 @@ export default function MusicList(props: IMusicListProps) {
                         : "没有找到匹配的歌曲"}
                 </div>
             )}
-            {pagingActive && musicList.length > 0 && (
-                <div className="music-pager">
-                    <div className="music-pager-info">
-                        <span className="music-pager-count">
-                            {pagination.expectedTotal && pagination.expectedTotal > 0
-                                ? `共 ${pagination.expectedTotal} 首`
-                                : pagination.hasMore || pagination.stalled
-                                  ? // 还有更多、或只是拉不动了：手上这些不一定是全部
-                                    `已加载 ${musicList.length} 首`
-                                  : `共 ${musicList.length} 首`}
-                        </span>
-                        <span className="music-pager-dot" />
-                        <label className="music-pager-size">
-                            <span>每页</span>
-                            {/* appearance:none 之后原生箭头会消失，自己补一个 */}
-                            <span className="music-pager-select-wrap">
-                                <select
-                                    className="music-pager-select"
-                                    value={pagination.pageSize}
-                                    onChange={(e) =>
-                                        pagination.onPageSizeChange(Number(e.target.value))
-                                    }
-                                >
-                                    {pagination.pageSizeOptions.map((n) => (
-                                        <option key={n} value={n} style={{ color: "#333" }}>
-                                            {n}
-                                        </option>
-                                    ))}
-                                </select>
-                                <span className="music-pager-caret" aria-hidden />
-                            </span>
-                            <span>条</span>
-                        </label>
-                        {pagination.loadingMore && (
-                            <span className="music-pager-loading">加载中…</span>
-                        )}
-                    </div>
-                    <div className="music-pager-nav">
-                        <button
-                            className="pager-btn pager-step"
-                            disabled={pagination.currentPage <= 1 || pagination.loadingMore}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                pagination.onPageChange(pagination.currentPage - 1);
-                            }}
-                        >
-                            <Icon name="back" size={12} />
-                            上一页
-                        </button>
-                        {buildPageItems(
-                            pagination.currentPage,
-                            pagination.totalPages,
-                            pagination.hasMore &&
-                                (!pagination.expectedTotal || pagination.expectedTotal <= 0),
-                        ).map((item, i) =>
-                            item === "gap" ? (
-                                <span className="pager-gap" key={`gap-${i}`}>
-                                    …
-                                </span>
-                            ) : item === "more" ? (
-                                <span
-                                    className="pager-gap"
-                                    key="more"
-                                    title="还有更多，点「下一页」继续加载"
-                                >
-                                    …
-                                </span>
-                            ) : (
-                                <button
-                                    key={item}
-                                    className={`pager-btn pager-num${
-                                        item === pagination.currentPage ? " active" : ""
-                                    }`}
-                                    disabled={pagination.loadingMore}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        pagination.onPageChange(item);
-                                    }}
-                                >
-                                    {item}
-                                </button>
-                            ),
-                        )}
-                        <button
-                            className="pager-btn pager-step"
-                            disabled={
-                                pagination.loadingMore ||
-                                (pagination.currentPage >= pagination.totalPages &&
-                                    !pagination.hasMore)
-                            }
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                pagination.onPageChange(pagination.currentPage + 1);
-                            }}
-                        >
-                            下一页
-                            <Icon name="forward" size={12} />
-                        </button>
-                    </div>
-                </div>
-            )}
             {!loading && !isSearching && !musicList.length && (
                 <div className="empty-hint">这里空空如也</div>
             )}
@@ -1090,13 +890,7 @@ export default function MusicList(props: IMusicListProps) {
                         已选 {selectedKeys.size} 首
                     </span>
                     <button className="btn-ghost" onClick={toggleSelectAll}>
-                        {allSelected
-                            ? pagingActive
-                                ? "取消全选本页"
-                                : "取消全选"
-                            : pagingActive
-                              ? "全选本页"
-                              : "全选"}
+                        {allSelected ? "取消全选" : "全选"}
                     </button>
                     {localMode ? (
                         <button className="btn-ghost danger" onClick={() => deleteLocalMusic(selectedItems)}>
@@ -1118,6 +912,22 @@ export default function MusicList(props: IMusicListProps) {
                             <Icon name="heart" size={14} />
                             取消收藏
                         </button>
+                    )}
+                    {userSheetMode && onSourceFix && (
+                        <>
+                            <button className="btn-ghost" onClick={() => runSourceFix("rematch")}>
+                                <Icon name="refresh" size={14} />
+                                重新匹配
+                            </button>
+                            <button className="btn-ghost" onClick={() => runSourceFix("replacer")}>
+                                <Icon name="forward" size={14} />
+                                替换音源
+                            </button>
+                            <button className="btn-ghost" onClick={() => runSourceFix("repair")}>
+                                <Icon name="plugin" size={14} />
+                                修复音源
+                            </button>
+                        </>
                     )}
                     <button className="btn-ghost" onClick={addSelectedToPlayList}>
                         <Icon name="plus" size={14} />

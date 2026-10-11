@@ -15,21 +15,19 @@ import { showAddToSheetPanel } from "@/components/base/AddToSheetPanel";
 import { showDownloadPanel } from "@/components/base/DownloadPanel";
 import { showPrompt } from "@/components/base/PromptDialog";
 import { showToast } from "@/components/base/Toast";
+import { showSheetFixPanel } from "@/components/base/SheetFixPanel";
 import { navigate } from "@/core/router";
 import { usePagedMusicList } from "@/hooks/usePagedMusicList";
+import type { TSheetFixMode } from "@/core/sheetSourceFix";
 
 /**
  * 歌单详情页：
  *  - 插件歌单（params.sheetItem）：getMusicSheetInfo 按音源页码加载
  *  - 本地歌单 / 我喜欢的音乐（params.userSheetId）：主进程持久化，支持管理操作
  *
- * 列表按「每页 N 条」展示（默认 40，可在底部切换）。音源的 page 是页码不是条数，
- * 凑不满一页时 usePagedMusicList 会自动继续拉下一页，对用户表现为普通的页码分页。
+ * 列表统一走无限滚动：滚到底部自动向音源续拉下一页（去重、串行、失败可重试都在
+ * usePagedMusicList 里），尾部展示加载中。
  */
-
-/** 每页条数偏好按列表分开记忆（与搜索页各存一份） */
-const SHEET_PAGE_SIZE_KEY = "pagedList.pageSize.sheetDetail";
-const SHEET_DEFAULT_PAGE_SIZE = 40;
 
 interface ISheetDetailPageProps {
     sheetItem?: IMusic.IMusicSheetItem;
@@ -129,10 +127,7 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
 
     const list = usePagedMusicList<IMusic.IMusicItem>({
         fetchPage,
-        defaultPageSize: SHEET_DEFAULT_PAGE_SIZE,
-        storageKey: SHEET_PAGE_SIZE_KEY,
         resetKey: `${sheetItem?.id ?? ""}|${userSheetId ?? ""}`,
-        expectedTotal: worksNum,
     });
     const { replaceAll } = list;
 
@@ -207,6 +202,24 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
         navigate("home");
     };
 
+    /**
+     * 音源管理（仅本机歌单）：重新匹配 / 替换音源 / 修复音源。
+     * items 是目标范围——头部菜单传整张歌单，列表多选/右键传选中或单首；
+     * 选音源、探测、匹配、对比确认都在弹窗里走，完成后 onDone 刷新列表。
+     */
+    const openSheetFix = (mode: TSheetFixMode, items: IMusic.IMusicItem[]) => {
+        if (!userSheetId || !items.length) {
+            return;
+        }
+        showSheetFixPanel({
+            mode,
+            sheetId: userSheetId,
+            sheetTitle: title,
+            items,
+            onDone: refreshUserSheet,
+        });
+    };
+
     return (
         <div>
             <MediaHeader
@@ -224,8 +237,7 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                               ? `共 ${list.items.length} 首`
                               : `已加载 ${list.items.length} 首`
                           : "",
-                ].filter(Boolean)}
-                // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
+                ].filter(Boolean)}                // 我的歌单里列表就是收藏结果，不再提供「收藏全部」
                 hideFavoriteAll={isUserSheet}
                 listId={listId}
                 // 重命名 / 删除歌单只对本机歌单开放（「我喜欢的音乐」不可改不可删）；
@@ -237,6 +249,25 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                                   title: "多选",
                                   icon: "check",
                                   onClick: () => setSelectMode(true),
+                              },
+                          ]
+                        : []),
+                    ...(isUserSheet && list.items.length > 0
+                        ? [
+                              {
+                                  title: "重新匹配音乐",
+                                  icon: "refresh",
+                                  onClick: () => openSheetFix("rematch", list.items),
+                              },
+                              {
+                                  title: "替换音源",
+                                  icon: "forward",
+                                  onClick: () => openSheetFix("replacer", list.items),
+                              },
+                              {
+                                  title: "修复音源",
+                                  icon: "plugin",
+                                  onClick: () => openSheetFix("repair", list.items),
                               },
                           ]
                         : []),
@@ -271,6 +302,11 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
             <MusicList
                 musicList={list.items}
                 loading={list.loading}
+                loadingMore={list.loadingMore}
+                isEnd={list.isEnd}
+                stalled={list.stalled}
+                onRetry={list.retry}
+                onLoadMore={list.loadMore}
                 listId={listId}
                 searchable
                 selectMode={selectMode}
@@ -280,18 +316,9 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                 onRemove={isUserSheet ? handleRemove : undefined}
                 onRemoveMany={isUserSheet ? handleRemoveMany : undefined}
                 onMusicChanged={isUserSheet ? refreshUserSheet : undefined}
-                pagination={{
-                    currentPage: list.currentPage,
-                    totalPages: list.totalPages,
-                    pageSize: list.pageSize,
-                    pageSizeOptions: list.pageSizeOptions,
-                    hasMore: list.hasMore,
-                    stalled: list.stalled,
-                    loadingMore: list.loadingMore,
-                    expectedTotal: worksNum,
-                    onPageChange: list.goToPage,
-                    onPageSizeChange: list.changePageSize,
-                }}
+                onSourceFix={
+                    isUserSheet ? (mode, items) => openSheetFix(mode, items) : undefined
+                }
             />
         </div>
     );

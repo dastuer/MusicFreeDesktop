@@ -1,18 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import MusicList from "@/components/base/MusicList";
 import Cover from "@/components/base/Cover";
+import Icon from "@/components/base/Icon";
 import { getSortedSearchablePlugins, pluginCall, SerializedPlugin } from "@/core/ipc";
 import { getSearchSource, setSearchSource } from "@/core/mediaSource";
 import { uniqueById } from "@/core/collections";
 import { navigate, onRouteDiscarded, useCurrentRoute } from "@/core/router";
 import { IPagedSnapshot, usePagedMusicList } from "@/hooks/usePagedMusicList";
+import { showContextMenu } from "@/components/base/ContextMenu";
 import { showToast } from "@/components/base/Toast";
 
 /**
  * 搜索页：音乐/歌单/专辑/歌手 四个 tab，可切换音源插件
  *
- * - 单曲：走 usePagedMusicList 的无限滚动模式——一次铺一屏的量（每批 40 条，
- *   可按历史偏好），滚到底部自动向音源续拉，不再有点页码的分页器；
+ * - 单曲：走 usePagedMusicList 的无限滚动模式——滚到底部自动向音源续拉；
  * - 歌单/专辑/歌手：音源一次返回一屏卡片，不分页。
  */
 
@@ -22,10 +23,6 @@ const searchTabs: { key: string; label: string }[] = [
     { key: "album", label: "专辑" },
     { key: "artist", label: "歌手" },
 ];
-
-/** 每页条数偏好按列表分开记忆（与歌单详情各存一份） */
-const SEARCH_PAGE_SIZE_KEY = "pagedList.pageSize.searchMusic";
-const SEARCH_DEFAULT_PAGE_SIZE = 40;
 
 /**
  * 搜索页现场快照：主内容区按路由条目整体重挂载（见 App.tsx），从歌单/专辑/歌手
@@ -73,6 +70,8 @@ export default function SearchPage(props: ISearchPageProps) {
     /** 歌单/专辑/歌手 的卡片结果 */
     const [results, setResults] = useState<any[]>(restored?.results ?? []);
     const [cardLoading, setCardLoading] = useState(false);
+    /** 多选模式：入口在 tab 行右侧「…」更多菜单里，状态由页面和 MusicList 共享（同歌单/榜单详情页） */
+    const [selectMode, setSelectMode] = useState(false);
 
     useEffect(() => {
         getSortedSearchablePlugins().then((list: SerializedPlugin[]) => {
@@ -136,8 +135,6 @@ export default function SearchPage(props: ISearchPageProps) {
 
     const musicList = usePagedMusicList<IMusic.IMusicItem>({
         fetchPage: fetchMusicPage,
-        defaultPageSize: SEARCH_DEFAULT_PAGE_SIZE,
-        storageKey: SEARCH_PAGE_SIZE_KEY,
         resetKey: `${searchedQuery}|${type}|${plugin?.hash ?? ""}|${props.refresh ?? 0}`,
         initial: restored?.paged,
     });
@@ -175,8 +172,6 @@ export default function SearchPage(props: ISearchPageProps) {
             type === "music" && !musicList.loading
                 ? {
                       items: musicList.items,
-                      currentPage: musicList.currentPage,
-                      pageSize: musicList.pageSize,
                       isEnd: musicList.isEnd,
                       stalled: musicList.stalled,
                       sourcePage: musicList.sourcePage,
@@ -202,12 +197,14 @@ export default function SearchPage(props: ISearchPageProps) {
                     musicList={musicList.items}
                     loading={musicList.loading}
                     loadingMore={musicList.loadingMore}
-                    autoLoad
                     isEnd={musicList.isEnd}
                     stalled={musicList.stalled}
                     onRetry={musicList.retry}
                     onLoadMore={musicList.loadMore}
+                    searchable
                     listId={`search:${searchedQuery}:${plugin?.hash ?? ""}`}
+                    selectMode={selectMode}
+                    onSelectModeChange={setSelectMode}
                 />
             );
         }
@@ -330,6 +327,27 @@ export default function SearchPage(props: ISearchPageProps) {
                         {tab.label}
                     </button>
                 ))}
+                {type === "music" && musicList.items.length > 0 && (
+                    <button
+                        className="btn-ghost media-header-more"
+                        title="更多操作"
+                        style={{ marginLeft: "auto" }}
+                        onClick={(e) => {
+                            // 阻止冒泡：context-menu 靠 window 的 click 关闭，不拦的话刚打开就会被这次点击关掉
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            showContextMenu(rect.left, rect.bottom + 8, [
+                                {
+                                    title: "多选",
+                                    icon: "check",
+                                    onClick: () => setSelectMode(true),
+                                },
+                            ]);
+                        }}
+                    >
+                        <Icon name="more" size={16} />
+                    </button>
+                )}
             </div>
 
             {!searchedQuery && (

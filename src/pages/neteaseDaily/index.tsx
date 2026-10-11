@@ -92,8 +92,9 @@ export default function NeteaseDailyPage() {
         getCachedNeteaseProfile(),
     );
     const profileRef = useRef<INeteaseProfile | null>(profile);
-    // 刷新按钮带来的「本次不走缓存」标记：effect 开头消费一次，只作用于这一轮
-    const ignoreCacheRef = useRef(false);
+    // 刷新按钮带来的「本次重拉歌单网格」标记：effect 开头消费一次，只作用于这一轮。
+    // 只影响网格（手动刷新本就该重拉个性化接口），匹配始终走复用/映射缓存
+    const forceRefreshRef = useRef(false);
 
     // 会话按日期隔离：跨天自然失效重跑；页面重挂载复用进行中/已完成的会话
     const dailyKey = `daily:${dateStr()}`;
@@ -103,9 +104,9 @@ export default function NeteaseDailyPage() {
         let cancelled = false;
         setDailyError("");
         setPlaylistsError("");
-        // 手动刷新标记在 effect 开头消费一次：只作用于这一轮，之后恢复「缓存优先」
-        const forceRefresh = ignoreCacheRef.current;
-        ignoreCacheRef.current = false;
+        // 刷新标记在 effect 开头消费一次：只作用于这一轮的网格拉取，之后恢复「缓存优先」
+        const forceRefresh = forceRefreshRef.current;
+        forceRefreshRef.current = false;
         // 与 songsPending 初值同一套判断（刷新按钮会先 reset 会话，这里要重新置起）
         const currentSession = getMatchSession(dailyKey);
         setSongsPending(!currentSession || currentSession.status === "error");
@@ -136,7 +137,8 @@ export default function NeteaseDailyPage() {
             }
             const today = dateStr();
             const cache = readGridCache();
-            // 网格缓存对「今天 + 当前账号」有效（账号资料暂时拿不到时姑且信缓存）
+            // 网格缓存对「今天 + 当前账号」有效；手动刷新（forceRefresh）时重拉，
+            // 自动重拉仍被刻意禁止——防止把正在看/正在播放的卡片从网格里挤掉
             const cacheValid =
                 !forceRefresh &&
                 !!cache &&
@@ -228,10 +230,9 @@ export default function NeteaseDailyPage() {
             }
             setPhase("ready");
             if (needSongsFetch && dailySongs.length) {
-                // 同 key 会话在跑/已完成时内部会复用；手动刷新已先 reset 并带不走缓存标记
-                startMatchSession(dailyKey, "每日推荐", dailySongs, {
-                    ignoreCache: forceRefresh,
-                });
+                // 同 key 会话在跑/已完成时内部会复用；刷新按钮已先 reset——
+                // 上一轮结果还在 lastResults 里，曲目没变直接复用不重配
+                startMatchSession(dailyKey, "每日推荐", dailySongs);
             }
         })();
         return () => {
@@ -247,10 +248,10 @@ export default function NeteaseDailyPage() {
         [session],
     );
 
-    /** 显式刷新：丢掉当前会话重新拉取，强制不走缓存完整重配（新结果仍回写缓存） */
+    /** 显式刷新：重新拉数据。曲目没变直接复用上一轮匹配结果，变了才重配没匹配过的歌 */
     const refresh = () => {
         resetMatchSession(dailyKey);
-        ignoreCacheRef.current = true;
+        forceRefreshRef.current = true;
         setReloadKey((k) => k + 1);
     };
 
@@ -344,10 +345,20 @@ export default function NeteaseDailyPage() {
 
             {phase !== "anonymous" && (
                 <>
-                    {/* 歌曲区：会话存在就直接用会话渲染（重挂载不重跑），否则按冷启动兜底 */}
+                    {/* 歌曲区：会话存在就直接用会话渲染（重挂载不重跑），否则按冷启动兜底。
+                        匹配中/冷启动各阶段都渲染骨架 MusicList，只换上方的状态条——
+                        骨架与真实列表同构等高，完成后原地替换不顶开页面。 */}
                     {session ? (
                         session.status === "running" || session.status === "loading" ? (
-                            <NeteaseMatchingPanel view={session} />
+                            <>
+                                <NeteaseMatchingPanel view={session} />
+                                <MusicList
+                                    loading
+                                    skeletonRows={session.total || undefined}
+                                    searchable
+                                    selectable={false}
+                                />
+                            </>
                         ) : session.status === "error" ? (
                             <div className="source-note">{session.error}</div>
                         ) : (
@@ -391,11 +402,11 @@ export default function NeteaseDailyPage() {
                             </>
                         )
                     ) : phase === "loading" ? (
-                        <div className="empty-hint">正在连接网易云账号…</div>
+                        <SkeletonWithHint hint="正在连接网易云账号…" />
                     ) : songsPending ? (
-                        <div className="empty-hint">正在获取今日推荐歌曲…</div>
+                        <SkeletonWithHint hint="正在获取今日推荐歌曲…" />
                     ) : songs.length > 0 ? (
-                        <div className="empty-hint">正在准备匹配…</div>
+                        <SkeletonWithHint hint="正在准备匹配…" />
                     ) : (
                         !dailyError && <div className="empty-hint">今天暂时没有推荐歌曲</div>
                     )}
@@ -451,5 +462,25 @@ export default function NeteaseDailyPage() {
                 </>
             )}
         </div>
+    );
+}
+
+/**
+ * 冷启动各阶段的骨架占位：骨架 MusicList 顶住列表高度，上方一行状态文字。
+ * 与匹配中同构，阶段切换只换文字不换结构，页面不抖。
+ */
+function SkeletonWithHint(props: { hint: string }) {
+    return (
+        <>
+            <div className="netease-matching-strip" role="status">
+                <span className="netease-matching-spin slow" aria-hidden>
+                    <Icon name="musicNote" size={13} />
+                </span>
+                <span className="netease-matching-text">
+                    <span className="netease-matching-title">{props.hint}</span>
+                </span>
+            </div>
+            <MusicList loading searchable selectable={false} />
+        </>
     );
 }

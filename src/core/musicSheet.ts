@@ -130,6 +130,62 @@ export async function removeMusicFromSheet(id: string, musicItem: IMusic.IMusicI
     await removeMusicFromSheetMany(id, [musicItem]);
 }
 
+/**
+ * 歌单内音源替换：把 from 在原位置换成 to（不改变歌曲顺序，一次读取一次落盘）。
+ *
+ * 用于「重新匹配音乐 / 修复音源」：匹配出的新曲目顶掉旧条目，歌单的排列保持原样。
+ * 逐对顺序处理，两道防线避免替换出重复行：
+ *  - 目标曲目已在歌单里（占据别的行）→ 跳过这条替换；
+ *  - 同一批里两行换成了同一首 → 先换的生效，后一条因上面的检查自然被跳过。
+ *
+ * @returns appliedPairs 是真正落盘的替换（播放队列同步用它，两边口径必须一致）
+ */
+export async function replaceMusicInSheetMany(
+    id: string,
+    replacements: { from: IMusic.IMusicItem; to: IMusic.IMusicItem }[],
+): Promise<{
+    applied: number;
+    skipped: number;
+    appliedPairs: { from: IMusic.IMusicItem; to: IMusic.IMusicItem }[];
+}> {
+    const appliedPairs: { from: IMusic.IMusicItem; to: IMusic.IMusicItem }[] = [];
+    if (!replacements.length) {
+        return { applied: 0, skipped: 0, appliedPairs };
+    }
+    const sheets = await getUserSheets();
+    const sheet = sheets.find((it) => it.id === id);
+    if (!sheet) {
+        return { applied: 0, skipped: replacements.length, appliedPairs };
+    }
+    let skipped = 0;
+    for (const { from, to } of replacements) {
+        const fromIdx = sheet.musicList.findIndex(
+            (it) => mediaKey(it) === mediaKey(from),
+        );
+        if (fromIdx < 0) {
+            skipped++;
+            continue;
+        }
+        // 目标曲目已占着别的行：换上去就出现重复行，跳过
+        const conflict = sheet.musicList.some(
+            (it, idx) => idx !== fromIdx && mediaKey(it) === mediaKey(to),
+        );
+        if (conflict) {
+            skipped++;
+            continue;
+        }
+        sheet.musicList[fromIdx] = to;
+        appliedPairs.push({ from, to });
+    }
+    if (appliedPairs.length) {
+        await saveSheets(sheets);
+        if (id === LIKES_SHEET_ID) {
+            bumpLikesVersion();
+        }
+    }
+    return { applied: appliedPairs.length, skipped, appliedPairs };
+}
+
 export async function renameSheet(id: string, title: string) {
     const sheets = await getUserSheets();
     const sheet = sheets.find((it) => it.id === id);

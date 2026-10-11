@@ -9,7 +9,7 @@ import configStore from "./services/configStore";
 import localMusic from "./services/localMusic";
 import builtinMusic from "./services/builtinMusic";
 import downloadService from "./services/downloadService";
-import cacheManager, { CacheKey } from "./services/cacheManager";
+import cacheManager, { CacheKey, RendererCacheStats } from "./services/cacheManager";
 import mediaCache, {
     DEFAULT_MEDIA_CACHE_LIMIT,
 } from "./services/mediaCache";
@@ -444,6 +444,19 @@ ipcMain.handle("localMusic:rebuildCovers", async (_e, onlyMissing?: boolean) => 
     }
 });
 
+// 批量检查本地文件是否存在（音源修复里判断「本地文件丢失」用）
+ipcMain.handle("localMusic:checkPaths", (_e, paths: string[]) => {
+    const result: Record<string, boolean> = {};
+    for (const p of paths ?? []) {
+        try {
+            result[p] = typeof p === "string" && p.length > 0 && fs.existsSync(p);
+        } catch {
+            result[p] = false;
+        }
+    }
+    return result;
+});
+
 // 在访达中显示本地音乐文件
 ipcMain.handle("localMusic:openInFinder", (_e, localPath: string) => {
     if (localPath && fs.existsSync(localPath)) {
@@ -547,56 +560,92 @@ function humanSize(bytes: number): string {
     return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-ipcMain.handle("cache:info", () => cacheManager.getInfo());
+const CACHE_KEYS: CacheKey[] = ["media", "cover", "http", "temp", "storage", "match"];
 
-ipcMain.handle("cache:clear", async (_e, rawKeys: string[], extraRefs: string[] = []) => {
-    // 只用已知类别，避免渲染层传来奇怪的 key
-    const keys = (rawKeys ?? []).filter((k): k is CacheKey =>
-        ["media", "cover", "http", "temp", "storage"].includes(k),
-    );
-    if (!keys.length) {
-        return { success: false, canceled: true };
+/**
+ * 渲染层随缓存请求带来的本地存储统计（主进程读不到渲染进程的 localStorage）。
+ * 目前只有匹配缓存需要这么报数；多余/不完整的字段直接忽略。
+ */
+function parseRendererStats(raw: any): RendererCacheStats | undefined {
+    if (raw && typeof raw === "object") {
+        const m = raw.match;
+        if (
+            m &&
+            typeof m === "object" &&
+            typeof m.count === "number" &&
+            typeof m.size === "number"
+        ) {
+            return { match: { count: m.count, size: m.size } };
+        }
     }
-    try {
-        const info = await cacheManager.getInfo();
-        const targets = info.categories.filter((c) => keys.includes(c.key));
-        // 用「实际可清理」而不是总占用：封面缓存只删残留，数字对不上会让人以为没清掉
-        const total = targets.reduce((sum, c) => sum + c.clearable, 0);
-        if (total === 0) {
-            return { success: false, canceled: true, empty: true };
-        }
+    return undefined;
+}
 
-        const notes: string[] = [];
-        if (keys.includes("media")) {
-            notes.push("播放缓存清除后，下次播放这些歌曲需要重新下载。");
-        }
-        if (keys.includes("cover")) {
-            notes.push("封面缓存只清理无人引用的残留文件，正在显示的封面会保留。");
-        }
-        if (keys.includes("storage")) {
-            notes.push("本地存储包含当前播放列表与界面偏好，清除后需重启应用生效。");
-        }
+ipcMain.handle("cache:info", (_e, rendererStats: any) =>
+    cacheManager.getInfo(false, parseRendererStats(rendererStats)),
+);
+// 主动统计（点「刷新」）：显式允许扫描外置宗卷上的下载临时文件，此时才可能弹系统授权框
+ipcMain.handle("cache:infoFull", (_e, rendererStats: any) =>
+    cacheManager.getInfo(true, parseRendererStats(rendererStats)),
+);
 
-        const { response } = await dialog.showMessageBox({
-            type: keys.includes("storage") ? "warning" : "info",
-            title: "清除缓存",
-            message: `确定清除「${targets.map((c) => c.label).join("、")}」吗？`,
-            detail: `预计释放 ${humanSize(total)}。${notes.length ? `\n\n${notes.join("\n")}` : ""}`,
-            buttons: ["取消", "清除"],
-            defaultId: 0,
-            cancelId: 0,
-        });
-        if (response !== 1) {
+ipcMain.handle(
+    "cache:clear",
+    async (_e, rawKeys: string[], extraRefs: string[] = [], rendererStats: any = undefined) => {
+        // 只用已知类别，避免渲染层传来奇怪的 key
+        const keys = (rawKeys ?? []).filter((k): k is CacheKey => CACHE_KEYS.includes(k as any));
+        if (!keys.length) {
             return { success: false, canceled: true };
         }
+        try {
+            const stats = parseRendererStats(rendererStats);
+            // 清理是用户主动操作，这里允许扫外置宗卷上的下载目录（可能弹系统授权框）：
+            // 若用被动统计，外置盘上的 .part 残留恒为 0，点了「清除」会误报「没有需要清理的缓存」
+            const info = await cacheManager.getInfo(true, stats);
+            const targets = info.categories.filter((c) => keys.includes(c.key));
+            // 用「实际可清理」而不是总占用：封面缓存只删残留，数字对不上会让人以为没清掉
+            const total = targets.reduce((sum, c) => sum + c.clearable, 0);
+            if (total === 0) {
+                return { success: false, canceled: true, empty: true };
+            }
 
-        const freed = await cacheManager.clear(keys, extraRefs);
-        const freedTotal = Object.values(freed).reduce((a, b) => a + b, 0);
-        return { success: true, freed, freedTotal };
-    } catch (e: any) {
-        return { success: false, message: e?.message ?? String(e) };
-    }
-});
+            const notes: string[] = [];
+            if (keys.includes("media")) {
+                notes.push("播放缓存清除后，下次播放这些歌曲需要重新下载。");
+            }
+            if (keys.includes("cover")) {
+                notes.push("封面缓存只清理无人引用的残留文件，正在显示的封面会保留。");
+            }
+            if (keys.includes("storage")) {
+                notes.push("本地存储包含当前播放列表与界面偏好，清除后需重启应用生效。");
+            }
+            if (keys.includes("match")) {
+                notes.push("匹配缓存清除后，再次匹配每日推荐时需要逐首重新搜索音源。");
+            }
+
+            const { response } = await dialog.showMessageBox({
+                type: keys.includes("storage") ? "warning" : "info",
+                title: "清除缓存",
+                message: `确定清除「${targets.map((c) => c.label).join("、")}」吗？`,
+                detail: `预计释放 ${humanSize(total)}。${notes.length ? `\n\n${notes.join("\n")}` : ""}`,
+                buttons: ["取消", "清除"],
+                defaultId: 0,
+                cancelId: 0,
+            });
+            if (response !== 1) {
+                return { success: false, canceled: true };
+            }
+
+            const freed = await cacheManager.clear(keys, extraRefs, stats);
+            // 匹配缓存本体在渲染进程：这里只回执统计口径的释放量，
+            // 渲染层拿到 success 后自行清掉 localStorage 里的条目
+            const freedTotal = Object.values(freed).reduce((a, b) => a + b, 0);
+            return { success: true, freed, freedTotal };
+        } catch (e: any) {
+            return { success: false, message: e?.message ?? String(e) };
+        }
+    },
+);
 
 /** 播放缓存容量上限：字节数，0 表示关闭缓存 */
 ipcMain.handle("mediaCache:getLimit", () => mediaCache.getLimit());

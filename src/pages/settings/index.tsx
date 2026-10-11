@@ -169,9 +169,7 @@ export default function SettingsPage() {
                 <div className="settings-item">
                     <div>
                         <div className="settings-item-label">点击关闭按钮时</div>
-                        <div className="settings-item-desc">
-                            最小化到托盘：窗口收进系统托盘，音乐继续播；直接退出：关窗即退出应用
-                        </div>
+                        <div className="settings-item-desc">最小化到托盘或直接退出</div>
                     </div>
                     <div className="segment">
                         <button
@@ -190,7 +188,7 @@ export default function SettingsPage() {
                 </div>
                 <ToggleRow
                     label="显示系统托盘图标"
-                    desc="托盘菜单可播放/暂停/切歌/退出；关掉后应用仍按上面的关闭行为工作"
+                    desc="提供播放/暂停/切歌/退出菜单"
                     value={trayVisible}
                     onChange={changeTrayVisible}
                 />
@@ -245,11 +243,7 @@ export default function SettingsPage() {
 
                 <ToggleRow
                     label="记忆播放进度"
-                    desc={
-                        autoPlayOnLaunch
-                            ? "退出应用时记住当前歌曲听到的位置。下次启动自动播放时从这个位置接着听"
-                            : "退出应用时记住当前歌曲听到的位置。下次启动进度条停在这个位置，按播放接着听（不会自动出声）"
-                    }
+                    desc="记住每首歌听到的位置，下次打开接着听"
                     value={rememberProgress}
                     onChange={(next) => {
                         setRememberProgressEnabled(next);
@@ -288,7 +282,7 @@ export default function SettingsPage() {
 
                 <ToggleRow
                     label="程序启动时自动播放"
-                    desc="打开应用后自动接着播放上次退出时在听的歌；没有在听的歌时，自动播放播放队列的第一首。关闭时启动不出声，要不要播放由你按播放决定"
+                    desc="打开应用后自动接着上次退出时在听的歌"
                     value={autoPlayOnLaunch}
                     onChange={(next) => {
                         setAutoPlayOnLaunchEnabled(next);
@@ -301,7 +295,7 @@ export default function SettingsPage() {
                 <div className="settings-group-title">快捷键</div>
                 <ToggleRow
                     label="全局媒体键"
-                    desc="媒体键（播放/暂停、上一首、下一首）在应用未聚焦时也可用。macOS 控制中心与 Windows 系统媒体面板默认就生效，此项是独立于它们的系统级兜底"
+                    desc="应用未聚焦时媒体键也可控制播放"
                     value={globalShortcuts}
                     onChange={changeGlobalShortcuts}
                 />
@@ -309,15 +303,7 @@ export default function SettingsPage() {
                     <div>
                         <div className="settings-item-label">应用内快捷键</div>
                         <div className="settings-item-desc">
-                            空格 播放/暂停 · ← 上一首 · → 下一首 · ↑/↓ 音量加减（输入框中不生效）
-                        </div>
-                    </div>
-                </div>
-                <div className="settings-item">
-                    <div>
-                        <div className="settings-item-label">定时关闭</div>
-                        <div className="settings-item-desc">
-                            播放栏「更多」菜单 → 定时关闭：到点暂停播放，支持倒计时与「播完 N 首」
+                            空格 播放/暂停 · ←/→ 切歌 · ↑/↓ 音量（输入框中不生效）
                         </div>
                     </div>
                 </div>
@@ -354,9 +340,8 @@ export default function SettingsPage() {
                     <div>
                         <div className="settings-item-label">MusicFree Desktop</div>
                         <div className="settings-item-desc">
-                            v{appInfo?.version ?? "1.0.0"} · 基于 Electron{" "}
-                            {appInfo?.platform === "darwin" ? "· macOS" : ""} · 数据目录：
-                            {appInfo?.userDataPath}
+                            v{appInfo?.version ?? "1.0.0"}
+                            {appInfo?.platform === "darwin" ? " · macOS" : ""}
                         </div>
                     </div>
                 </div>
@@ -461,7 +446,7 @@ export default function SettingsPage() {
                 )}
                 <ToggleRow
                     label="启动时自动检查更新"
-                    desc="启动时联网检查新版本；发现新版本会弹窗询问，由你决定是否现在更新"
+                    desc="发现新版本时弹窗询问，由你决定是否更新"
                     value={autoCheck}
                     onChange={(next) => {
                         setAutoCheck(next);
@@ -509,9 +494,29 @@ export default function SettingsPage() {
                     <div>
                         <div className="settings-item-label">插件生态</div>
                         <div className="settings-item-desc">
-                            与 MusicFree 移动端音源插件（.js）兼容，在「音源插件」页安装
+                            兼容 MusicFree 移动端音源插件（.js），在「音源插件」页安装
                         </div>
                     </div>
+                </div>
+                <div className="settings-item">
+                    <div style={{ minWidth: 0 }}>
+                        <div className="settings-item-label">GitHub</div>
+                        <div
+                            className="settings-item-desc"
+                            style={{ wordBreak: "break-all", whiteSpace: "normal" }}
+                        >
+                            github.com/dastuer/MusicFreeDesktop
+                        </div>
+                    </div>
+                    <button
+                        className="btn-ghost"
+                        style={{ flexShrink: 0 }}
+                        onClick={() =>
+                            openReleasePage("https://github.com/dastuer/MusicFreeDesktop")
+                        }
+                    >
+                        打开主页
+                    </button>
                 </div>
             </div>
         </div>

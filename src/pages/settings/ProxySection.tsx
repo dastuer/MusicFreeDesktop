@@ -77,14 +77,13 @@ export default function ProxySection() {
     return (
         <div className="settings-group">
             <div className="settings-group-title">网络代理</div>
-            <div className="settings-item">
-                <div>
-                    <div className="settings-item-label">启用网络代理</div>
-                    <div className="settings-item-desc">
-                        开启后音乐播放、音源搜索、网易云接口、检查更新、备份同步都经代理访问；
-                        本地与内网地址始终直连。保存后即时生效
+                <div className="settings-item">
+                    <div>
+                        <div className="settings-item-label">启用网络代理</div>
+                        <div className="settings-item-desc">
+                            音乐播放、搜索与检查更新都经代理访问，保存后即时生效
+                        </div>
                     </div>
-                </div>
                 <div className="segment">
                     <button
                         className={`segment-item${config.enabled ? " active" : ""}`}
@@ -101,11 +100,9 @@ export default function ProxySection() {
                 </div>
             </div>
             <div className="settings-item">
-                <div style={{ minWidth: 0, flex: 1 }}>
+                <div>
                     <div className="settings-item-label">代理服务器</div>
-                    <div className="settings-item-desc">
-                        支持 HTTP 与 SOCKS 代理，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
-                    </div>
+                    <div className="settings-item-desc">支持 HTTP 与 SOCKS 代理</div>
                 </div>
             </div>
             <div className="backup-form" style={{ marginTop: -8 }}>
@@ -151,7 +148,7 @@ export default function ProxySection() {
                 <div>
                     <div className="settings-item-label">macOS 应用内更新</div>
                     <div className="settings-item-desc">
-                        Sparkle 更新引擎走系统网络栈，跟随系统代理设置，不使用此处的代理配置
+                        Sparkle 更新走系统代理，不使用此处的代理配置
                     </div>
                 </div>
             </div>

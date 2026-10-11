@@ -66,6 +66,7 @@ const allowedChannels = [
     "system:setShortcutsEnabled",
     "system:setTrayVisible",
     "cache:info",
+    "cache:infoFull",
     "cache:clear",
     "cache:openDir",
     "mediaCache:getLimit",

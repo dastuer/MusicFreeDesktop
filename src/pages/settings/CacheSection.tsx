@@ -4,8 +4,10 @@ import {
     CacheInfo,
     CacheKey,
     clearCache,
+    clearMatchCacheEntries,
     formatSize,
     getCacheInfo,
+    getCacheInfoFull,
     getMediaCacheLimit,
     MEDIA_CACHE_LIMIT_OPTIONS,
     openCoverCacheDir,
@@ -17,11 +19,11 @@ import { showToast } from "@/components/base/Toast";
 /**
  * 设置页「存储与缓存」。
  *
- * 一键清理只动可重建的三类（封面 / 网络 / 临时文件）——
+ * 一键清理只动可重建的几类（匹配 / 封面 / 网络 / 临时文件）——
  * 一键操作不该删用户状态，所以「本地存储」必须单独点。
  */
 
-const SAFE_KEYS: CacheKey[] = ["media", "cover", "http", "temp"];
+const SAFE_KEYS: CacheKey[] = ["match", "media", "cover", "http", "temp"];
 
 export default function CacheSection() {
     const [info, setInfo] = useState<CacheInfo | null>(null);
@@ -34,10 +36,15 @@ export default function CacheSection() {
     const [savingLimit, setSavingLimit] = useState(false);
     const busy = calculating || !!clearing || rebuilding;
 
-    const refresh = useCallback(async () => {
+    /**
+     * full=true 才会扫描外置宗卷上的下载目录——那可能弹系统授权框
+     * （ad-hoc 签名记不住授权），所以只给「刷新」按钮和清理后的重算用；
+     * 打开设置页的自动统计永远走被动路径，不碰外置盘。
+     */
+    const refresh = useCallback(async (full = false) => {
         setCalculating(true);
         try {
-            setInfo(await getCacheInfo());
+            setInfo(await (full ? getCacheInfoFull() : getCacheInfo()));
         } catch {
             showToast("缓存大小读取失败");
         } finally {
@@ -71,6 +78,10 @@ export default function CacheSection() {
             const res = await clearCache(keys);
             // 用户在原生弹窗里点了取消：什么都不做，也不弹提示
             if (res?.success) {
+                // 匹配缓存本体在渲染进程 localStorage：主进程弹窗确认通过后在这里清掉
+                if (keys.includes("match")) {
+                    clearMatchCacheEntries();
+                }
                 const freed = res.freedTotal ?? 0;
                 showToast(freed > 0 ? `已释放 ${formatSize(freed)}` : "缓存已清理");
             } else if (res?.empty) {
@@ -82,8 +93,9 @@ export default function CacheSection() {
             showToast(`清理失败：${e?.message ?? String(e)}`);
         } finally {
             setClearing(null);
-            // 无论成功与否都重新算一遍：清理可能只删掉一部分（文件被占用）
-            await refresh();
+            // 无论成功与否都重新算一遍：清理可能只删掉一部分（文件被占用）。
+            // 用户已主动发起清理，这里走全量路径把外置盘上的临时文件也数对
+            await refresh(true);
         }
     };
 
@@ -111,14 +123,16 @@ export default function CacheSection() {
             showToast(`重建失败：${e?.message ?? String(e)}`);
         } finally {
             setRebuilding(false);
-            await refresh();
+            await refresh(true);
         }
     };
 
     const categories = info?.categories ?? [];
     const total = info?.total ?? 0;
-    // 各类的「实际可清理」之和。封面只删残留，这个数通常远小于 total
+    // 各类的「实际可清理」之和。封面只删残留，这个数通常远小于 total。
+    // 外置盘上的临时文件未统计（clearable 记 0），不算进「可清理」，但不影响按钮可用
     const clearableTotal = categories.reduce((sum, c) => sum + c.clearable, 0);
+    const hasUnstatted = categories.some((c) => c.unstatted);
 
     return (
         <div className="settings-group">
@@ -133,9 +147,11 @@ export default function CacheSection() {
                         </div>
                         {info ? (
                             <div className="cache-calc-hint">
-                                {clearableTotal === 0
-                                    ? "没有可清理的内容"
-                                    : `其中可清理 ${formatSize(clearableTotal)}`}
+                                {hasUnstatted
+                                    ? "下载临时文件在外置盘上，未计入（点「刷新」统计）"
+                                    : clearableTotal === 0
+                                      ? "没有可清理的内容"
+                                      : `其中可清理 ${formatSize(clearableTotal)}`}
                             </div>
                         ) : null}
                         {calculating && info ? (
@@ -143,7 +159,7 @@ export default function CacheSection() {
                         ) : null}
                     </div>
                     <div className="cache-actions">
-                        <button className="btn-ghost" disabled={busy} onClick={refresh}>
+                        <button className="btn-ghost" disabled={busy} onClick={() => refresh(true)}>
                             刷新
                         </button>
                         <button
@@ -159,8 +175,8 @@ export default function CacheSection() {
                         </button>
                         <button
                             className="btn-primary"
-                            disabled={busy || clearableTotal === 0}
-                            title="清理封面残留、网络缓存与下载临时文件（不含本地存储）"
+                            disabled={busy || (clearableTotal === 0 && !hasUnstatted)}
+                            title="清理匹配缓存、封面残留、网络缓存与下载临时文件，不含本地存储"
                             onClick={() => handleClear(SAFE_KEYS, "all")}
                         >
                             {clearing === "all" ? "清理中…" : "一键清理"}
@@ -225,14 +241,22 @@ export default function CacheSection() {
                     </div>
                     <div className="cache-item-right">
                         <div style={{ textAlign: "right" }}>
-                            <div className="cache-size">{formatSize(c.size)}</div>
+                            <div className="cache-size">
+                                {c.unstatted ? "未统计" : formatSize(c.size)}
+                            </div>
                             <div className="cache-count">
-                                {c.count !== null
-                                    ? c.key === "media"
-                                        ? `${c.count} 首已缓存`
-                                        : `${c.count} 个文件`
+                                {c.unstatted
+                                    ? "下载目录在外置盘上，点「刷新」统计"
+                                    : c.count !== null
+                                      ? c.key === "media"
+                                          ? `${c.count} 首已缓存`
+                                          : c.key === "match"
+                                            ? `${c.count} 条匹配记录`
+                                            : `${c.count} 个文件`
+                                      : ""}
+                                {!c.unstatted && c.clearable > 0 && c.clearable < c.size
+                                    ? ` · 可清理 ${formatSize(c.clearable)}`
                                     : ""}
-                                {c.clearable < c.size ? ` · 可清理 ${formatSize(c.clearable)}` : ""}
                             </div>
                         </div>
                         {c.key === "cover" ? (
@@ -249,7 +273,7 @@ export default function CacheSection() {
                         <button
                             className="btn-ghost"
                             style={{ flexShrink: 0 }}
-                            disabled={busy || c.clearable === 0}
+                            disabled={busy || (!c.unstatted && c.clearable === 0)}
                             onClick={() => handleClear([c.key], c.key)}
                         >
                             {clearing === c.key ? "清理中…" : "清除"}
@@ -262,7 +286,7 @@ export default function CacheSection() {
                             <div className="settings-item-label">播放缓存上限</div>
                             <div className="settings-item-desc">
                                 {limit === 0
-                                    ? "当前已关闭，在线音乐不落盘，每次播放都重新下载"
+                                    ? "已关闭，在线音乐不落盘"
                                     : "超出上限时自动删除最久未播放的歌曲"}
                             </div>
                         </div>

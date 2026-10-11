@@ -263,9 +263,7 @@ export default function BackupSection() {
             <div className="settings-item">
                 <div style={{ minWidth: 0 }}>
                     <div className="settings-item-label">从 URL 恢复</div>
-                    <div className="settings-item-desc">
-                        填入备份文件的直链，由主进程下载后恢复（不受跨域限制）
-                    </div>
+                    <div className="settings-item-desc">填入备份文件直链，下载后恢复</div>
                 </div>
                 <button
                     className="btn-ghost"
@@ -289,7 +287,7 @@ export default function BackupSection() {
                     >
                         {webdavReady
                             ? `已配置 · 远端文件 ${status?.webdavFile ?? ""}`
-                            : "配置后可把备份同步到坚果云、Nextcloud 等 WebDAV 服务"}
+                            : "配置后可同步到坚果云、Nextcloud 等服务"}
                     </div>
                 </div>
                 <div className="cache-actions">
@@ -380,7 +378,7 @@ export default function BackupSection() {
                             {savingWebdav ? "保存中…" : "保存"}
                         </button>
                         <span className="cache-calc-hint">
-                            密码仅保存在本机，不会写进备份文件
+                            密码仅保存在本机
                         </span>
                     </div>
                 </div>
@@ -412,12 +410,9 @@ export default function BackupSection() {
             </div>
 
             <div className="backup-note">
-                备份内容：歌单（含「我喜欢的音乐」）、音源插件及其用户变量、界面偏好
-                {includeLocalMusic ? "、本地音乐索引" : ""}。
+                备份内容：歌单、音源插件、界面偏好{includeLocalMusic ? "、本地音乐索引" : ""}。
                 <br />
-                不含：最近播放（历史不参与备份，恢复也不会改动本机历史）、下载任务、
-                已缓存的音频与封面、WebDAV 密码。本地音乐的音频文件不在备份内，
-                恢复后如果文件换了位置需要重新扫描。
+                不含：最近播放、下载任务、已缓存的音频与封面、WebDAV 密码。
             </div>
         </div>
     );

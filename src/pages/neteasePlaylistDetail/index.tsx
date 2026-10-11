@@ -80,8 +80,8 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
 
     const rematch = () => {
         resetMatchSession(sessionKey);
-        // 刷新语义：强制不走缓存完整重配（新结果仍回写缓存）
-        startPlaylistMatchSession(card, { ignoreCache: true });
+        // 刷新语义：重新拉曲目。曲目没变直接复用上一轮结果，变了才对没匹配过的歌搜索
+        startPlaylistMatchSession(card);
     };
 
     const headerSub = (() => {
@@ -131,9 +131,22 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
 
             {!session || session.status === "loading" || session.status === "running" ? (
                 session ? (
-                    <NeteaseMatchingPanel view={session} />
+                    <>
+                        {/* 紧凑进度条 + 骨架列表：与完成后的真实列表同构等高，原地替换不抖 */}
+                        <NeteaseMatchingPanel view={session} />
+                        <MusicList
+                            loading
+                            /* loading 阶段 total 还是 0，用卡片声明的曲目数撑骨架，高度一次到位 */
+                            skeletonRows={session.total || card.trackCount || undefined}
+                            searchable
+                            selectable={false}
+                        />
+                    </>
                 ) : (
-                    <div className="empty-hint">正在准备…</div>
+                    <>
+                        <NeteaseMatchingStripHint />
+                        <MusicList loading searchable selectable={false} />
+                    </>
                 )
             ) : session.status === "error" ? (
                 <div className="source-note">
@@ -182,6 +195,20 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
                     />
                 </>
             )}
+        </div>
+    );
+}
+
+/** 会话尚未建立时的骨架占位：状态条 + 骨架列表，会话建立后原地续上 */
+function NeteaseMatchingStripHint() {
+    return (
+        <div className="netease-matching-strip" role="status">
+            <span className="netease-matching-spin slow" aria-hidden>
+                <Icon name="musicNote" size={13} />
+            </span>
+            <span className="netease-matching-text">
+                <span className="netease-matching-title">正在准备…</span>
+            </span>
         </div>
     );
 }

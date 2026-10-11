@@ -1,5 +1,7 @@
 import { atom, getDefaultStore } from "jotai";
 import { ipcInvoke } from "./ipc";
+import { clearMatchCache, getMatchCacheStats } from "./neteaseMatchCache";
+import { dropLastResults as dropLastMatchResults } from "./neteaseMatchSession";
 
 /** 设置页「存储与缓存」：读取缓存占用、按类别清除 */
 
@@ -15,7 +17,7 @@ function bumpCoverVersion() {
     store.set(coverVersionAtom, store.get(coverVersionAtom) + 1);
 }
 
-export type CacheKey = "media" | "cover" | "http" | "temp" | "storage";
+export type CacheKey = "media" | "cover" | "http" | "temp" | "storage" | "match";
 
 export interface CacheCategory {
     key: CacheKey;
@@ -25,8 +27,10 @@ export interface CacheCategory {
     /** 文件数；HTTP 缓存由 Chromium 内部管理，拿不到文件数 */
     count: number | null;
     risky: boolean;
-    /** 点「清除」实际能释放多少。封面缓存只删无人引用的残留，通常远小于 size */
+    /** 点「清除」实际能释放多少。封面缓存只删残留，通常远小于 size */
     clearable: number;
+    /** true = 该类别在外置宗卷上，被动统计被跳过（size 不代表真实占用） */
+    unstatted?: boolean;
 }
 
 export interface CacheInfo {
@@ -45,7 +49,25 @@ export interface ClearCacheResult {
 }
 
 export function getCacheInfo(): Promise<CacheInfo> {
-    return ipcInvoke<CacheInfo>("cache:info");
+    return ipcInvoke<CacheInfo>("cache:info", rendererCacheStats());
+}
+
+/**
+ * 全量统计：包含外置宗卷上的下载临时文件。
+ * 读外置盘可能弹系统授权框（且 ad-hoc 签名记不住授权），只给用户主动「刷新」用；
+ * 打开设置页的被动统计走 getCacheInfo()，绝不碰外置盘。
+ */
+export function getCacheInfoFull(): Promise<CacheInfo> {
+    return ipcInvoke<CacheInfo>("cache:infoFull", rendererCacheStats());
+}
+
+/**
+ * 匹配缓存等存在渲染进程 localStorage 的数据，主进程读不到，
+ * 统计与清理请求都随包带上去（主进程只做合并展示与确认弹窗）。
+ * 每次现取：设置页打开时缓存可能刚被匹配过程写入。
+ */
+function rendererCacheStats(): { match: { count: number; size: number } } {
+    return { match: getMatchCacheStats() };
 }
 
 /**
@@ -74,7 +96,22 @@ function collectRendererCoverRefs(): string[] {
 }
 
 export function clearCache(keys: CacheKey[]): Promise<ClearCacheResult> {
-    return ipcInvoke<ClearCacheResult>("cache:clear", keys, collectRendererCoverRefs());
+    return ipcInvoke<ClearCacheResult>(
+        "cache:clear",
+        keys,
+        collectRendererCoverRefs(),
+        rendererCacheStats(),
+    );
+}
+
+/**
+ * 清除匹配缓存本体（在渲染进程 localStorage 里）。
+ * 主进程弹窗确认后回 success，设置页再调这个真正清掉条目。
+ * 会话里留存的上一轮结果一并作废：缓存都没了，没有可复用的依据。
+ */
+export function clearMatchCacheEntries() {
+    clearMatchCache();
+    dropLastMatchResults();
 }
 
 /** 重新生成本地音乐封面（封面缓存被清空后用来恢复），返回处理的条目数 */
@@ -125,6 +162,7 @@ export const CACHE_COLORS: Record<CacheKey, string> = {
     http: "#3ec9a7",
     temp: "#f5a623",
     storage: "#ec4141",
+    match: "#e8843c",
 };
 
 /** 播放缓存容量上限（字节）。0 = 关闭缓存，其余值超出后按最久未播放淘汰 */

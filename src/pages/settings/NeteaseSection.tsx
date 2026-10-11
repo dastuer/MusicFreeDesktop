@@ -9,15 +9,12 @@ import {
     neteaseLogout,
     openNeteaseLogin,
 } from "@/core/netease";
-import {
-    clearMatchCache,
-    getMatchCacheCount,
-} from "@/core/neteaseMatchCache";
 import { resetAllMatchSessions } from "@/core/neteaseMatchSession";
 
 /**
  * 设置页「网易云账号」分组：当前账号资料、扫码/重新登录、退出登录。
  * 登录凭据（MUSIC_U）保存在主进程并经 safeStorage 加密，不随备份导出。
+ * 匹配缓存的统计与清理在「存储与缓存」分组（key=match）。
  */
 export default function NeteaseSection() {
     const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
@@ -25,7 +22,6 @@ export default function NeteaseSection() {
         getCachedNeteaseProfile(),
     );
     const [loggingIn, setLoggingIn] = useState(false);
-    const [cacheCount, setCacheCount] = useState(0);
 
     useEffect(() => {
         getNeteaseStatus()
@@ -33,7 +29,6 @@ export default function NeteaseSection() {
             .catch(() => setLoggedIn(false));
         // 资料失败不置 loggedIn：登录态以 getStatus 为准，这里只影响展示
         getNeteaseAccountInfo().then(setProfile).catch(() => {});
-        setCacheCount(getMatchCacheCount());
     }, []);
 
     const login = async () => {
@@ -116,10 +111,10 @@ export default function NeteaseSection() {
                             {loggedIn === null
                                 ? "正在检查登录状态…"
                                 : showAccount
-                                  ? `已登录${profile!.userId ? `（ID ${profile!.userId}）` : ""}。侧边栏「每日推荐」展示该账号的个性化推荐，并用音源插件匹配成可播放曲目`
+                                  ? `已登录${profile!.userId ? `（ID ${profile!.userId}）` : ""}，侧边栏「每日推荐」展示个性化推荐`
                                   : loggedIn
                                     ? "已登录，账号资料获取中…"
-                                    : "尚未登录。扫码登录后，侧边栏「每日推荐」展示账号的个性化推荐并用音源插件匹配。登录凭据加密保存在本机，不随备份导出"}
+                                    : "扫码登录后可在「每日推荐」查看个性化推荐"}
                         </div>
                     </div>
                 </div>
@@ -137,27 +132,6 @@ export default function NeteaseSection() {
                         {loggingIn ? "等待扫码…" : loggedIn ? "重新登录" : "扫码登录"}
                     </button>
                 </div>
-            </div>
-            <div className="settings-item">
-                <div>
-                    <div className="settings-item-label">匹配缓存</div>
-                    <div className="settings-item-desc">
-                        网易云歌曲与音源曲目的匹配结果（当前 {cacheCount} 条）。再次匹配时命中缓存的直接使用、
-                        不再逐首搜索；音源插件变更后对应条目自动失效重配。缓存可随时清除，不影响歌单数据
-                    </div>
-                </div>
-                <button
-                    className="btn-ghost"
-                    style={{ flexShrink: 0 }}
-                    disabled={!cacheCount}
-                    onClick={() => {
-                        clearMatchCache();
-                        setCacheCount(0);
-                        showToast("已清除匹配缓存");
-                    }}
-                >
-                    清除
-                </button>
             </div>
         </div>
     );

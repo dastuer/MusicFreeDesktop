@@ -13,6 +13,8 @@ export default function LocalMusicPage() {
     const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [folder, setFolder] = useState<string>("");
+    /** 多选模式：入口在头部「…」更多菜单里，状态由 MediaHeader 和 MusicList 共享（同歌单/榜单详情页） */
+    const [selectMode, setSelectMode] = useState(false);
 
     const refresh = () => {
         ipcInvoke("localMusic:getSavedMusicList").then((list) => {
@@ -74,6 +76,17 @@ export default function LocalMusicPage() {
                 musicList={musicList}
                 meta={[musicList.length ? `共 ${musicList.length} 首` : ""].filter(Boolean)}
                 listId="localMusic"
+                moreMenuItems={
+                    musicList.length > 0
+                        ? [
+                              {
+                                  title: "多选",
+                                  icon: "check",
+                                  onClick: () => setSelectMode(true),
+                              },
+                          ]
+                        : []
+                }
                 extraActions={
                     <button className="btn-ghost" onClick={pickAndScan}>
                         选择文件夹扫描
@@ -85,7 +98,10 @@ export default function LocalMusicPage() {
                 loading={loading}
                 isEnd
                 localMode
+                searchable
                 listId="localMusic"
+                selectMode={selectMode}
+                onSelectModeChange={setSelectMode}
                 onMusicChanged={refresh}
             />
         </div>
