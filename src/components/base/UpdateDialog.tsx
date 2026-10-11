@@ -121,19 +121,34 @@ export default function UpdateDialogHost() {
 
     // 进度/收尾弹窗：下载中可关（后台继续），下载完成后有明确的收尾动作。
     // 没有可展示的阶段（如刚点完「更新」又立刻手动检查完返回 idle）就当用户关掉了。
+    // checking/available/downloading 是同一轮下载的连续阶段，available（已确认有新
+    // 版本、尚未开下）也要占住弹窗，否则那一瞬弹窗消失再弹出，看起来就是弹了两次。
     if (progressVisible) {
-        const downloading = sparkle.stage === "downloading" || sparkle.stage === "checking";
-        if (!downloading && sparkle.stage !== "downloaded" && sparkle.stage !== "error") {
+        const inFlight =
+            sparkle.stage === "checking" ||
+            sparkle.stage === "available" ||
+            sparkle.stage === "downloading";
+        if (!inFlight && sparkle.stage !== "downloaded" && sparkle.stage !== "error") {
             return null;
         }
         const pct = Math.min(100, Math.max(0, sparkle.progress ?? 0));
         return (
-            <div className="panel-mask" style={{ alignItems: "center" }}>
+            <div
+                className="panel-mask"
+                style={{ alignItems: "center" }}
+                onClick={() => setDownloadDialogVisible(false)}
+            >
                 <div
                     className="panel-body"
-                    style={{ width: 380, maxHeight: "none", marginBottom: 0, borderRadius: 12 }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                        width: 380,
+                        maxHeight: "none",
+                        marginBottom: 0,
+                        borderRadius: 12,
+                    }}
                 >
-                    {downloading && (
+                    {inFlight && (
                         <>
                             <div
                                 style={{
@@ -169,29 +184,6 @@ export default function UpdateDialogHost() {
                                     : sparkle.transferred
                                       ? `已下载 ${formatBytes(sparkle.transferred)}`
                                       : "正在连接…"}
-                            </div>
-                            <div
-                                style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                    marginTop: 18,
-                                }}
-                            >
-                                <span
-                                    style={{
-                                        fontSize: 12,
-                                        color: "var(--text-tertiary)",
-                                    }}
-                                >
-                                    关闭窗口后下载仍会继续
-                                </span>
-                                <button
-                                    className="btn-ghost"
-                                    onClick={() => setDownloadDialogVisible(false)}
-                                >
-                                    关闭
-                                </button>
                             </div>
                         </>
                     )}
@@ -254,12 +246,6 @@ export default function UpdateDialogHost() {
                                 {sparkle.error ?? "未知错误"}。可前往下载页手动获取新版本。
                             </div>
                             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-                                <button
-                                    className="btn-ghost"
-                                    onClick={() => setDownloadDialogVisible(false)}
-                                >
-                                    关闭
-                                </button>
                                 <button
                                     className="btn-primary"
                                     onClick={() => openReleasePage(result?.url ?? undefined)}

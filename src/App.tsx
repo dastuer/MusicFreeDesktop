@@ -31,7 +31,7 @@ import { usePlayerShortcuts } from "./hooks/usePlayerShortcuts";
 import { addSearchHistory } from "./core/searchHistory";
 import { setupDesktopLyrics } from "./core/desktopLyrics";
 import { setupSystemIntegration } from "./core/systemIntegration";
-import { initUpdater, installUpdateNow, openReleasePage, sparkleAtom } from "./core/updater";
+import { initUpdater } from "./core/updater";
 import { useAtomValue } from "jotai";
 
 import HomePage from "./pages/home";
@@ -229,33 +229,9 @@ export default function App() {
         void initUpdater();
     }, []);
 
-    // 发现新版本的询问与下载进度都由 UpdateDialogHost 展示（见 components/base/UpdateDialog.tsx）；
-    // 这里只负责「下载完成但用户已关掉进度弹窗」的浮窗提示：
-    // 下载在后台继续，完成后不再弹窗打断，只给一条带动作的 toast，由用户选时机安装。
-    const sparkle = useAtomValue(sparkleAtom);
-    const downloadedNotifiedRef = useRef<string | null>(null);
-    useEffect(() => {
-        if (sparkle.stage !== "downloaded") {
-            return;
-        }
-        const version = sparkle.version ?? "";
-        if (downloadedNotifiedRef.current === version) {
-            return;
-        }
-        downloadedNotifiedRef.current = version;
-        showToast(`新版本 v${version} 已下载完成，重启应用即可完成更新`, {
-            action: {
-                text: "立即安装",
-                onClick: async () => {
-                    const ok = await installUpdateNow();
-                    if (!ok) {
-                        openReleasePage();
-                    }
-                },
-            },
-            duration: 8000,
-        });
-    }, [sparkle.stage, sparkle.version]);
+    // 发现新版本的询问、下载进度与下载完成的收尾弹窗都由 UpdateDialogHost 展示
+    // （见 components/base/UpdateDialog.tsx）；下载完成时 core/updater.ts 会把
+    // downloadDialogAtom 置 true，前台后台都弹收尾弹窗，不再发浮窗。
 
     // 播放失败时把原因说出来：能降级音质自救的本曲会接着重试，救不了才停住或跳下一首
     useEffect(() => {

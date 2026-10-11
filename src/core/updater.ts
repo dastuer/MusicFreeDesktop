@@ -86,7 +86,13 @@ function subscribeUpdateEvents() {
         return;
     }
     eventSubscribed = true;
-    window.mfp.onUpdateEvent((state) => store.set(sparkleAtom, state));
+    window.mfp.onUpdateEvent((state) => {
+        store.set(sparkleAtom, state);
+        // 下载完成一律展示收尾弹窗（前台原地切换，后台关了也会重新打开）
+        if (state?.stage === "downloaded") {
+            store.set(downloadDialogAtom, true);
+        }
+    });
 }
 
 /** 应用挂载时调用：读状态、订事件推送、按设置自动查一次 */
