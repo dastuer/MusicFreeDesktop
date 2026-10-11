@@ -81,6 +81,7 @@ npm config set electron_mirror https://npmmirror.com/mirrors/electron/
 | `npm run dist:dir` | build + 出未打包的 `.app` 目录（调试打包问题更快） |
 | `npm run reinstall` | 构建并覆盖安装到 `/Applications` 后启动（详见下一节） |
 | `npm run reinstall:dmg` | 同上，但额外产出 dmg |
+| `npm run reinstall:version -- 0.9.9` | 以**指定版本号**构建并覆盖安装（脚本临时改写 package.json，跑完自动还原） |
 
 ### 开发模式的工作方式
 
@@ -126,6 +127,17 @@ npm run reinstall:dmg        # 额外产出 dmg，慢，要分发时用
 4. `open` 启动
 
 替换 `/Applications` 里的 `.app` **不影响用户数据**——歌单、插件、下载记录都在 `~/Library/Application Support/MusicFreeDesktop/`，重装后照旧。
+
+#### 指定版本号构建安装
+
+想验证「设置 → 关于」显示的版本、跨版本升级逻辑等与版本号挂钩的行为时，不用手动改 package.json：
+
+```bash
+npm run reinstall:version -- 0.9.9           # 以 0.9.9 构建 + 覆盖安装 + 启动
+npm run reinstall:version -- 0.9.9 --with-dmg
+```
+
+脚本在 `scripts/reinstall-version.sh`：先用 node 把指定版本写进 package.json 的顶层 `version` 字段（electron-builder 与「关于」页都从这里取版本），再复用 `reinstall.sh` 完成构建安装。**无论构建成败、甚至 Ctrl-C 中断，trap 兜底都会把 package.json 还原**；还原只改顶层字段，不碰依赖版本，也不产生 git 改动。版本与当前一致时直接走常规 `reinstall.sh`。
 
 #### 为什么不用"`npm run dist | grep -c error` 判断成败"
 

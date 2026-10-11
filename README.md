@@ -17,6 +17,7 @@ npm start            # 运行生产构建
 
 ```bash
 npm run reinstall    # 本机自用：只出 .app 并覆盖 /Applications，随后启动
+npm run reinstall:version -- 0.9.9    # 同上，但以指定版本号构建（package.json 构建后自动还原）
 npm run dist:mac     # macOS dmg → release/MusicFreeDesktop-<version>-arm64.dmg
 npm run dist:win     # Windows → release-win/ 下的 Setup 与 Portable exe
 ```

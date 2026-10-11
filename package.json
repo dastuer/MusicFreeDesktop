@@ -23,7 +23,8 @@
     "sparkle:rebuild": "electron-sparkle-updater rebuild",
     "release": "bash scripts/release.sh",
     "reinstall": "bash scripts/reinstall.sh",
-    "reinstall:dmg": "bash scripts/reinstall.sh --with-dmg"
+    "reinstall:dmg": "bash scripts/reinstall.sh --with-dmg",
+    "reinstall:version": "bash scripts/reinstall-version.sh"
   },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
