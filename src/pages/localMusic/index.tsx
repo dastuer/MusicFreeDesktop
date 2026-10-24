@@ -21,6 +21,8 @@ export default function LocalMusicPage() {
     const [musicList, setMusicList] = useState<IMusic.IMusicItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [folder, setFolder] = useState<string>("");
+    /** 上次扫描的文件夹（持久化），「刷新」按它重扫；没扫过时为空、不显示刷新按钮 */
+    const [savedFolder, setSavedFolder] = useState<string>("");
     /** 多选模式：入口在头部「…」更多菜单里，状态由 MediaHeader 和 MusicList 共享（同歌单/榜单详情页） */
     const [selectMode, setSelectMode] = useState(false);
     /** 批量匹配会话（模块级，离开页面再回来进度还在） */
@@ -35,6 +37,12 @@ export default function LocalMusicPage() {
     useEffect(() => {
         (async () => {
             const saved = (await ipcInvoke("localMusic:getSavedMusicList")) ?? [];
+            // 上次扫描的文件夹读出来：头部描述显示路径，「刷新」也知道扫哪里
+            const lastFolder = await ipcInvoke("config:get", "localMusic.folder", "");
+            if (typeof lastFolder === "string" && lastFolder) {
+                setFolder(lastFolder);
+                setSavedFolder(lastFolder);
+            }
             if (saved.length) {
                 setMusicList(saved);
                 return;
@@ -45,6 +53,8 @@ export default function LocalMusicPage() {
                 return;
             }
             setFolder(downloadDir);
+            setSavedFolder(downloadDir);
+            ipcInvoke("config:set", "localMusic.folder", downloadDir);
             setLoading(true);
             const result = await ipcInvoke("localMusic:scan", downloadDir);
             if (result?.success) {
@@ -95,6 +105,8 @@ export default function LocalMusicPage() {
             return;
         }
         setFolder(folderPath);
+        setSavedFolder(folderPath);
+        ipcInvoke("config:set", "localMusic.folder", folderPath);
         setLoading(true);
         const result = await ipcInvoke("localMusic:scan", folderPath);
         if (result?.success) {
@@ -104,6 +116,30 @@ export default function LocalMusicPage() {
             showToast(`已找到 ${result.data.length} 首本地音乐`);
         } else {
             showToast(`扫描失败：${result?.message ?? "未知错误"}`);
+        }
+        setLoading(false);
+    };
+
+    /** 刷新：重扫上次选择的文件夹。后端做增量，mtime 没变的直接复用，秒级完成 */
+    const refreshScan = async () => {
+        if (!savedFolder || loading) {
+            return;
+        }
+        setLoading(true);
+        const result = await ipcInvoke("localMusic:rescan", savedFolder);
+        if (result?.success) {
+            const { list, added, removed, updated } = result.data ?? {};
+            setMusicList(list ?? []);
+            const changes = [
+                added ? `新增 ${added} 首` : "",
+                removed ? `移除 ${removed} 首` : "",
+                updated ? `更新 ${updated} 首` : "",
+            ]
+                .filter(Boolean)
+                .join("，");
+            showToast(changes ? `刷新完成：${changes}` : `列表已是最新，共 ${list?.length ?? 0} 首`);
+        } else {
+            showToast(`刷新失败：${result?.message ?? "未知错误"}`);
         }
         setLoading(false);
     };
@@ -154,9 +190,22 @@ export default function LocalMusicPage() {
                         : []
                 }
                 extraActions={
-                    <button className="btn-ghost" onClick={pickAndScan}>
-                        选择文件夹扫描
-                    </button>
+                    <>
+                        {savedFolder && (
+                            <button
+                                className="btn-ghost"
+                                disabled={loading}
+                                title={`重新扫描 ${savedFolder}`}
+                                onClick={refreshScan}
+                            >
+                                <Icon name="refresh" size={14} />
+                                刷新
+                            </button>
+                        )}
+                        <button className="btn-ghost" onClick={pickAndScan}>
+                            选择文件夹扫描
+                        </button>
+                    </>
                 }
             />
             {batchMatch && (

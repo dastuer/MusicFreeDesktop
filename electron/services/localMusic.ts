@@ -68,6 +68,82 @@ class LocalMusicService {
     }
 
     /**
+     * 增量刷新：重新扫描文件夹，但只解析新增 / 有改动的文件。
+     * 刷新是高频操作，全量重解析几千首歌要跑很久；mtime 没变的条目直接复用，
+     * 封面缓存本来就以「路径 + mtime」为 key，复用旧条目等价于命中旧封面，天然一致。
+     */
+    async rescan(
+        folderPath: string,
+    ): Promise<{ list: any[]; added: number; removed: number; updated: number }> {
+        // 根目录必须先确认可读：collectAudioFiles 对读不了的目录是静默跳过的，
+        // 不拦一下的话，文件夹被移走后一刷新会把整个列表清空
+        try {
+            if (!(await fs.promises.stat(folderPath)).isDirectory()) {
+                throw new Error("not a directory");
+            }
+        } catch {
+            throw new Error(`文件夹不存在或无法访问：${folderPath}`);
+        }
+
+        const filePaths: string[] = [];
+        await this.collectAudioFiles(folderPath, filePaths);
+
+        const oldByPath = new Map<string, any>();
+        for (const it of this.getSavedMusicList()) {
+            if (it?.localPath) {
+                oldByPath.set(it.localPath, it);
+            }
+        }
+
+        let added = 0;
+        let updated = 0;
+        const toParse: string[] = [];
+        for (const p of filePaths) {
+            const old = oldByPath.get(p);
+            if (!old) {
+                added += 1;
+                toParse.push(p);
+                continue;
+            }
+            try {
+                if (
+                    typeof old.mtimeMs === "number" &&
+                    old.mtimeMs === Math.round((await fs.promises.stat(p)).mtimeMs)
+                ) {
+                    continue;
+                }
+            } catch {
+                // stat 失败按有变化处理
+            }
+            updated += 1;
+            toParse.push(p);
+        }
+        const currentPaths = new Set(filePaths);
+        const removed = [...oldByPath.keys()].filter((p) => !currentPaths.has(p)).length;
+
+        if (toParse.length) {
+            await coverCache.ensureDir();
+        }
+        const parsed = await this.parseAll(toParse);
+        const parsedByPath = new Map(parsed.map((it) => [it.localPath, it]));
+        // 产出顺序与磁盘遍历一致，和全量扫描的结果对齐
+        const list = filePaths.map((p) => parsedByPath.get(p) ?? oldByPath.get(p));
+
+        this.saveMusicList(list);
+        // 复用条目的封面不在本轮 referencedCovers 里，直接按最终列表对账清孤儿，
+        // 和 migrateLegacyCoverFiles 的做法一致
+        const referenced = new Set<string>();
+        for (const it of list) {
+            const name = coverFileNameFromArtwork(it?.artwork);
+            if (name) {
+                referenced.add(name);
+            }
+        }
+        await coverCache.pruneLocal(referenced);
+        return { list, added, removed, updated };
+    }
+
+    /**
      * 历史数据瘦身：早期版本把封面 base64 直接内联在 artwork 里，
      * 上千首歌能让 store.json 膨胀到几百 MB —— 启动解析慢，每次 set 重写更慢。
      * 启动时把这类内联封面解码写盘、换成短链，只做一次。
@@ -267,6 +343,12 @@ class LocalMusicService {
             artwork: "",
             localPath,
         };
+        try {
+            // mtime 记进条目：增量刷新（rescan）拿它判断文件变没变，没变就直接复用旧条目
+            musicItem.mtimeMs = Math.round((await fs.promises.stat(localPath)).mtimeMs);
+        } catch {
+            // stat 失败不致命：mtimeMs 缺失，刷新时按「有变化」重新解析
+        }
         try {
             const meta = await parseFile(localPath, { duration: true });
             if (meta.common.title) {

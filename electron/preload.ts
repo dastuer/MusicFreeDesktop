@@ -20,6 +20,7 @@ const allowedChannels = [
     "pluginSubscription:remove",
     "localMusic:pickFolder",
     "localMusic:scan",
+    "localMusic:rescan",
     "localMusic:getSavedMusicList",
     "localMusic:readCover",
     "localMusic:rebuildCovers",

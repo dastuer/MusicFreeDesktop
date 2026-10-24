@@ -431,6 +431,14 @@ ipcMain.handle("localMusic:scan", async (_e, folderPath: string) => {
         return { success: false, message: e?.message ?? String(e) };
     }
 });
+// 增量刷新：mtime 没变的条目直接复用，只解析新增 / 改动过的文件
+ipcMain.handle("localMusic:rescan", async (_e, folderPath: string) => {
+    try {
+        return { success: true, data: await localMusic.rescan(folderPath) };
+    } catch (e: any) {
+        return { success: false, message: e?.message ?? String(e) };
+    }
+});
 ipcMain.handle("localMusic:getSavedMusicList", () => localMusic.getSavedMusicList());
 ipcMain.handle("localMusic:readCover", (_e, localPath: string) =>
     localMusic.readCover(localPath));
