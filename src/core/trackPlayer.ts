@@ -8,7 +8,11 @@ import {
     ipcInvoke,
     pluginCall,
 } from "./ipc";
-import { setMusicHistory } from "./musicHistory";
+import {
+    MAX_MUSIC_HISTORY,
+    getMusicHistory,
+    setMusicHistory,
+} from "./musicHistory";
 import { matchLocalLyric } from "./localLyricMatch";
 import { getQuality, setQuality } from "./appConfig";
 import {
@@ -119,8 +123,10 @@ const MAX_AUTO_SKIP = 3;
 /** 本曲内音质降级重试的上限：低→标准→高清→无损一共 4 档，从顶到底最多降 3 次 */
 const MAX_QUALITY_RETRY = 3;
 
-/** 播放历史留多少首（上一首按它回退；再多也没人按那么回去） */
-const MAX_HISTORY = 50;
+/**
+ * 「上一首」回退栈的容量：与持久化播放历史同一条上限（History 页那份，见 musicHistory）。
+ */
+const MAX_HISTORY = MAX_MUSIC_HISTORY;
 
 /**
  * 队列里认一首歌用的键。与 `musicSheet` 的 `mediaKey`、`MusicList` 的 `musicKey` 同一约定，
@@ -387,6 +393,9 @@ class TrackPlayer extends EventEmitter {
         // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
         this.restoreSession();
 
+        // 「上一首」回退栈铺底：把持久化播放历史接回来，重启后上一首照样能退到上次收听
+        void this.seedHistoryFromStore();
+
         // 「程序启动时自动播放」：开关开着且确实恢复了内容时，走与按播放键完全相同的路径
         // （togglePlay：有恢复的当前曲就解析并从记忆位置续播，没有就放队列第一首；
         // 两者都没有时它自己什么都不做）。解析失败照常走 PlayFailed 提示，不静默死循环。
@@ -495,6 +504,43 @@ class TrackPlayer extends EventEmitter {
         } catch (e) {
             // 恢复失败不影响使用，就当这次没有会话
             console.warn("[trackPlayer] 恢复上次播放失败", e);
+        }
+    }
+
+    /**
+     * 「上一首」回退栈铺底：从持久化播放历史（History 页那份，最多 300 首）取回跨会话的
+     * 「刚才听过」。回退栈本身只记本次启动后的收听，重启后只剩空栈，「上一首」只能退到
+     * 队列下标（随机模式下更是一只随机歌）；把历史倒序铺进栈底，重启后按上一首
+     * 照样一路退回上一次收听。异步执行，不挡首帧。
+     */
+    private async seedHistoryFromStore() {
+        try {
+            const history = await getMusicHistory();
+            if (!history.length) {
+                return;
+            }
+            const curKey = this._currentMusic ? playListKey(this._currentMusic) : "";
+            // 历史是「最近在前」，倒成「最早在前」铺到栈底。栈里已有的（极端情况下
+            // 铺底完成前用户就已经点了歌）与当前这首不重复入底座：当前这首要独占栈顶
+            const existing = new Set(this._history.map(playListKey));
+            const older = history
+                .slice()
+                .reverse()
+                .filter((it) => {
+                    const key = playListKey(it);
+                    return isQueueable(it) && key !== curKey && !existing.has(key);
+                });
+            this._history = [...older, ...this._history].slice(-MAX_HISTORY);
+            // 回退栈靠「末尾 = 当前这首」往回退（见 takePreviousFromHistory）：
+            // 还原出来的当前曲还没在本会话播过、不在栈里，补压到栈顶
+            if (this._currentMusic) {
+                const last = this._history[this._history.length - 1];
+                if (!last || playListKey(last) !== curKey) {
+                    this._history.push(this._currentMusic);
+                }
+            }
+        } catch {
+            // 铺底失败只是「上一首」退不远，不值得打扰
         }
     }
 
@@ -2054,9 +2100,13 @@ class TrackPlayer extends EventEmitter {
      *
      * 退场是为了让连按上一首一路往回走（C → B → A），而不是在两首之间来回弹：
      * 不退场的话回到 B 之后，历史末尾又变成 B 前面那个 C。
-     * 历史末尾不是当前歌曲时（重启后只有还原的当前歌曲）不退，交给队列下标兜底。
+     * 历史末尾不是当前歌曲时（铺底还没完成等）不退，交给队列下标兜底。
      */
     private takePreviousFromHistory() {
+        // 还没开始播（刚启动、没有还原中的会话）：上一首 = 历史里最近听的那首，直接接上
+        if (!this._currentMusic) {
+            return this._history[this._history.length - 1] ?? null;
+        }
         const prev = this._history[this._history.length - 2];
         if (!prev) {
             return null;
@@ -2070,8 +2120,10 @@ class TrackPlayer extends EventEmitter {
     async skipToPrevious() {
         const prev = this.takePreviousFromHistory();
         if (prev) {
-            // prev 可能已经不在队列里（被删过、或这之后换过队列）：照样播它，但不塞回队列
-            await this.play(prev, true, this.isInPlayList(prev));
+            // prev 可能已经不在队列里（被删过、或这之后换过队列）：照样播它，但不塞回队列。
+            // 还在队列里就播队列里那份：铺底来自持久化历史，封面等元数据可能被精简过
+            const index = this.getMusicIndexInPlayList(prev);
+            await this.play(index >= 0 ? this._playList[index] : prev, true, index >= 0);
             return;
         }
         // 没有历史（刚启动、或已经退到这段收听的第一首）：退回队列里的前一首

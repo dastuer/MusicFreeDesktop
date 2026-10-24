@@ -8,6 +8,9 @@ export interface HistoryItem extends IMusic.IMusicItem {
     playAt: number;
 }
 
+/** 播放历史最多保存多少首（History 页展示与「上一首」回退共用这条上限） */
+export const MAX_MUSIC_HISTORY = 300;
+
 /**
  * 历史条目里不带大体积内联封面。
  * 音源可能把整张封面塞成 base64（见过 13 MB 的 PNG），
@@ -30,7 +33,7 @@ export async function setMusicHistory(musicItem: IMusic.IMusicItem) {
         );
         filtered.unshift({ ...slimArtwork(musicItem), playAt: Date.now() });
         // 顺手清掉历史里残留的大体积封面，避免旧数据一直占着 store.json
-        const cleaned = filtered.slice(0, 300).map(slimArtwork);
+        const cleaned = filtered.slice(0, MAX_MUSIC_HISTORY).map(slimArtwork);
         await ipcInvoke("config:set", "musicHistory", cleaned);
     } catch {
         // ignore
