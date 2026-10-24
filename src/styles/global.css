@@ -3067,6 +3067,31 @@ body.in-desktop-lyrics-window {
     animation: netease-shimmer 1.4s linear infinite;
 }
 
+/* ---------- 本地音乐批量匹配状态条（复用网易匹配条骨架） ---------- */
+
+.local-matching-strip {
+    /* 贴在列表表头上方，留一点与头部的呼吸感 */
+    padding: 6px 8px 10px;
+}
+
+.local-matching-cancel {
+    flex-shrink: 0;
+    font-size: 12px;
+    padding: 4px 10px;
+}
+
+/* ---------- 本地音乐匹配弹窗（音源选择，复用 sheet-fix 一套类） ---------- */
+
+/* 单曲模式顶部那条「歌 - 歌手」信息行 */
+.local-match-single-track {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-weight: 500;
+    color: var(--text-color);
+}
+
 /* ================= 歌单音源修复 / 重新匹配弹窗 ================= */
 
 /* 弹窗本体：比默认面板宽（前后两列对比需要横向空间），高度更慷慨，

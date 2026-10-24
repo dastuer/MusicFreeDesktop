@@ -1368,6 +1368,39 @@ class TrackPlayer extends EventEmitter {
         );
     }
 
+    /**
+     * 本地音乐补全封面后同步播放队列：同一 localPath 的条目原位换 artwork，
+     * 正在播的当前曲一起换并重新持久化——界面立刻换图，重启后也是新封面。
+     */
+    updateLocalMusicArtwork(localPath: string, artwork: string) {
+        if (!localPath || !artwork) {
+            return;
+        }
+        let changed = false;
+        const patched = this._playList.map((it) => {
+            if (it.localPath === localPath && it.artwork !== artwork) {
+                changed = true;
+                return { ...it, artwork };
+            }
+            return it;
+        });
+        if (
+            this._currentMusic?.localPath === localPath &&
+            this._currentMusic.artwork !== artwork
+        ) {
+            changed = true;
+            this._currentMusic = { ...this._currentMusic, artwork };
+        }
+        if (!changed) {
+            return;
+        }
+        this._playList = patched;
+        setAtom(currentMusicAtom, this._currentMusic);
+        setAtom(playListAtom, this._playList);
+        this.persistPlayList();
+    }
+
+
     isInPlayList(musicItem?: IMusic.IMusicItem | null) {
         return this.getMusicIndexInPlayList(musicItem) >= 0;
     }

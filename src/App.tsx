@@ -10,6 +10,7 @@ import PromptDialogHost from "./components/base/PromptDialog";
 import UpdateDialogHost from "./components/base/UpdateDialog";
 import DownloadPanelHost from "./components/base/DownloadPanel";
 import SheetFixPanelHost from "./components/base/SheetFixPanel";
+import LocalMatchPanelHost from "./components/base/LocalMatchPanel";
 import SearchHistoryPanel from "./components/base/SearchHistoryPanel";
 import Icon from "./components/base/Icon";
 import {
@@ -293,6 +294,7 @@ export default function App() {
             <UpdateDialogHost />
             <DownloadPanelHost />
             <SheetFixPanelHost />
+            <LocalMatchPanelHost />
             <ContextMenuHost />
             <ToastHost />
         </div>

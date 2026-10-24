@@ -66,6 +66,18 @@ export function clearLocalLyricCache() {
     localStorage.removeItem(REMOTE_CACHE_KEY);
 }
 
+/** 别处匹配成功后把结果记进缓存（本地批量/单曲匹配共用）：播放时直接命中，不再联网 */
+export function rememberRemoteLyric(musicItem: IMusic.IMusicItem, source: ILyric.ILyricSource) {
+    const rawLrc = source.rawLrc ?? "";
+    if (!rawLrc.trim()) {
+        return;
+    }
+    const key = lyricCacheKey(musicItem);
+    const cache = loadCache();
+    cache[key] = { rawLrc, translation: source.translation, cachedAt: Date.now() };
+    saveCache(cache);
+}
+
 /**
  * 给一条本地曲目找歌词。找不到返回 null（调用方按「没有歌词」处理）。
  * 文件自带（含 .lrc）由主进程读；联网匹配成功会经主进程写回文件。

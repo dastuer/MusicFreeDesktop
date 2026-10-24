@@ -1,4 +1,5 @@
 import { getPluginByMedia, getSortedSearchablePlugins, pluginCall } from "@/core/ipc";
+import { getSearchSource } from "@/core/mediaSource";
 import { navigate } from "@/core/router";
 import { showToast } from "@/components/base/Toast";
 
@@ -9,6 +10,10 @@ import { showToast } from "@/components/base/Toast";
  * 先用提供这首歌的音源把歌手搜出来（取第一个命中），拿着结果跳转。
  * 多人合唱（"A/B"、"A feat. B"）取第一段：按整串搜基本搜不到，宁可先给主唱。
  *
+ * 本地文件（platform「本地音乐」对不上插件）退回「当前音源」：
+ * 搜索页记住的音源优先（用户最近在用的），其次默认音源——
+ * 这样从本地列表点歌手，落到的是自己正在用的那个音源的歌手音乐列表。
+ *
  * @returns 是否发起了跳转（调用方据此决定要不要收起浮层）
  */
 export async function navigateToArtist(musicItem: IMusic.IMusicItem): Promise<boolean> {
@@ -18,9 +23,18 @@ export async function navigateToArtist(musicItem: IMusic.IMusicItem): Promise<bo
         showToast("这首歌没有歌手信息");
         return false;
     }
-    // 先认提供这首歌的音源；本地文件（platform「本地音乐」对不上插件）退回第一个启用的搜索音源
+    // 先认提供这首歌的音源
+    const provided = await getPluginByMedia(musicItem);
     const plugin =
-        (await getPluginByMedia(musicItem)) ?? (await getSortedSearchablePlugins())[0];
+        provided ??
+        (await (async () => {
+            const searchable = await getSortedSearchablePlugins();
+            const remembered = getSearchSource();
+            return (
+                (remembered ? searchable.find((p) => p.hash === remembered) : undefined) ??
+                searchable[0]
+            );
+        })());
     if (!plugin?.supportedMethods.includes("search")) {
         showToast("没有可用的搜索音源，请先在「音源」页安装并启用插件");
         return false;

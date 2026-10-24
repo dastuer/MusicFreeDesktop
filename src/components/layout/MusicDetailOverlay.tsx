@@ -12,6 +12,7 @@ import {
 } from "@/core/trackPlayer";
 import { useProgress } from "@/core/trackPlayer";
 import { navigateToArtist } from "@/utils/artistNav";
+import { showLocalMatchPanel } from "@/components/base/LocalMatchPanel";
 
 /**
  * 正在播放页：左侧大封面 / 右侧滚动歌词（网易云风格）
@@ -144,6 +145,34 @@ export default function MusicDetailOverlay(props: { visible: boolean; onClose: (
                         style={{ color: "var(--text-secondary)" }}
                     />
                 </button>
+                {/* 本地音乐的单曲匹配入口：补完这首歌的歌词与封面，成功后就地刷新 */}
+                {currentMusic.localPath && (
+                    <button
+                        className="titlebar-nav-btn"
+                        style={{ width: 36, height: 36, marginLeft: "auto" }}
+                        title="匹配歌词与封面"
+                        onClick={() =>
+                            showLocalMatchPanel({
+                                mode: "single",
+                                items: [currentMusic],
+                                onDone: (outcome) => {
+                                    // 封面已由匹配管线同步到当前曲；这里只负责歌词就重载一次。
+                                    // 若匹配期间切了歌，按「现在正在播的」重载，别把旧歌的词安到新歌头上
+                                    const cur = TrackPlayerSingleton.currentMusic;
+                                    if (outcome.status === "matched" && cur?.localPath) {
+                                        loadCurrentLyric(cur);
+                                    }
+                                },
+                            })
+                        }
+                    >
+                        <Icon
+                            name="refresh"
+                            size={17}
+                            style={{ color: "var(--text-secondary)" }}
+                        />
+                    </button>
+                )}
             </div>
             <div className="music-detail-body">
                 <div className={`music-detail-cover-wrap${playing ? " playing" : ""}`}>

@@ -22,6 +22,7 @@ import {
 } from "@/core/downloadManager";
 import { ipcInvoke } from "@/core/ipc";
 import { navigateToArtist } from "@/utils/artistNav";
+import { showLocalMatchPanel } from "./LocalMatchPanel";
 import { showToast } from "./Toast";
 import { useListSearch } from "@/hooks/useListSearch";
 import type { TSheetFixMode } from "@/core/sheetSourceFix";
@@ -545,6 +546,12 @@ export default function MusicList(props: IMusicListProps) {
 
         if (localMode) {
             items.push(
+                {
+                    title: "匹配歌词与封面",
+                    icon: "refresh",
+                    onClick: () =>
+                        showLocalMatchPanel({ mode: "single", items: [musicItem] }),
+                },
                 {
                     title: "在访达中打开",
                     icon: "open",
