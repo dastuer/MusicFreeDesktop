@@ -2646,15 +2646,15 @@ html[data-theme="dark"] .search-history-panel {
     font-size: 12px;
 }
 
-/* 插件卡片 */
+/* 插件卡片：紧凑单行化布局，高度尽量向列表行靠拢 */
 .plugin-card {
     border: 1px solid var(--divider);
     border-radius: 10px;
-    padding: 16px;
-    margin-bottom: 12px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
     display: flex;
-    gap: 14px;
-    align-items: flex-start;
+    gap: 12px;
+    align-items: center;
     cursor: grab;
 }
 
@@ -2666,15 +2666,15 @@ html[data-theme="dark"] .search-history-panel {
 }
 
 .plugin-card-icon {
-    width: 44px;
-    height: 44px;
+    width: 34px;
+    height: 34px;
     border-radius: 8px;
     background: var(--primary-color);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
+    font-size: 16px;
     font-weight: 700;
     flex-shrink: 0;
 }
@@ -2685,19 +2685,51 @@ html[data-theme="dark"] .search-history-panel {
 }
 
 .plugin-card-name {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
+}
+
+/* 卡片内的标签比通用 .tag 再瘦一圈 */
+.plugin-card-name .tag {
+    padding: 1px 6px;
+    margin-left: 6px;
 }
 
 .plugin-card-meta {
     font-size: 12px;
     color: var(--text-tertiary);
-    margin: 4px 0 6px;
+    margin: 3px 0 0;
 }
 
 .plugin-card-desc {
     font-size: 12px;
     color: var(--text-secondary);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 描述里偶有 <p>/<br> 等块级标签，压成行内保证单行省略不撑高卡片 */
+.plugin-card-desc :is(p, div, ul, ol) {
+    display: inline;
+    margin: 0;
+}
+
+.plugin-card-desc br {
+    display: none;
+}
+
+/* 卡片右侧操作按钮：横排小号 */
+.plugin-card-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.plugin-card-actions button {
+    padding: 4px 10px;
+    font-size: 12px;
 }
 
 .tag {

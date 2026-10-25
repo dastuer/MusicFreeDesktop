@@ -62,6 +62,18 @@ interface DragState {
     pitch: number;
 }
 
+/**
+ * 松手落位阶段（FLIP，两帧）：
+ * 第一帧把被拖卡片的 wrapper 位移换成「视觉位置不变」的等价值（无过渡），
+ * 第二帧起过渡回 0，卡片从指针位置平滑滑进新槽位而不是瞬移。
+ */
+interface SettleState {
+    id: string;
+    offset: number;
+    /** false = FLIP 校正帧（无过渡）；true = 过渡回 0 帧 */
+    animating: boolean;
+}
+
 export default function PluginManagePage() {
     const [plugins, setPlugins] = useState<SerializedPlugin[]>([]);
     const [subscriptions, setSubscriptions] = useState<SerializedSubscription[]>([]);
@@ -72,12 +84,20 @@ export default function PluginManagePage() {
     const [varDraft, setVarDraft] = useState<Record<string, string>>({});
     // ---------- 拖动排序（react-draggable，与侧边栏「我的歌单」同一套交互） ----------
     // 整张卡片任意位置按住即可拖（按钮/链接除外，见 PluginDraggable 的 cancel）；
-    // 被拖卡片跟随指针，其余卡片按被拖卡片的档位整格让位；松手一次性换位落盘。
+    // 被拖卡片跟随指针，其余卡片按被拖卡片的档位整格让位；松手后让位卡片
+    // 的换位与位移同帧抵消（纹丝不动），被拖卡片 FLIP 平滑滑进新槽位，再落盘。
     const dragRef = useRef<DragState | null>(null);
     const [drag, setDrag] = useState<DragState | null>(null);
-    /** 各卡片的布局快照（拖动开始时测一次；transform 不影响 offsetTop/Height，拖动期间有效） */
-    const cardMetricsRef = useRef<{ hash: string; top: number; height: number }[]>([]);
+    /** 松手落位动画进行中；settleTimerRef 负责动画结束后收回 state */
+    const [settle, setSettle] = useState<SettleState | null>(null);
+    const settleTimerRef = useRef(0);
+    /** 各卡片的布局快照（拖动开始时测一次；拖动期间卡片只做 transform 让位，布局不变，快照一直有效） */
+    const cardMetricsRef = useRef<
+        { hash: string; top: number; height: number; pitch: number }[]
+    >([]);
     const cardRefs = useRef(new Map<string, HTMLDivElement>());
+
+    useEffect(() => () => window.clearTimeout(settleTimerRef.current), []);
 
     const refresh = async () => {
         invalidatePluginCache();
@@ -284,11 +304,17 @@ export default function PluginManagePage() {
     // 被拖卡片从原位抽走、插到新位，中间的卡片各让出这一格空间。
 
     const handleDragStart = (pluginHash: string, startIndex: number) => {
-        const el = cardRefs.current.get(pluginHash);
-        const marginBottom = el ? parseFloat(getComputedStyle(el).marginBottom || "0") : 0;
         cardMetricsRef.current = plugins.map((p) => {
             const card = cardRefs.current.get(p.hash);
-            return { hash: p.hash, top: card?.offsetTop ?? 0, height: card?.offsetHeight ?? 0 };
+            // 卡片的 offsetParent 是外层 position:relative 的拖拽壳，offsetTop 恒为 0；
+            // 初始位置只能取视口坐标——此刻所有 transform 都还是 0，量出来即原始布局
+            const height = card?.offsetHeight ?? 0;
+            return {
+                hash: p.hash,
+                top: card?.getBoundingClientRect().top ?? 0,
+                height,
+                pitch: height + (card ? parseFloat(getComputedStyle(card).marginBottom || "0") : 0),
+            };
         });
         dragRef.current = {
             id: pluginHash,
@@ -296,9 +322,12 @@ export default function PluginManagePage() {
             y: 0,
             targetIndex: startIndex,
             moved: false,
-            pitch: (el?.offsetHeight ?? 0) + marginBottom,
+            pitch: cardMetricsRef.current[startIndex]?.pitch ?? 0,
         };
         setDrag(dragRef.current);
+        // 上一轮落位动画还没放完就又开拖：作废它，避免两套位移打架
+        window.clearTimeout(settleTimerRef.current);
+        setSettle(null);
     };
 
     const handleDragMove = (deltaY: number) => {
@@ -328,17 +357,40 @@ export default function PluginManagePage() {
     const handleDragStop = () => {
         const d = dragRef.current;
         dragRef.current = null;
-        setDrag(null);
+        const metrics = cardMetricsRef.current;
         cardMetricsRef.current = [];
-        if (!d || !d.moved || d.targetIndex === d.startIndex) {
+        setDrag(null);
+        if (!d?.moved) {
             return;
         }
         // 本地先换位（乐观更新），再落盘对齐（plugin:list 本身按 order 排序）
-        const ordered = [...plugins];
-        const [moved] = ordered.splice(d.startIndex, 1);
-        ordered.splice(d.targetIndex, 0, moved);
-        setPlugins(ordered);
-        ipcInvoke("plugin:setOrder", ordered.map((p) => p.hash)).then(() => refresh());
+        let ordered = plugins;
+        if (d.targetIndex !== d.startIndex) {
+            ordered = [...plugins];
+            const [moved] = ordered.splice(d.startIndex, 1);
+            ordered.splice(d.targetIndex, 0, moved);
+            setPlugins(ordered);
+            ipcInvoke("plugin:setOrder", ordered.map((p) => p.hash)).then(() => refresh());
+        }
+        // 松手落位（FLIP）：换位让其余卡片的「布局移动」与「让位 transform 归零」同帧
+        // 抵消，视觉纹丝不动；被拖卡片先无过渡摆到视觉位置不变的等价位移，下一帧
+        // 过渡回 0，从指针位置滑进新槽位。拖了又放回原位时同样平滑滑回。
+        const self = metrics[d.startIndex];
+        const target = metrics[d.targetIndex];
+        if (!self || !target) {
+            return;
+        }
+        const newTop =
+            d.targetIndex > d.startIndex ? target.top + target.pitch - self.pitch : target.top;
+        setSettle({ id: d.id, offset: self.top + d.y - newTop, animating: false });
+        // 双 rAF：保证 FLIP 校正帧先绘制出来，过渡才有正确的起点
+        requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+                setSettle((s) => (s && !s.animating ? { ...s, offset: 0, animating: true } : s));
+                window.clearTimeout(settleTimerRef.current);
+                settleTimerRef.current = window.setTimeout(() => setSettle(null), 220);
+            })
+        );
     };
 
     return (
@@ -378,13 +430,10 @@ export default function PluginManagePage() {
                 <div
                     className="plugin-card"
                     key={sub.id}
-                    style={{ padding: "10px 14px" }}
                     onContextMenu={(e) => openSubscriptionMenu(e, sub)}
                 >
                     <div className="plugin-card-info">
-                        <div className="plugin-card-name" style={{ fontSize: 14 }}>
-                            {sub.name}
-                        </div>
+                        <div className="plugin-card-name">{sub.name}</div>
                         <div
                             className="plugin-card-meta"
                             style={{
@@ -401,24 +450,26 @@ export default function PluginManagePage() {
                             {sub.pluginCount} 个音源 · {formatCheckTime(sub.lastCheckAt)}
                         </div>
                     </div>
-                    <button
-                        className="btn-ghost"
-                        disabled={!!busySubscription}
-                        onClick={() =>
-                            runSubscriptionImport(
-                                () => ipcInvoke("pluginSubscription:update", sub.id),
-                                sub.id,
-                            )
-                        }
-                    >
-                        {busySubscription === sub.id ? "检查中…" : "检查更新"}
-                    </button>
-                    <button
-                        className="btn-ghost"
-                        onClick={(e) => openSubscriptionMenu(e as any, sub)}
-                    >
-                        更多
-                    </button>
+                    <div className="plugin-card-actions">
+                        <button
+                            className="btn-ghost"
+                            disabled={!!busySubscription}
+                            onClick={() =>
+                                runSubscriptionImport(
+                                    () => ipcInvoke("pluginSubscription:update", sub.id),
+                                    sub.id,
+                                )
+                            }
+                        >
+                            {busySubscription === sub.id ? "检查中…" : "检查更新"}
+                        </button>
+                        <button
+                            className="btn-ghost"
+                            onClick={(e) => openSubscriptionMenu(e as any, sub)}
+                        >
+                            更多
+                        </button>
+                    </div>
                 </div>
             ))}
             {!subscriptions.length && (
@@ -483,7 +534,7 @@ export default function PluginManagePage() {
 
             {plugins.length > 1 && (
                 <div style={{ fontSize: 12, color: "var(--text-tertiary)", margin: "4px 0 10px" }}>
-                    按住插件卡片上下拖动即可调整音源顺序（默认音源始终置顶）
+                    按住卡片上下拖动即可调整音源顺序
                 </div>
             )}
             {plugins.map((plugin, index) => {
@@ -500,9 +551,19 @@ export default function PluginManagePage() {
                 return (
                     <PluginDraggable
                         key={plugin.hash}
-                        offsetY={drag?.id === plugin.hash ? drag.y : 0}
+                        offsetY={
+                            drag?.id === plugin.hash
+                                ? drag.y
+                                : settle?.id === plugin.hash
+                                  ? settle.offset
+                                  : 0
+                        }
                         dragging={!!draggingSelf}
+                        /** 落位中的卡片保持浮层，滑进槽位时不会从邻卡下面穿过 */
+                        lifted={!!draggingSelf || settle?.id === plugin.hash}
                         shiftY={shiftY}
+                        settleActive={!!settle}
+                        wrapperGlide={settle?.id === plugin.hash && settle.animating}
                         disabled={plugins.length < 2}
                         onStart={() => handleDragStart(plugin.hash, index)}
                         onMove={handleDragMove}
@@ -548,11 +609,11 @@ export default function PluginManagePage() {
                             </div>
                             <div
                                 className="plugin-card-desc"
-                                style={{ maxHeight: 40, overflow: "hidden" }}
+                                title={plugin.description?.replace(/<[^>]+>/g, " ").trim()}
                                 dangerouslySetInnerHTML={{ __html: plugin.description ?? "" }}
                             />
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div className="plugin-card-actions">
                             <button
                                 className={plugin.enabled ? "btn-ghost" : "btn-primary"}
                                 onClick={async () => {
@@ -583,15 +644,23 @@ export default function PluginManagePage() {
 
 /**
  * 插件卡片的拖拽外壳（与侧边栏歌单行同一套分层）：
- * 外层 div 的 transform 由 Draggable 接管（被拖卡片跟随指针），
+ * 外层 div 的 transform 由 Draggable 接管（被拖卡片跟随指针 / 落位时滑进槽位），
  * 内层 .plugin-card 的 transform 留给「让位」过渡动画——
  * 两者必须分层，否则 Draggable 写入的 translate 会把让位位移覆盖掉。
  * 整张卡片任意位置按下即可拖；按钮/链接上按下不拖（cancel），保持点击行为。
+ * 松手落位（settle）时：内层一律不做过渡（换位与让位位移需同帧精确抵消，
+ * 多一个过渡就会多弹一格）；外层在第二帧起过渡回 0，实现 FLIP 滑入。
  */
 function PluginDraggable(props: {
     offsetY: number;
     dragging: boolean;
+    /** 拖动中或落位中：保持在邻居之上 */
+    lifted: boolean;
     shiftY: number;
+    /** 松手落位阶段进行中（对所有卡片生效）：内层禁用过渡 */
+    settleActive: boolean;
+    /** 落位第二阶段：外层从落位起始位移过渡回 0 */
+    wrapperGlide: boolean;
     disabled: boolean;
     onStart: () => void;
     onMove: (deltaY: number) => void;
@@ -615,7 +684,11 @@ function PluginDraggable(props: {
         >
             <div
                 ref={nodeRef}
-                style={{ position: "relative", zIndex: props.dragging ? 10 : undefined }}
+                style={{
+                    position: "relative",
+                    zIndex: props.lifted ? 10 : undefined,
+                    transition: props.wrapperGlide ? "transform 160ms ease" : undefined,
+                }}
             >
                 <div
                     ref={props.registerRef}
@@ -625,7 +698,10 @@ function PluginDraggable(props: {
                             !props.dragging && props.shiftY
                                 ? `translateY(${props.shiftY}px)`
                                 : undefined,
-                        transition: props.dragging ? "none" : "transform 160ms ease",
+                        transition:
+                            props.dragging || props.settleActive
+                                ? "none"
+                                : "transform 160ms ease",
                     }}
                     onContextMenu={props.onContextMenu}
                 >
