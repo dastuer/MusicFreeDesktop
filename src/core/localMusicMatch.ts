@@ -145,13 +145,18 @@ export async function matchLocalTrack(
         };
     }
 
-    const applied = await ipcInvoke<{
-        ok: boolean;
-        artwork?: string;
+    // handler 把结果包成 {success, data}（preload 不解包），失败时只有 message
+    const resp = await ipcInvoke<{
+        success: boolean;
+        data?: { ok: boolean; artwork?: string; message?: string };
         message?: string;
     }>("localLyrics:applyRemote", { localPath, lyrics, artworkUrl });
-    if (!applied?.ok) {
-        return { status: "error", reason: applied?.message ?? "写回文件失败" };
+    const applied = resp?.data;
+    if (!resp?.success || !applied?.ok) {
+        return {
+            status: "error",
+            reason: resp?.message ?? applied?.message ?? "写回文件失败",
+        };
     }
 
     if (lyrics) {

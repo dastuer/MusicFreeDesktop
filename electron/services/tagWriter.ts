@@ -428,7 +428,11 @@ function readMp3Tag(filePath: string): { version: 2 | 3 | 4; extracted: IId3Extr
  * 重写 MP3 的标签区：丢弃旧 ID3v2 与 ID3v1，生成新 ID3v2.3，音频体原样保留。
  * tags 没给的字段用旧标签兜底；旧 USLT 在新歌词缺失时保留。
  */
-function rewriteMp3(filePath: string, tags: IAudioTags): boolean {
+function rewriteMp3(
+    filePath: string,
+    tags: IAudioTags,
+    drop?: { lyrics?: boolean; picture?: boolean },
+): boolean {
     const buf = fs.readFileSync(filePath);
     const old = readId3v2Header(buf.subarray(0, Math.min(buf.length, 10)));
     let audioStart = 0;
@@ -452,6 +456,13 @@ function rewriteMp3(filePath: string, tags: IAudioTags): boolean {
         picture: tags.picture ?? existing.picture,
         uslt: tags.lyrics ?? existing.uslt,
     };
+    // stripTags 用：显式丢掉歌词/封面（而不是保留旧值）
+    if (drop?.lyrics) {
+        merged.uslt = undefined;
+    }
+    if (drop?.picture) {
+        merged.picture = undefined;
+    }
 
     const frames = [
         id3TextFrame("TIT2", merged.title ?? ""),
@@ -657,7 +668,11 @@ function readFlac(filePath: string): { blocks: IFlacBlock[]; audioOffset: number
  *   而我们无法重算偏移。下载来的文件基本没有这个块，正常路径零代价。
  * tags 没给的字段用旧标签/旧封面兜底；旧 LYRICS 在新歌词缺失时保留。
  */
-function rewriteFlac(filePath: string, tags: IAudioTags): boolean {
+function rewriteFlac(
+    filePath: string,
+    tags: IAudioTags,
+    drop?: { lyrics?: boolean; picture?: boolean },
+): boolean {
     const parsed = readFlac(filePath);
     if (!parsed) {
         return false;
@@ -681,6 +696,13 @@ function rewriteFlac(filePath: string, tags: IAudioTags): boolean {
         lyrics: tags.lyrics ?? existing.lyrics,
         picture: tags.picture ?? oldPicture,
     };
+    // stripTags 用：显式丢掉歌词/封面（而不是保留旧值）
+    if (drop?.lyrics) {
+        merged.lyrics = undefined;
+    }
+    if (drop?.picture) {
+        merged.picture = undefined;
+    }
 
     const vorbis = buildVorbisComment(merged);
     const picture = merged.picture ? buildFlacPicture(merged.picture) : null;
@@ -732,6 +754,26 @@ export function writeTags(filePath: string, tags: IAudioTags): boolean {
     }
     if (kind === "flac") {
         return rewriteFlac(filePath, tags);
+    }
+    return false;
+}
+
+/**
+ * 剥离标签（原地重写）：lyrics → 丢 USLT/LYRICS，picture → 丢 APIC/PICTURE，
+ * 其余字段原样保留。其余格式（m4a/wav/ogg…）不碰，返回 false（歌词走 .lrc 边车，调用方删文件）。
+ * 供清除匹配结果用：把之前写进文件的歌词/封面摘掉，恢复到未匹配状态。
+ */
+export function stripTags(
+    filePath: string,
+    opts: { lyrics?: boolean; picture?: boolean },
+): boolean {
+    const kind = sniffKind(filePath);
+    const drop = { lyrics: !!opts.lyrics, picture: !!opts.picture };
+    if (kind === "mp3") {
+        return rewriteMp3(filePath, {}, drop);
+    }
+    if (kind === "flac") {
+        return rewriteFlac(filePath, {}, drop);
     }
     return false;
 }

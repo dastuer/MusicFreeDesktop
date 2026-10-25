@@ -14,7 +14,13 @@ import { artistSim, titleSim } from "./neteaseMatch";
  * 下次就是「文件自带」，不再走网络。
  */
 
-const REMOTE_CACHE_KEY = "localLyricCache.v1";
+const REMOTE_CACHE_KEY = "localLyricCache.v2";
+/**
+ * 上一代缓存键：v1 里存着旧匹配写过的歌词。清除匹配结果后如果还留着，
+ * 播放剥离过歌词的歌会从缓存「复活」并自动回写文件——换键让旧缓存整体作废，
+ * loadCache 时顺手删掉。
+ */
+const LEGACY_REMOTE_CACHE_KEY = "localLyricCache.v1";
 /** 缓存键不能只有 localPath：换歌不重命名文件会串。键 = 路径 + 标题 + 歌手（内容指纹） */
 function lyricCacheKey(item: IMusic.IMusicItem) {
     return `${item.localPath}|${item.title}|${item.artist}`;
@@ -37,6 +43,9 @@ function loadCache(): Record<string, ICachedRemoteLyric> {
         remoteCache = parsed && typeof parsed === "object" ? parsed : {};
     } catch {
         remoteCache = {};
+    }
+    if (localStorage.getItem(LEGACY_REMOTE_CACHE_KEY)) {
+        localStorage.removeItem(LEGACY_REMOTE_CACHE_KEY);
     }
     return remoteCache!;
 }
