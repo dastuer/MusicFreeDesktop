@@ -11,3 +11,4 @@ build/icon.iconset
 .workbuddy/
 # 网易云歌单导入的本地临时产物（json / md / 截图）
 netease-import/
+/main.js
