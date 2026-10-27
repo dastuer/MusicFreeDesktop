@@ -123,6 +123,25 @@ const iconPaths: Record<string, React.ReactNode> = {
             <path d="M12 9.5V13l2.5 2M9.5 2.75h5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
         </>
     ),
+    /** 音效：三根高低不同的推子（均衡器意象） */
+    soundEffect: (
+        <>
+            <path
+                d="M6 4v5.5M6 14.5V20M12 4v8.5M12 17.5V20M18 4v2.5M18 11.5V20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+            />
+            <path
+                d="M3.6 11.5h4.8M9.6 15h4.8M15.6 8h4.8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+            />
+        </>
+    ),
     /** 每日推荐（网易云）：日历 + 星标 */
     netease: (
         <>

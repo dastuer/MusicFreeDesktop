@@ -2874,6 +2874,39 @@ html[data-theme="dark"] .search-history-panel {
     color: #ffffff;
 }
 
+/* 音效入口：与「词/文」同尺寸的图标按钮，开启时亮主色 + ON 角标 */
+.playerbar-effect-entry {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.playerbar-effect-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    line-height: 1;
+    padding: 6px;
+    border-radius: 6px;
+}
+
+.playerbar-effect-btn:hover {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+.playerbar-effect-btn.on {
+    color: var(--primary-color);
+}
+
+.playerbar-effect-btn.on:hover {
+    color: var(--primary-color);
+}
+
 /* 悬浮窗本体（独立透明置顶窗口）：深色胶囊，与主题无关，整体可拖动 */
 body.in-desktop-lyrics-window {
     background: transparent;
@@ -3374,3 +3407,513 @@ body.in-desktop-lyrics-window {
 .sheet-fix-row.clickable:hover {
     background: var(--hover-bg);
 }
+/* ---------- 音效面板（布局参考网易云桌面版音效页） ---------- */
+/* 深色玻璃面板：截图里网易云音效页是暗色底 + 大号白色推子，
+   这里跟随主题（亮色主题用浅底），但结构与比例完全照它。 */
+.audio-effect-mask {
+    align-items: center;
+    /* 盖过播放栏，避免面板挡住后仍能点到底下的控件 */
+    z-index: 230;
+}
+
+.audio-effect-panel {
+    -webkit-app-region: no-drag;
+    width: 560px;
+    max-height: calc(100vh - 100px);
+    display: flex;
+    flex-direction: column;
+    background: var(--page-bg);
+    border: 1px solid var(--divider);
+    border-radius: 12px;
+    box-shadow: 0 18px 56px rgba(0, 0, 0, 0.3);
+    animation: fade-in 0.18s ease;
+    overflow: hidden;
+}
+
+/* 头部：tab 在左，开关在最右（与截图同一条横向布局） */
+.audio-effect-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--divider);
+    flex-shrink: 0;
+    min-height: 52px;
+}
+
+.audio-effect-tabs {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    flex: 1;
+    min-width: 0;
+}
+
+.audio-effect-tab {
+    position: relative;
+    background: transparent;
+    border: none;
+    padding: 15px 1px 14px;
+    font-size: 15px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s;
+    white-space: nowrap;
+}
+
+.audio-effect-tab:hover:not(.disabled) {
+    color: var(--text-color);
+}
+
+.audio-effect-tab.active {
+    color: var(--text-color);
+    font-weight: 600;
+}
+
+/* 选中态的下划线：压在容器分隔线上 */
+.audio-effect-tab.active::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--primary-color);
+}
+
+.audio-effect-tab.disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.audio-effect-switch {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-shrink: 0;
+}
+
+.switch-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* 胶囊开关 */
+.switch-pill {
+    width: 42px;
+    height: 23px;
+    padding: 2px;
+    border: none;
+    border-radius: 12px;
+    background: var(--active-bg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: background 0.18s ease;
+    flex-shrink: 0;
+}
+
+.switch-pill.on {
+    background: var(--primary-color);
+}
+
+.switch-knob {
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+    transition: transform 0.18s ease;
+}
+
+.switch-pill.on .switch-knob {
+    transform: translateX(19px);
+}
+
+.audio-effect-close {
+    cursor: pointer;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.audio-effect-close:hover {
+    color: var(--text-color);
+}
+
+.audio-effect-body {
+    padding: 16px 20px 18px;
+    overflow-y: auto;
+    transition: opacity 0.18s ease;
+}
+
+/* 未启用时整体变淡（仍可调参数，先调好再开） */
+.audio-effect-body.disabled {
+    opacity: 0.5;
+}
+
+.audio-effect-section-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 22px 0 14px;
+}
+
+.audio-effect-section-title {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* 圆角描边按钮，与截图里「重置」同款 */
+.audio-effect-reset {
+    background: transparent;
+    border: 1px solid var(--divider);
+    border-radius: 15px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 5px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.audio-effect-reset:hover {
+    border-color: var(--text-tertiary);
+    color: var(--text-color);
+}
+
+/* ---------- 预设行（下拉 + 保存，取代卡片墙） ---------- */
+.eq-preset-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.eq-preset-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+/* 胶囊下拉（均衡器预设 / 环境音效共用同一套，改这里一处即可） */
+.pill-select-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.pill-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: 1px solid var(--divider);
+    border-radius: 18px;
+    color: var(--text-color);
+    font-size: 13px;
+    padding: 7px 36px 7px 16px;
+    cursor: pointer;
+    outline: none;
+    /* 宽度交给浏览器按「最宽的那个选项」算：切换选项时宽度不跳动，
+       也正好只比选项文字多留一点空隙（右侧已由 padding 给箭头让出位置）。
+       别改成固定宽度——名字长短不一的选项会显得忽宽忽窄。 */
+    width: auto;
+}
+
+.pill-select:hover {
+    border-color: var(--text-tertiary);
+}
+
+.pill-select option {
+    background: var(--page-bg);
+    color: var(--text-color);
+}
+
+.pill-select-caret {
+    position: absolute;
+    right: 13px;
+    pointer-events: none;
+    color: var(--text-tertiary);
+}
+
+
+/* 「保存」：同款胶囊描边按钮 */
+.eq-preset-save {
+    background: transparent;
+    border: 1px solid var(--divider);
+    border-radius: 18px;
+    color: var(--text-color);
+    font-size: 13px;
+    padding: 7px 20px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    flex-shrink: 0;
+}
+
+.eq-preset-save:hover {
+    border-color: var(--text-tertiary);
+    background: var(--hover-bg);
+}
+
+/* ---------- 十段均衡器（大推子） ---------- */
+.eq-board {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+/* 左侧刻度：只标两端（0dB 在顶部、−12dB 在底部），与截图一致 */
+.eq-scale {
+    position: relative;
+    width: 46px;
+    height: 168px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+/* 刻度文字绝对定位：顶端 +12、居中 0、底端 −12，与推子轨道严格对应 */
+.eq-scale span {
+    position: absolute;
+    right: 0;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.eq-scale span:nth-child(1) {
+    top: 0;
+    transform: translateY(-50%);
+}
+
+.eq-scale span:nth-child(2) {
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.eq-scale span:nth-child(3) {
+    bottom: 0;
+    transform: translateY(50%);
+}
+
+.eq-faders {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.eq-fader {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 0;
+}
+
+.eq-fader-track {
+    position: relative;
+    width: 100%;
+    height: 168px;
+    cursor: pointer;
+}
+
+/* 轨道：一条 4px 圆角粗线。颜色比填充暗得多，未填充的部分一眼能看出是「空轨道」 */
+.eq-fader-rail {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    transform: translateX(-50%);
+    border-radius: 2px;
+    /* 比 --divider 更淡：未填充段只是「刻度尺」，不该和红色填充抢视觉 */
+    background: var(--active-bg);
+    opacity: 0.55;
+}
+
+/* 填充：始终从底部长到当前值，正负同色（这就是「同一个颜色」的要求） */
+.eq-fader-fill {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: 4px;
+    transform: translateX(-50%);
+    border-radius: 2px;
+    background: var(--primary-color);
+}
+
+/* 0dB 基线：横穿轨道的短刻度 */
+.eq-fader-zero {
+    position: absolute;
+    left: 50%;
+    width: 15px;
+    height: 1px;
+    transform: translate(-50%, 50%);
+    background: var(--divider);
+    pointer-events: none;
+}
+
+/* 滑块：大号白色圆点（截图的视觉重心），带一圈描边保证暗色下也清楚 */
+.eq-fader-thumb {
+    position: absolute;
+    left: 50%;
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+    transform: translate(-50%, 50%);
+    transition: box-shadow 0.15s;
+}
+
+.eq-fader-track:hover .eq-fader-thumb,
+.eq-fader-track.dragging .eq-fader-thumb {
+    box-shadow: 0 0 0 4px rgba(236, 65, 65, 0.16), 0 1px 4px rgba(0, 0, 0, 0.22);
+}
+
+.eq-fader-label {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+
+/* ---------- 横向滑块（低音/高音/环绕） ---------- */
+.hs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px 26px;
+}
+
+.hs-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 7px;
+}
+
+.hs-control {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+/* 两端的 −/+ 符号 */
+.hs-end {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    width: 10px;
+    text-align: center;
+    line-height: 1;
+}
+
+.hs-track {
+    position: relative;
+    flex: 1;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.hs-rail {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--active-bg);
+    opacity: 0.55;
+}
+
+/* 填充：从最左端（最小值）长到当前位置，正负同色 */
+.hs-fill {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--primary-color);
+}
+
+/* 中点刻度（对称参数用） */
+.hs-center {
+    position: absolute;
+    top: 50%;
+    width: 1px;
+    height: 11px;
+    transform: translate(-50%, -50%);
+    background: var(--text-placeholder);
+    pointer-events: none;
+}
+
+.hs-thumb {
+    position: absolute;
+    top: 50%;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+    transform: translate(-50%, -50%);
+    transition: box-shadow 0.15s;
+}
+
+.hs-track:hover .hs-thumb,
+.hs-track.dragging .hs-thumb {
+    box-shadow: 0 0 0 4px rgba(236, 65, 65, 0.16), 0 1px 4px rgba(0, 0, 0, 0.22);
+}
+
+.hs-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+/* 拖动时浮在滑块上方的数值气泡（两种滑块共用） */
+.fader-bubble {
+    position: absolute;
+    left: 50%;
+    transform: translate(-50%, 50%);
+    margin-bottom: 14px;
+    padding: 3px 7px;
+    border-radius: 5px;
+    background: var(--text-color);
+    color: var(--page-bg);
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* 横向滑块的泡泡要抬到轨道上方（它们的定位基点是 left） */
+.hs-track .fader-bubble {
+    bottom: 50%;
+    transform: translate(-50%, -12px);
+    margin-bottom: 0;
+}
+
+/* ---------- 环境音效 ---------- */
+.reverb-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px solid var(--divider);
+}
+
+.reverb-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+

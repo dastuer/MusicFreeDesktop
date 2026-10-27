@@ -41,9 +41,11 @@ import {
 } from "@/core/trackPlayer";
 import { showAddToSheetPanel } from "../base/AddToSheetPanel";
 import { showDownloadPanel } from "../base/DownloadPanel";
+import { showAudioEffectPanel } from "../base/AudioEffectPanel";
 import { showContextMenu } from "../base/ContextMenu";
 import { showToast } from "../base/Toast";
 import { showPlayQueuePanel } from "./PlayQueuePanel";
+import { useAudioEffect } from "@/core/audioEffect";
 
 const repeatModeMeta: Record<string, { icon: string; label: string }> = {
     off: { icon: "repeatOff", label: "列表循环" },
@@ -96,6 +98,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
     const translationOn = useLyricTranslationOn();
     const rate = useRate();
     const sleepTimer = useAtomValue(sleepTimerAtom);
+    // 音效开关：「更多」菜单里音效那一行的勾选态要跟着变
+    const effectSettings = useAudioEffect();
     const [liked, setLiked] = useState(false);
     const likesVersion = useAtomValue(likesVersionAtom);
     /** 队列一进歌就在歌单入口图标上弹一次提示，两秒后自己收回去 */
@@ -198,6 +202,16 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     icon: "addToSheet",
                     onClick: () => showAddToSheetPanel(music),
                 },
+                // 音效开着时它已经常驻播放栏右侧，这里不再重复给入口
+                ...(effectSettings.enabled
+                    ? []
+                    : [
+                          {
+                              title: "音效",
+                              icon: "soundEffect",
+                              onClick: () => showAudioEffectPanel(),
+                          },
+                      ]),
             ],
             // 贴底的播放栏：菜单向上展开；两项短文字，宽度贴内容
             { above: true, compact: true },
@@ -521,6 +535,21 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                                 {Math.round(volume * 100)}%
                             </div>
                         </div>
+                    </div>
+                    {/* 音效入口：开着时常驻这里（网易云也是把当前音效摆在播放栏）；
+                        关着时只在「更多」菜单里给入口，避免常驻一排用不上的按钮。
+                        ON 角标与「词/文」两个开关同一套视觉语言。 */}
+                    <div className="playerbar-effect-entry">
+                        <button
+                            className={`playerbar-effect-btn${effectSettings.enabled ? " on" : ""}`}
+                            title={effectSettings.enabled ? "音效已开启，点击调整" : "音效"}
+                            onClick={() => showAudioEffectPanel()}
+                        >
+                            <Icon name="soundEffect" size={16} />
+                            {effectSettings.enabled && (
+                                <span className="playerbar-lyrics-badge">ON</span>
+                            )}
+                        </button>
                     </div>
                     {currentMusic && (
                         <button

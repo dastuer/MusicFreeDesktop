@@ -15,6 +15,7 @@ import {
 } from "./musicHistory";
 import { matchLocalLyric } from "./localLyricMatch";
 import { getQuality, setQuality } from "./appConfig";
+import { registerMediaElement, unregisterMediaElement } from "./audioEffect";
 import {
     bindProgressPersistence,
     clearAllProgress,
@@ -388,6 +389,8 @@ class TrackPlayer extends EventEmitter {
         audio.volume = getStoredVolume();
         audio.playbackRate = this._rate;
         this.attachAudioListeners(audio);
+        // 音效开着就接进 Web Audio 总线（关着不碰，保持原生直出）
+        registerMediaElement(audio);
         this.audio = audio;
 
         // 恢复上次播放会话（播放列表 + 当前歌曲 + 进度），见 restoreSession
@@ -433,6 +436,8 @@ class TrackPlayer extends EventEmitter {
         el.removeEventListener("error", this.onAudioError);
         el.removeEventListener("waiting", this.onAudioStall);
         el.removeEventListener("stalled", this.onAudioStall);
+        // 音效总线上的登记一并撤销：解绑源节点，先解除登记再清 src
+        unregisterMediaElement(el);
         try {
             el.pause();
             el.removeAttribute("src");
@@ -896,6 +901,8 @@ class TrackPlayer extends EventEmitter {
             shadow.volume = old.volume;
             shadow.playbackRate = this._rate;
             this.attachAudioListeners(shadow);
+            // 交接过来的新元素同样要进音效总线，否则换完音质音效就掉了
+            registerMediaElement(shadow);
             shadow.src = resolved.src;
             const bufferedFrom = old.currentTime || 0;
             if (bufferedFrom > 0) {
@@ -1084,6 +1091,8 @@ class TrackPlayer extends EventEmitter {
                 shadow.playbackRate = this._rate;
                 // 生产监听照挂：交接前事件被 target 过滤，交接后天然接手进度 / 状态
                 this.attachAudioListeners(shadow);
+                // 预载影子也先接进音效总线：到点直接交接，换歌瞬间音效不断
+                registerMediaElement(shadow);
                 // 预载阶段的加载失败在这里静默消化：置空结果，交接时回退到完整加载路径。
                 // 自摘监听：retireAudioElement 里的 load() 会再引发 error，不能接成死循环。
                 const onError = () => {
