@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { BrowserWindow } from "electron";
 import https from "https";
 import configStore from "./configStore";
@@ -9,7 +10,13 @@ import * as proxyService from "./proxyService";
  *
  * 登录：主进程弹出网易云官方登录页（独立内存 session），用户手机扫码确认后官方页面
  * 自己完成登录，`MUSIC_U` cookie 落进该 session，监听 cookie 变化拿到值后自动关窗。
- * 不自己实现 weapi 加密、不碰风控逻辑。
+ *
+ * 加密约定：日常接口全走 plain api（GET/POST 表单）。唯二例外是「点赞/取消点赞评论」
+ * 与「楼中楼」，这两个端点在 plain 路径上参数不通（实测报 illegal resourceId），必须走
+ * weapi 报文——那只是网易 web 客户端的标准参数编码（公开常量，双重 AES + RSA 回传
+ * 随机密钥），不涉及设备指纹/签名伪造等风控对抗；csrf_token 传空实测可用。
+ * 实测（2026-10，全部为无副作用探测）：写操作只靠 MUSIC_U 即可通过鉴权，
+ * 无需 __csrf；评论读取在 cookie 过期时退回匿名视角。
  *
  * cookie 保存：cookieCipher（AES-256-GCM，密钥在 configStore，绑机器）加密后存
  * configStore；加密不可用时退回明文。刻意不用 Electron safeStorage——它的密钥
@@ -242,10 +249,15 @@ function rawRequest(
 /** 带重试的接口调用；code 301 视为登录过期。刷新接口对未登录也开放，所以 cookie 有无都照发 */
 async function apiRequest(
     pathname: string,
-    { method = "GET", body, withCookie = true }: { method?: string; body?: string; withCookie?: boolean } = {},
+    {
+        method = "GET",
+        body,
+        withCookie = true,
+        extraCookie = [],
+    }: { method?: string; body?: string; withCookie?: boolean; extraCookie?: string[] } = {},
     retries = 2,
 ): Promise<any> {
-    const cookieParts = ["NMTID=00Oxxxx", "_ntes_nuid=11111111111111111111111111111111"];
+    const cookieParts = ["NMTID=00Oxxxx", "_ntes_nuid=11111111111111111111111111111111", ...extraCookie];
     const cookie = withCookie ? readCookie() : null;
     if (cookie) {
         cookieParts.push(`MUSIC_U=${cookie}`);
@@ -394,6 +406,169 @@ async function getPlaylistDetail(id: string): Promise<{ name: string; tracks: an
     };
 }
 
+/** ---------- weapi 报文（点赞/取消点赞、楼中楼专用，理由见文件头） ---------- */
+
+const WEAPI_PRESET_KEY = "0CoJUm6Qyw8W8jud";
+const WEAPI_IV = "0102030405060708";
+const WEAPI_BASE62 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const WEAPI_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB
+-----END PUBLIC KEY-----`;
+
+/**
+ * 写操作实测用的桌面客户端视角 cookie（os=pc 一组）。带上它报文形态与
+ * 网易自家客户端一致；匿名探测下这些端点只认「参数合法 + MUSIC_U」。
+ */
+const DESKTOP_COOKIE = [
+    "os=pc",
+    "appver=3.1.17.204416",
+    "osver=Microsoft-Windows-10-Professional-build-19045-64bit",
+    "channel=netease",
+];
+
+/** 网易 web 端标准参数编码：AES-128-CBC 加密两次（预设密钥 + 随机密钥），随机密钥 RSA 无填充回传 */
+function weapiEncrypt(data: Record<string, unknown>): string {
+    let secretKey = "";
+    for (let i = 0; i < 16; i++) {
+        secretKey += WEAPI_BASE62[Math.floor(Math.random() * WEAPI_BASE62.length)];
+    }
+    const cipherOnce = (input: string, key: string) => {
+        const c = crypto.createCipheriv("aes-128-cbc", Buffer.from(key, "utf-8"), Buffer.from(WEAPI_IV, "utf-8"));
+        return Buffer.concat([c.update(input, "utf-8"), c.final()]).toString("base64");
+    };
+    const params = cipherOnce(cipherOnce(JSON.stringify(data), WEAPI_PRESET_KEY), secretKey);
+    // 1024 位模长定长 128 字节，明文（反转后的随机密钥）左补零，密文 hex 大写
+    const reversed = Buffer.from(secretKey.split("").reverse().join(""), "utf-8");
+    const padded = Buffer.concat([Buffer.alloc(128 - reversed.length, 0), reversed]);
+    const encSecKey = crypto
+        .publicEncrypt({ key: WEAPI_PUBLIC_KEY, padding: crypto.constants.RSA_NO_PADDING }, padded)
+        .toString("hex")
+        .toUpperCase();
+    return `params=${encodeURIComponent(params)}&encSecKey=${encSecKey}`;
+}
+
+async function weapiRequest(
+    pathname: string,
+    data: Record<string, unknown>,
+    { withCookie = true }: { withCookie?: boolean } = {},
+): Promise<any> {
+    return apiRequest(pathname, {
+        method: "POST",
+        body: weapiEncrypt({ ...data, csrf_token: "" }),
+        withCookie,
+        extraCookie: withCookie ? DESKTOP_COOKIE : [],
+    });
+}
+
+/** ---------- 歌曲评论 ---------- */
+
+/** 歌曲评论的 threadId 前缀（资源类型表里 0 = 歌曲） */
+const SONG_THREAD_PREFIX = "R_SO_4_";
+
+/**
+ * 歌曲评论：热评 + 最新评论（limit/offset 对最新评论分页，热评每页都随包返回）。
+ * 最新评论流里回复按时间混排（带 beReplied 引用上下文），与网易云桌面端一致。
+ * 带登录 cookie 时每条评论带 liked 状态；cookie 过期退回匿名视角——阅读本身不要求登录。
+ *
+ * 注意 offset 分页有上限（实测约 1100 条处就返回 more=false，远小于 total），
+ * 要翻完整流须改用 beforeTime 游标：传上一页最后一条的 time，offset 归零。
+ */
+async function getSongComments(
+    songId: string,
+    limit = 30,
+    offset = 0,
+    beforeTime = 0,
+): Promise<any> {
+    const path =
+        `/api/v1/resource/comments/${SONG_THREAD_PREFIX}${songId}` +
+        `?limit=${limit}&offset=${offset}` +
+        (beforeTime > 0 ? `&beforeTime=${beforeTime}` : "");
+    try {
+        return await apiRequest(path);
+    } catch (e) {
+        if (e instanceof NeedLoginError) {
+            return apiRequest(path, { withCookie: false });
+        }
+        throw e;
+    }
+}
+
+/** 点赞/取消点赞评论。unlike 幂等（重复取消也返回 200） */
+async function likeComment(songId: string, commentId: string, like: boolean): Promise<any> {
+    return weapiRequest(`/weapi/v1/comment/${like ? "like" : "unlike"}`, {
+        threadId: `${SONG_THREAD_PREFIX}${songId}`,
+        commentId: String(commentId),
+    });
+}
+
+/** 发表评论；带 replyCommentId 时为回复（落进目标评论的楼中楼） */
+async function addComment(songId: string, content: string, replyCommentId?: string): Promise<any> {
+    const body = new URLSearchParams({ threadId: `${SONG_THREAD_PREFIX}${songId}`, content });
+    if (replyCommentId) {
+        body.set("commentId", String(replyCommentId));
+    }
+    return apiRequest(`/api/resource/comments/${replyCommentId ? "reply" : "add"}`, {
+        method: "POST",
+        body: body.toString(),
+        extraCookie: DESKTOP_COOKIE,
+    });
+}
+
+/** 删除自己的评论 */
+async function deleteComment(songId: string, commentId: string): Promise<any> {
+    return apiRequest("/api/resource/comments/delete", {
+        method: "POST",
+        body: new URLSearchParams({
+            threadId: `${SONG_THREAD_PREFIX}${songId}`,
+            commentId: String(commentId),
+        }).toString(),
+        extraCookie: DESKTOP_COOKIE,
+    });
+}
+
+/** 关键词搜歌曲（cloudsearch，免登录）：给渲染层做「播放曲 → 网易歌曲 id」反查用 */
+async function searchSongs(keyword: string, limit = 10): Promise<any[]> {
+    const path = `/api/cloudsearch/pc?s=${encodeURIComponent(keyword)}&type=1&limit=${limit}`;
+    try {
+        const j = await apiRequest(path);
+        return Array.isArray(j?.result?.songs) ? j.result.songs : [];
+    } catch (e) {
+        if (e instanceof NeedLoginError) {
+            const j = await apiRequest(path, { withCookie: false });
+            return Array.isArray(j?.result?.songs) ? j.result.songs : [];
+        }
+        throw e;
+    }
+}
+
+/**
+ * 歌曲红心（喜欢）数量：播放条喜欢角标用。countDesc 是网易自己的展示格式
+ * （如「100w+」），直接采用即与网易云展示规则一致。免登录可读。
+ */
+async function getSongRedCount(songId: string): Promise<{ count: number; countDesc: string | null }> {
+    const j = await apiRequest(`/api/song/red/count?songId=${songId}`, { withCookie: false });
+    return {
+        count: j?.data?.count ?? 0,
+        countDesc: j?.data?.countDesc ?? null,
+    };
+}
+
+/**
+ * 精彩评论（热门评论独立分页）：「查看更多精彩评论」页用。
+ * 带 cookie 时评论带 liked 状态，过期退回匿名。
+ */
+async function getHotComments(songId: string, limit = 30, offset = 0): Promise<any> {
+    const path = `/api/v1/resource/hotcomments/${SONG_THREAD_PREFIX}${songId}?rid=${songId}&limit=${limit}&offset=${offset}&beforeTime=0`;
+    try {
+        return await apiRequest(path);
+    } catch (e) {
+        if (e instanceof NeedLoginError) {
+            return apiRequest(path, { withCookie: false });
+        }
+        throw e;
+    }
+}
+
 export default {
     setup() {
         // 无需初始化，cookie 走 configStore 懒读；占位让调用方保持与服务层一致的形态
@@ -406,5 +581,12 @@ export default {
     getRecommendPlaylists,
     getPersonalizedPlaylists,
     getPlaylistDetail,
+    getSongComments,
+    likeComment,
+    addComment,
+    deleteComment,
+    searchSongs,
+    getSongRedCount,
+    getHotComments,
     NeedLoginError,
 };

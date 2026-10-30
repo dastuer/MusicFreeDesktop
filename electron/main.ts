@@ -709,6 +709,46 @@ ipcMain.handle("netease:getPersonalizedPlaylists", () =>
 ipcMain.handle("netease:getPlaylistDetail", (_e, id: string) =>
     wrapNetease(() => neteaseService.getPlaylistDetail(String(id))));
 
+/** ---------- 歌曲评论（见 services/neteaseService.ts，读取免登录、写操作需 MUSIC_U） ---------- */
+
+ipcMain.handle(
+    "netease:getSongComments",
+    (_e, songId: string, limit: number, offset: number, beforeTime: number) =>
+        wrapNetease(() =>
+            neteaseService.getSongComments(
+                String(songId),
+                Number(limit) || 30,
+                Math.max(0, Number(offset) || 0),
+                Math.max(0, Number(beforeTime) || 0),
+            ),
+        ),
+);
+ipcMain.handle("netease:likeComment", (_e, songId: string, commentId: string, like: boolean) =>
+    wrapNetease(() => neteaseService.likeComment(String(songId), String(commentId), !!like)));
+ipcMain.handle("netease:addComment", (_e, songId: string, content: string, replyCommentId?: string) => {
+    const text = String(content ?? "").trim();
+    if (!text) {
+        return { success: false as const, message: "评论内容不能为空" };
+    }
+    if (text.length > 1000) {
+        return { success: false as const, message: "评论内容过长" };
+    }
+    return wrapNetease(() => neteaseService.addComment(String(songId), text, replyCommentId ? String(replyCommentId) : undefined));
+});
+ipcMain.handle("netease:deleteComment", (_e, songId: string, commentId: string) =>
+    wrapNetease(() => neteaseService.deleteComment(String(songId), String(commentId))));
+ipcMain.handle("netease:searchSongs", (_e, keyword: string, limit: number) => {
+    const kw = String(keyword ?? "").trim();
+    if (!kw) {
+        return { success: true as const, data: [] };
+    }
+    return wrapNetease(() => neteaseService.searchSongs(kw, Math.min(30, Math.max(1, Number(limit) || 10))));
+});
+ipcMain.handle("netease:getSongRedCount", (_e, songId: string) =>
+    wrapNetease(() => neteaseService.getSongRedCount(String(songId))));
+ipcMain.handle("netease:getHotComments", (_e, songId: string, limit: number, offset: number) =>
+    wrapNetease(() => neteaseService.getHotComments(String(songId), Number(limit) || 30, Math.max(0, Number(offset) || 0))));
+
 /** ---------- 网络代理（见 services/proxyService.ts） ---------- */
 
 ipcMain.handle("proxy:get", () => proxyService.getProxyConfig());

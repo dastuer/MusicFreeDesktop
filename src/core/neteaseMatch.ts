@@ -144,8 +144,8 @@ interface IScored {
     ds: number;
 }
 
-/** 采信闸门：总分过线且标题、歌手相似度都达标 */
-function isPassing(s: IScored) {
+/** 采信闸门：总分过线且标题、歌手相似度都达标（评论区的歌曲反查也用同一口径） */
+export function isPassing(s: IScored) {
     return s.total >= MIN_SCORE && s.ts >= 0.8 && s.as >= 0.6;
 }
 
@@ -228,7 +228,7 @@ export function getMatchableSourcePlugins(): Promise<SerializedPlugin[]> {
     );
 }
 
-function toMusicItem(platform: string, cand: any): IMusic.IMusicItem {
+function toMusicItem(platform: string, cand: any, song?: INeteaseSong): IMusic.IMusicItem {
     return {
         platform,
         id: String(cand.id),
@@ -237,6 +237,8 @@ function toMusicItem(platform: string, cand: any): IMusic.IMusicItem {
         album: cand.album,
         duration: cand.duration,
         artwork: cand.artwork || cand.coverImg,
+        // 网易原曲 id：评论区等网易侧功能按它直接定位歌曲，免去运行时标题反查
+        ...(song ? { neteaseId: song.id } : {}),
     };
 }
 
@@ -434,7 +436,7 @@ export async function matchNeteaseSongs(
                 break;
             }
             if (
-                await probePlayable(entry.plugin, toMusicItem(entry.plugin.platform, entry.cand))
+                await probePlayable(entry.plugin, toMusicItem(entry.plugin.platform, entry.cand, song))
             ) {
                 playableSources.push(entry);
             }
@@ -464,7 +466,7 @@ export async function matchNeteaseSongs(
                         song,
                         status: "matched",
                         viaDetail: true,
-                        item: toMusicItem(winner.plugin.platform, winner.cand),
+                        item: toMusicItem(winner.plugin.platform, winner.cand, song),
                         matchedPlatform: winner.plugin.platform,
                         score: +winner.score.total.toFixed(2),
                     };
@@ -479,7 +481,7 @@ export async function matchNeteaseSongs(
                     song,
                     status: "matched",
                     low: winner.score.total < MIN_SCORE + 0.07,
-                    item: toMusicItem(winner.plugin.platform, winner.cand),
+                    item: toMusicItem(winner.plugin.platform, winner.cand, song),
                     matchedPlatform: winner.plugin.platform,
                     score: +winner.score.total.toFixed(2),
                 },

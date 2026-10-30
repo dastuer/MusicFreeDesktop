@@ -1,0 +1,260 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import Icon from "../base/Icon";
+import Cover from "../base/Cover";
+import {
+    TrackPlayerSingleton,
+    loadCurrentLyric,
+    useCurrentMusic,
+    useCurrentLyric,
+    useLyricTranslationOn,
+    useMusicState,
+    useProgress,
+} from "@/core/trackPlayer";
+import { navigateToArtist } from "@/utils/artistNav";
+import { showLocalMatchPanel } from "@/components/base/LocalMatchPanel";
+
+/**
+ * 播放详情页·歌词页：左大封面 + 右侧滚动歌词。
+ * 收起按钮在左上角，本地音乐额外有右上角的「匹配歌词与封面」入口。
+ * 与评论页并列放在 MusicDetailOverlay 的 .music-detail-views 里，
+ * 由容器的 view 状态驱动上下滑动切换。
+ */
+
+function formatTime(s: number) {
+    const sec = Math.floor(s % 60);
+    const min = Math.floor(s / 60);
+    return `${min}:${sec.toString().padStart(2, "0")}`;
+}
+
+export default function MusicDetailLyricPage(props: {
+    visible: boolean;
+    active: boolean;
+    onClose: () => void;
+}) {
+    const { visible, active, onClose } = props;
+    const currentMusic = useCurrentMusic();
+    const musicState = useMusicState();
+    const playing = musicState === "playing";
+    const progress = useProgress();
+    const lyric = useCurrentLyric();
+    const translationOn = useLyricTranslationOn();
+    const lyricRef = useRef<HTMLDivElement>(null);
+    const [userScrolled, setUserScrolled] = useState(false);
+    const [scrollIndex, setScrollIndex] = useState(-1);
+
+    useEffect(() => {
+        if (visible && currentMusic) {
+            loadCurrentLyric(currentMusic);
+        }
+    }, [visible, currentMusic?.id]);
+
+    // 歌词自动滚动到当前行
+    const activeIndex = useMemo(() => {
+        let index = -1;
+        lyric.forEach((item, i) => {
+            if (item.time <= progress.position + 0.2) {
+                index = i;
+            }
+        });
+        return index;
+    }, [lyric, progress.position]);
+
+    // 本页面是否已经完成过一次定位：首次直接到位，之后才平滑滚动
+    const positionedRef = useRef(false);
+
+    useEffect(() => {
+        const container = lyricRef.current;
+        // 收起（整页已滑出）或不在歌词页时都不定位，避免对不可见容器做测量
+        if (!visible || !active) {
+            positionedRef.current = false;
+            return;
+        }
+        if (!container) {
+            return;
+        }
+        const line = container.querySelector<HTMLElement>(
+            `.lyric-line[data-index="${activeIndex}"]`,
+        );
+        if (!line) {
+            return;
+        }
+        if (userScrolled) {
+            positionedRef.current = false;
+            return;
+        }
+        const containerRect = container.getBoundingClientRect();
+        const lineRect = line.getBoundingClientRect();
+        container.scrollTo({
+            top:
+                container.scrollTop +
+                (lineRect.top - containerRect.top) +
+                lineRect.height / 2 -
+                containerRect.height / 2 +
+                // 激活行比居中位置再上移一行（行高固定 40px，多滚一行正好上移一格）
+                lineRect.height,
+            behavior: positionedRef.current ? "smooth" : "auto",
+        });
+        positionedRef.current = true;
+    }, [activeIndex, userScrolled, visible, active, lyric.length]);
+
+    // 滚动浏览时激活行跟随滚动位置（距容器中心最近的一行）；
+    // 浏览期间播放位置那行以 .playing 主题色同时点亮，两处激活并存互不挤占
+    const displayIndex = userScrolled ? scrollIndex : activeIndex;
+    const scrollLine = userScrolled && scrollIndex >= 0 ? lyric[scrollIndex] : undefined;
+
+    const updateScrollIndex = () => {
+        const container = lyricRef.current;
+        if (!container) {
+            return;
+        }
+        const containerRect = container.getBoundingClientRect();
+        const centerY = containerRect.top + containerRect.height / 2;
+        let best = -1;
+        let bestDist = Infinity;
+        container.querySelectorAll<HTMLElement>(".lyric-line").forEach((line) => {
+            const rect = line.getBoundingClientRect();
+            const dist = Math.abs(rect.top + rect.height / 2 - centerY);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = Number(line.dataset.index);
+            }
+        });
+        setScrollIndex(best);
+    };
+
+    if (!currentMusic) {
+        return null;
+    }
+
+    return (
+        <div className={`music-detail-view lyric${active ? " current" : ""}`}>
+            <button
+                className="titlebar-nav-btn music-detail-collapse"
+                style={{ width: 36, height: 36 }}
+                onClick={onClose}
+                title="收起"
+            >
+                <Icon
+                    name="chevronDown"
+                    size={22}
+                    style={{ color: "var(--text-secondary)" }}
+                />
+            </button>
+            {currentMusic.localPath && (
+                <button
+                    className="titlebar-nav-btn music-detail-local-match"
+                    title="匹配歌词与封面"
+                    onClick={() =>
+                        showLocalMatchPanel({
+                            mode: "single",
+                            items: [currentMusic],
+                            onDone: (outcome) => {
+                                // 封面已由匹配管线同步到当前曲；这里只负责歌词就重载一次。
+                                // 若匹配期间切了歌，按「现在正在播的」重载，别把旧歌的词安到新歌头上
+                                const cur = TrackPlayerSingleton.currentMusic;
+                                if (outcome.status === "matched" && cur?.localPath) {
+                                    loadCurrentLyric(cur);
+                                }
+                            },
+                        })
+                    }
+                >
+                    <Icon
+                        name="refresh"
+                        size={17}
+                        style={{ color: "var(--text-secondary)" }}
+                    />
+                </button>
+            )}
+            <div className="music-detail-body">
+                <div className={`music-detail-cover-wrap${playing ? " playing" : ""}`}>
+                    <Cover
+                        src={currentMusic.artwork}
+                        size="100%"
+                        borderRadius="50%"
+                        className="music-detail-cover"
+                        style={{ width: "100%", height: "100%" }}
+                    />
+                </div>
+                <div className="music-detail-info">
+                    <div className="music-detail-title">{currentMusic.title}</div>
+                    <div
+                        className="music-detail-artist"
+                        title="查看歌手"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => {
+                            void navigateToArtist(currentMusic);
+                            onClose();
+                        }}
+                    >
+                        {currentMusic.artist}
+                        {currentMusic.album ? ` - ${currentMusic.album}` : ""}
+                    </div>
+                    <div className="music-detail-lyric-wrap">
+                        <div
+                            className="music-detail-lyric"
+                            ref={lyricRef}
+                            onWheel={() => {
+                                setUserScrolled(true);
+                                updateScrollIndex();
+                                clearTimeout((lyricRef.current as any)?._scrollTimer);
+                                (lyricRef.current as any)._scrollTimer = setTimeout(
+                                    () => setUserScrolled(false),
+                                    3000,
+                                );
+                            }}
+                            onScroll={() => {
+                                // 自动跟随产生的滚动不算手动浏览
+                                if (userScrolled) {
+                                    updateScrollIndex();
+                                }
+                            }}
+                        >
+                            {lyric.length ? (
+                                lyric.map((item, index) => (
+                                    <div
+                                        key={index}
+                                        data-index={index}
+                                        className={`lyric-line${
+                                            index === displayIndex ? " active" : ""
+                                        }${
+                                            userScrolled && index === activeIndex ? " playing" : ""
+                                        }`}
+                                    >
+                                        <div className="lyric-original">{item.lrc || "·"}</div>
+                                        {translationOn && item.translation && (
+                                            <div className="lyric-translation">
+                                                {item.translation}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="empty-hint">纯音乐，请欣赏</div>
+                            )}
+                        </div>
+                        {/* 滑动歌词时钉在歌词区右侧：滚动位置那行的起始时间，点击跳到该句 */}
+                        {scrollLine && (
+                            <button
+                                className="lyric-time-pill"
+                                title="跳到这句"
+                                onClick={() => {
+                                    TrackPlayerSingleton.seekTo(scrollLine.time);
+                                    // 暂停状态下点胶囊：跳到该句后继续播放
+                                    if (!playing) {
+                                        TrackPlayerSingleton.togglePlay();
+                                    }
+                                    setUserScrolled(false);
+                                    clearTimeout((lyricRef.current as any)?._scrollTimer);
+                                }}
+                            >
+                                <Icon name="play" size={10} />
+                                {formatTime(scrollLine.time)}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

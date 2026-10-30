@@ -46,6 +46,7 @@ import { showContextMenu } from "../base/ContextMenu";
 import { showToast } from "../base/Toast";
 import { showPlayQueuePanel } from "./PlayQueuePanel";
 import { useAudioEffect } from "@/core/audioEffect";
+import { formatCountBadge, useNeteaseSongCounts } from "@/core/neteaseComments";
 
 const repeatModeMeta: Record<string, { icon: string; label: string }> = {
     off: { icon: "repeatOff", label: "列表循环" },
@@ -75,8 +76,8 @@ function formatTime(s: number) {
     return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 
-export default function PlayerBar(props: { onOpenDetail?: () => void }) {
-    const { onOpenDetail } = props;
+export default function PlayerBar(props: { onOpenDetail?: () => void; onOpenComments?: () => void }) {
+    const { onOpenDetail, onOpenComments } = props;
     const currentMusic = useCurrentMusic();
     const musicState = useMusicState();
     const progress = useProgress();
@@ -368,6 +369,8 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
 
     const playing = musicState === "playing";
     const loading = musicState === "loading";
+    // 喜欢数/评论数角标（参考网易云）：反查网易歌曲后取红心数与评论总数，本地缓存
+    const songCounts = useNeteaseSongCounts(currentMusic);
 
     return (
         <div className="app-playerbar">
@@ -413,6 +416,51 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             {currentMusic?.artist ?? "点击列表中的歌曲开始播放"}
                         </div>
                     </div>
+                    {/* 喜欢 / 评论（参考网易云）：钉在歌名右侧，图标右上角带数量角标 */}
+                    {currentMusic && (
+                        <div className="playerbar-counts">
+                            <button
+                                className="playerbar-count-btn"
+                                title={liked ? "取消喜欢" : "喜欢"}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleLike();
+                                }}
+                            >
+                                <Icon
+                                    name={liked ? "heartFilled" : "heart"}
+                                    size={17}
+                                    style={{
+                                        color: liked
+                                            ? "var(--primary-color)"
+                                            : "var(--text-color)",
+                                    }}
+                                />
+                                {(songCounts?.likeCountDesc ??
+                                    formatCountBadge(songCounts?.likeCount)) && (
+                                    <span className="playerbar-count-badge">
+                                        {songCounts?.likeCountDesc ??
+                                            formatCountBadge(songCounts?.likeCount)}
+                                    </span>
+                                )}
+                            </button>
+                            <button
+                                className="playerbar-count-btn"
+                                title="查看歌曲评论"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenComments?.();
+                                }}
+                            >
+                                <Icon name="commentBubble" size={16} />
+                                {formatCountBadge(songCounts?.commentCount) && (
+                                    <span className="playerbar-count-badge">
+                                        {formatCountBadge(songCounts?.commentCount)}
+                                    </span>
+                                )}
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* 中：播放模式 / 上一首 / 播放暂停 / 下一首 / 播放列表 */}
@@ -463,7 +511,7 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                     </div>
                 </div>
 
-                {/* 右：音质 / 喜欢 / 桌面歌词 / 翻译 / 音量 / 更多（倍速、下载、收藏收进更多菜单） */}
+                {/* 右：音质 / 桌面歌词 / 翻译 / 音量 / 更多（喜欢与评论已移到歌名右侧） */}
                 <div className="playerbar-right">
                     {badgeQuality && (
                         <button
@@ -472,21 +520,6 @@ export default function PlayerBar(props: { onOpenDetail?: () => void }) {
                             onClick={showQualityMenu}
                         >
                             {qualityMeta[badgeQuality]}
-                        </button>
-                    )}
-                    {currentMusic && (
-                        <button
-                            className="playerbar-control-btn"
-                            title={liked ? "取消喜欢" : "喜欢"}
-                            onClick={handleToggleLike}
-                        >
-                            <Icon
-                                name={liked ? "heartFilled" : "heart"}
-                                size={17}
-                                style={{
-                                    color: liked ? "var(--primary-color)" : "var(--text-color)",
-                                }}
-                            />
                         </button>
                     )}
                     {/* 桌面歌词开关（参考网易云「词ON」）：文字图标，开启时亮主色 + ON 角标；

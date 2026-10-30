@@ -15,6 +15,7 @@ import {
     setMediaCacheLimit,
 } from "@/core/cache";
 import { showToast } from "@/components/base/Toast";
+import { clearCommentSongMap } from "@/core/neteaseComments";
 
 /**
  * 设置页「存储与缓存」。
@@ -81,6 +82,8 @@ export default function CacheSection() {
                 // 匹配缓存本体在渲染进程 localStorage：主进程弹窗确认通过后在这里清掉
                 if (keys.includes("match")) {
                     clearMatchCacheEntries();
+                    // 评论区的歌曲 id 映射与匹配缓存同性质，一并清
+                    clearCommentSongMap();
                 }
                 const freed = res.freedTotal ?? 0;
                 showToast(freed > 0 ? `已释放 ${formatSize(freed)}` : "缓存已清理");

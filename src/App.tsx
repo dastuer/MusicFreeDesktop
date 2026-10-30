@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Sidebar from "./components/layout/Sidebar";
 import PlayerBar from "./components/layout/PlayerBar";
-import MusicDetailOverlay from "./components/layout/MusicDetailOverlay";
+import MusicDetailOverlay, { MusicDetailView } from "./components/layout/MusicDetailOverlay";
 import PlayQueuePanelHost from "./components/layout/PlayQueuePanel";
 import ContextMenuHost from "./components/base/ContextMenu";
 import ToastHost, { showToast } from "./components/base/Toast";
@@ -219,6 +219,8 @@ export default function App() {
     useThemeSetup();
     usePlayerShortcuts();
     const [musicDetailVisible, setMusicDetailVisible] = useState(false);
+    // 正在播放页的两个整页视图（网易云式）：歌词页 ⇄ 评论页，播放条评论入口直达评论页
+    const [musicDetailView, setMusicDetailView] = useState<MusicDetailView>("lyric");
 
     useEffect(() => {
         // setup() 还原播放列表 / 当前歌曲，并把进度条摆到上次听到的位置，默认不出声：
@@ -268,15 +270,26 @@ export default function App() {
         };
     }, []);
 
-    const openMusicDetail = () => {
+    /**
+     * 打开正在播放页。每个入口都绑定一个目标视图：
+     * - 当前不在该视图 → 打开并切过去（评论页开着时点歌名就是切回歌词页）
+     * - 当前已经在该视图 → 再点一次视为收起
+     * 收起仍走详情页左上角的按钮；这里的「再点一次」是给播放条那两枚入口用的。
+     */
+    const openMusicDetail = (view: MusicDetailView = "lyric") => {
         if (!TrackPlayerSingleton.currentMusic) {
             return;
         }
+        if (musicDetailVisible && musicDetailView === view) {
+            setMusicDetailVisible(false);
+            return;
+        }
+        setMusicDetailView(view);
         setMusicDetailVisible((v) => {
             if (!v) {
                 loadCurrentLyric(TrackPlayerSingleton.currentMusic!);
             }
-            return !v;
+            return true;
         });
     };
 
@@ -284,9 +297,11 @@ export default function App() {
         <div className="app-shell">
             <Sidebar />
             <MainContent onOpenDetail={openMusicDetail} />
-            <PlayerBar onOpenDetail={openMusicDetail} />
+            <PlayerBar onOpenDetail={openMusicDetail} onOpenComments={() => openMusicDetail("comment")} />
             <MusicDetailOverlay
                 visible={musicDetailVisible}
+                view={musicDetailView}
+                onViewChange={setMusicDetailView}
                 onClose={() => setMusicDetailVisible(false)}
             />
             <PlayQueuePanelHost />

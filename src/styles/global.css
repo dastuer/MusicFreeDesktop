@@ -18,6 +18,10 @@
     --skeleton-bg: #ececec;
     --skeleton-highlight: #f8f8f8;
     --divider: rgba(0, 0, 0, 0.09);
+    /* 刚发布评论的定位高亮：主题红压低透明度做成淡淡一层，
+       另配左侧一条主色竖线（--cmt-flash-bar）做视觉锚点 */
+    --cmt-flash: rgba(236, 65, 65, 0.075);
+    --cmt-flash-bar: rgba(236, 65, 65, 0.85);
     --playerbar-bg: rgba(246, 246, 248, 0.88);
     --mask: rgba(0, 0, 0, 0.4);
     --titlebar-height: 64px;
@@ -30,6 +34,8 @@ html[data-theme="dark"] {
     --sidebar-bg: rgba(20, 20, 20, 0.85);
     --hover-bg: rgba(255, 255, 255, 0.08);
     --active-bg: rgba(255, 255, 255, 0.13);
+    /* 评论区昵称色：暗色下用网易云同款灰蓝 */
+    --cmt-nick-color: #7a8a99;
     --text-color: #e5e5e5;
     --text-secondary: #a8a8a8;
     --text-tertiary: #7c7c7c;
@@ -37,6 +43,9 @@ html[data-theme="dark"] {
     --skeleton-bg: rgba(255, 255, 255, 0.07);
     --skeleton-highlight: rgba(255, 255, 255, 0.13);
     --divider: rgba(255, 255, 255, 0.09);
+    /* 暗色下主色底几乎看不出来，抬高透明度保持同样的「淡」 */
+    --cmt-flash: rgba(236, 65, 65, 0.13);
+    --cmt-flash-bar: rgba(244, 96, 96, 0.9);
     --playerbar-bg: rgba(25, 25, 25, 0.9);
     --mask: rgba(0, 0, 0, 0.6);
 }
@@ -1286,7 +1295,8 @@ html[data-theme="dark"] .sheet-tag-popover {
 }
 
 .playerbar-left {
-    width: 300px;
+    /* 歌名右侧钉了 喜欢/评论 两个角标入口，左区加宽容纳（参考网易云布局） */
+    width: 400px;
     /* 播放条内边距 16px + 这里 12px = 封面距窗口左缘 28px */
     margin-left: 12px;
     display: flex;
@@ -3915,5 +3925,616 @@ body.in-desktop-lyrics-window {
     color: var(--text-secondary);
     flex-shrink: 0;
 }
+/* ---------- 正在播放页·歌词/评论页签与评论区 ---------- */
+/* 顶部歌曲胶囊（网易云式）：点击在 歌词视图 ⇄ 评论视图 间切换 */
 
+/* 歌词视图 ⇄ 评论视图：上下滑动切换（网易云式），评论页从底部滑入盖住歌词页 */
+.music-detail-views {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
 
+.music-detail-view {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--page-bg);
+    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.4s ease;
+}
+
+.music-detail-view.lyric {
+    transform: translateY(0);
+    padding-top: 52px;
+    z-index: 1;
+}
+
+.music-detail-view.lyric:not(.current) {
+    /* 歌词页整体上移出场，评论页从底部上移进场，两者同向上滑（网易云式） */
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.music-detail-view.comment {
+    transform: translateY(100%);
+    z-index: 2;
+}
+
+.music-detail-view.comment.current {
+    transform: translateY(0);
+}
+
+/* 评论页顶栏：收起按钮 + 居中歌曲胶囊（点击切回歌词视图） */
+.music-detail-topbar {
+    display: flex;
+    align-items: center;
+    padding: 52px 24px 0;
+    flex-shrink: 0;
+}
+
+/* 歌词页左上角的收起按钮（与评论页顶栏收起位置一致） */
+.music-detail-collapse {
+    position: absolute;
+    top: 56px;
+    left: 24px;
+    width: 36px;
+    height: 36px;
+    z-index: 3;
+}
+
+/* 歌词页右上角的本地音乐匹配入口（浮在内容上，仅本地歌曲显示） */
+.music-detail-local-match {
+    position: absolute;
+    top: 56px;
+    right: 24px;
+    width: 36px;
+    height: 36px;
+    z-index: 3;
+}
+
+.music-detail-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 auto;
+    max-width: min(46vw, 480px);
+    padding: 5px 14px 5px 6px;
+    border: 1px solid color-mix(in srgb, var(--text-color) 14%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-color) 7%, transparent);
+    cursor: pointer;
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.music-detail-pill:hover {
+    background: color-mix(in srgb, var(--text-color) 12%, transparent);
+}
+
+.music-detail-pill-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---------- 播放条：歌名右侧的喜欢/评论入口（参考网易云，右上角数量角标） ---------- */
+
+/* 喜欢/评论按钮组：紧跟歌名右侧（不吸到左区右缘），两枚图标间距与右侧功能图标组一致 */
+.playerbar-counts {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.playerbar-count-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 6px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.playerbar-count-btn:hover {
+    color: var(--text-color);
+    background: var(--hover-bg);
+}
+
+.playerbar-count-badge {
+    font-size: 10px;
+    line-height: 12px;
+    color: var(--text-tertiary);
+    margin-left: 3px;
+    white-space: nowrap;
+    transition: color 0.15s;
+}
+
+.playerbar-count-btn:hover .playerbar-count-badge {
+    color: var(--text-color);
+}
+
+/* ---------- 整页评论区（网易云桌面端样式） ---------- */
+
+.cmt-wrap {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.cmt-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.cmt-column {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 6px 32px 72px;
+}
+
+/* 「全部评论 / 最新评论」两个分区 */
+.cmt-section {
+    margin-bottom: 14px;
+}
+
+.cmt-section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 0 2px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.cmt-section-count {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+.cmt-item {
+    display: flex;
+    gap: 12px;
+    padding: 14px 8px;
+    /* 负外边距抵消上面的水平内边距：文字位置与原来一致，
+       但高亮底色有了左右留白，圆角不会贴着列边缘，高亮撤掉时也不跳动 */
+    margin: 0 -8px;
+    border-bottom: 1px solid var(--divider);
+}
+
+/* 刚发布的评论：淡铺一层主色底 + 左缘一道主色竖线，2 秒后淡出。
+   竖线只在首帧可见，随动画一起消失，用于把视线钉在这条上 */
+.cmt-item-flash {
+    border-radius: 8px;
+    background: var(--cmt-flash);
+    box-shadow: inset 2px 0 0 var(--cmt-flash-bar);
+    animation: cmt-flash-fade 2s ease-out forwards;
+}
+
+@keyframes cmt-flash-fade {
+    from {
+        background: var(--cmt-flash);
+        box-shadow: inset 2px 0 0 var(--cmt-flash-bar);
+    }
+    to {
+        background: transparent;
+        box-shadow: inset 2px 0 0 transparent;
+    }
+}
+
+.cmt-item:last-child {
+    border-bottom: none;
+}
+
+.cmt-avatar {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--skeleton-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    font-size: 15px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.cmt-avatar img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.cmt-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.cmt-nick-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.cmt-nick {
+    font-size: 13px;
+    color: var(--cmt-nick-color, #507daf);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cmt-vip-tag {
+    font-size: 10px;
+    line-height: 14px;
+    padding: 0 4px;
+    border-radius: 4px;
+    color: #d4a657;
+    border: 1px solid color-mix(in srgb, #d4a657 55%, transparent);
+    flex-shrink: 0;
+}
+
+.cmt-content {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-color);
+    margin: 4px 0 6px;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+/* 回复的引用条：左侧竖线 + @被回复人（网易云混排样式） */
+.cmt-quote {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    border-left: 2px solid var(--divider);
+    padding: 1px 0 1px 9px;
+    margin-bottom: 7px;
+    word-break: break-word;
+}
+
+.cmt-quote-nick {
+    color: var(--cmt-nick-color, #507daf);
+}
+
+.cmt-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.cmt-time {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.cmt-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.cmt-action {
+    display: inline-flex;
+    align-items: center;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.cmt-action:hover {
+    color: var(--text-secondary);
+    background: var(--hover-bg);
+}
+
+/* 自己的评论：删除入口悬停才浮现（同网易云悬停出操作的习惯） */
+.cmt-action.danger {
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.cmt-item:hover .cmt-action.danger {
+    opacity: 1;
+}
+
+.cmt-action.danger:hover {
+    color: var(--primary-color);
+    background: var(--hover-bg);
+}
+
+/* 点赞：赞数在图标左侧，未赞描边、已赞主色填充（网易云样式） */
+.cmt-like {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.cmt-like:hover {
+    color: var(--text-secondary);
+    background: var(--hover-bg);
+}
+
+.cmt-like.liked {
+    color: var(--primary-color);
+}
+
+.cmt-like-count {
+    font-size: 12px;
+}
+
+/* 「查看更多精彩评论」入口 */
+.cmt-hot-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 12px auto 8px;
+    padding: 6px 20px;
+    border: 1px solid var(--divider);
+    border-radius: 999px;
+    background: none;
+    font-family: inherit;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.cmt-hot-more:hover {
+    color: var(--text-color);
+    border-color: color-mix(in srgb, var(--text-color) 30%, transparent);
+    background: var(--hover-bg);
+}
+
+/* 精彩评论独立页头部：返回 + 标题 */
+.cmt-hotpage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0 10px;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.cmt-hotpage-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.cmt-hotpage-back:hover {
+    background: var(--hover-bg);
+    color: var(--text-color);
+}
+
+/* 底部居中悬浮「发布评论」胶囊 */
+.cmt-publish-pill {
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 22px;
+    border: none;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-color) 10%, transparent);
+    backdrop-filter: blur(8px);
+    font-family: inherit;
+    font-size: 13.5px;
+    color: var(--text-color);
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    transition: background 0.15s, transform 0.15s;
+    z-index: 2;
+}
+
+.cmt-publish-pill:hover {
+    background: color-mix(in srgb, var(--text-color) 16%, transparent);
+    transform: translateX(-50%) scale(1.03);
+}
+
+/* 发布/回复：居中模态输入框（网易云样式） */
+.cmt-modal-mask {
+    position: absolute;
+    inset: 0;
+    background: var(--mask);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3;
+}
+
+.cmt-modal {
+    position: relative;
+    width: min(480px, calc(100vw - 120px));
+    background: var(--page-bg);
+    border: 1px solid color-mix(in srgb, var(--text-color) 10%, transparent);
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+    padding: 26px 28px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.cmt-modal-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+.cmt-modal-close:hover {
+    color: var(--text-color);
+    background: var(--hover-bg);
+}
+
+.cmt-modal-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-color);
+    margin-bottom: 18px;
+    max-width: 90%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cmt-modal-box {
+    width: 100%;
+    border: 1px solid color-mix(in srgb, var(--text-color) 14%, transparent);
+    border-radius: 8px;
+    background: var(--hover-bg);
+    padding: 10px 12px 8px;
+    display: flex;
+    flex-direction: column;
+}
+
+.cmt-modal-box:focus-within {
+    border-color: color-mix(in srgb, var(--primary-color) 40%, transparent);
+}
+
+.cmt-modal-input {
+    width: 100%;
+    min-height: 96px;
+    resize: none;
+    border: none;
+    outline: none;
+    background: none;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-color);
+}
+
+.cmt-modal-input::placeholder {
+    color: var(--text-placeholder);
+}
+
+.cmt-modal-box-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 6px;
+}
+
+.cmt-modal-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.cmt-modal-tools button {
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-tertiary);
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.cmt-modal-tools button:hover {
+    color: var(--text-color);
+    background: var(--hover-bg);
+}
+
+.cmt-modal-count {
+    font-size: 12px;
+    color: var(--text-placeholder);
+}
+
+.cmt-modal-send {
+    margin-top: 18px;
+    min-width: 168px;
+    height: 38px;
+    border: none;
+    border-radius: 19px;
+    background: var(--primary-color);
+    color: #fff;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.cmt-modal-send:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+.cmt-modal-send:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.cmt-hint {
+    padding: 48px 0;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
+.cmt-hint.small {
+    padding: 10px 0;
+    font-size: 12px;
+}

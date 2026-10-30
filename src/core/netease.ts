@@ -154,3 +154,138 @@ export function formatPlayCount(count?: number): string {
     }
     return n ? String(n) : "";
 }
+
+/** ---------- 歌曲评论 ---------- */
+
+export interface INeteaseCommentUser {
+    userId: string;
+    nickname: string;
+    avatarUrl: string;
+    /** >0 时展示 VIP 徽标（网易云样式） */
+    vipType?: number;
+}
+
+export interface INeteaseComment {
+    commentId: string;
+    content: string;
+    /** 时间戳（毫秒），展示按 今天 HH:mm / 今年 MM-DD / 更早 YYYY-MM-DD 格式化 */
+    time: number;
+    timeStr: string;
+    likedCount: number;
+    liked: boolean;
+    user: INeteaseCommentUser;
+    /** 回复的引用上下文（最新评论流里回复按网易云样式混排，引用条展示被回复人） */
+    beReplied: { content: string; user: INeteaseCommentUser }[];
+    /** 是回复时指向被回复的评论 id（顶层评论无） */
+    parentCommentId?: string;
+}
+
+export interface INeteaseCommentsPage {
+    total: number;
+    /** 最新评论是否还有下一页 */
+    hasMore: boolean;
+    hotComments: INeteaseComment[];
+    comments: INeteaseComment[];
+    /** 当前登录用户 userId（未登录时接口给 -1） */
+    userId: string;
+}
+
+function commentUserFromApi(u: any): INeteaseCommentUser {
+    return {
+        userId: String(u?.userId ?? ""),
+        nickname: u?.nickname ?? "网易用户",
+        avatarUrl: u?.avatarUrl ?? "",
+        vipType: typeof u?.vipType === "number" ? u.vipType : 0,
+    };
+}
+
+function commentFromApi(c: any): INeteaseComment {
+    return {
+        commentId: String(c?.commentId ?? ""),
+        content: c?.content ?? "",
+        time: typeof c?.time === "number" ? c.time : 0,
+        timeStr: c?.timeStr ?? "",
+        likedCount: c?.likedCount ?? 0,
+        liked: !!c?.liked,
+        user: commentUserFromApi(c?.user),
+        beReplied: (Array.isArray(c?.beReplied) ? c.beReplied : []).map((r: any) => ({
+            content: r?.content ?? "",
+            user: commentUserFromApi(r?.user),
+        })),
+        parentCommentId: c?.parentCommentId ? String(c.parentCommentId) : undefined,
+    };
+}
+
+/**
+ * 歌曲评论（网易云桌面端同款模型）：hotComments 为热评块（纯热评降序），
+ * comments 为最新块（回复按时间混排、带 beReplied 引用）。
+ * 未登录也能读；带登录 cookie 时评论才带 liked 状态。
+ *
+ * offset 分页有服务端上限（热门歌曲约 1100 条处就 more=false，远小于 total），
+ * 要翻完整流须传 beforeTime（上一页最后一条的 time，此时 offset 传 0）。
+ */
+export async function fetchNeteaseSongComments(
+    songId: string,
+    { limit = 30, offset = 0, beforeTime = 0 }: { limit?: number; offset?: number; beforeTime?: number } = {},
+): Promise<INeteaseCommentsPage> {
+    const j = await unwrap<any>("netease:getSongComments", songId, limit, offset, beforeTime);
+    return {
+        total: j?.total ?? 0,
+        hasMore: !!j?.more,
+        hotComments: (Array.isArray(j?.hotComments) ? j.hotComments : []).map(commentFromApi),
+        comments: (Array.isArray(j?.comments) ? j.comments : []).map(commentFromApi),
+        userId: String(j?.userId ?? "-1"),
+    };
+}
+
+export async function likeNeteaseComment(songId: string, commentId: string, like: boolean): Promise<void> {
+    await unwrap<void>("netease:likeComment", songId, commentId, like);
+}
+
+/** 发表评论；带 replyCommentId 时为回复（落进目标评论的楼中楼） */
+export async function addNeteaseComment(
+    songId: string,
+    content: string,
+    replyCommentId?: string,
+): Promise<void> {
+    await unwrap<void>("netease:addComment", songId, content, replyCommentId);
+}
+
+export async function deleteNeteaseComment(songId: string, commentId: string): Promise<void> {
+    await unwrap<void>("netease:deleteComment", songId, commentId);
+}
+
+/** 关键词搜网易歌曲（免登录）：给「播放曲 → 网易歌曲 id」反查用 */
+export async function searchNeteaseSongs(keyword: string, limit = 10): Promise<INeteaseSong[]> {
+    const songs = await unwrap<any[]>("netease:searchSongs", keyword, limit);
+    return songs.map(neteaseSongFromApi);
+}
+
+/** 歌曲红心（喜欢）数量；countDesc 是网易自己的展示格式（如「100w+」） */
+export interface INeteaseSongRedCount {
+    count: number;
+    countDesc: string | null;
+}
+
+export async function fetchNeteaseSongRedCount(songId: string): Promise<INeteaseSongRedCount> {
+    return unwrap<INeteaseSongRedCount>("netease:getSongRedCount", songId);
+}
+
+/** 精彩评论（热门评论独立分页） */
+export interface INeteaseHotCommentsPage {
+    total: number;
+    hasMore: boolean;
+    comments: INeteaseComment[];
+}
+
+export async function fetchNeteaseHotComments(
+    songId: string,
+    { limit = 30, offset = 0 }: { limit?: number; offset?: number } = {},
+): Promise<INeteaseHotCommentsPage> {
+    const j = await unwrap<any>("netease:getHotComments", songId, limit, offset);
+    return {
+        total: j?.total ?? 0,
+        hasMore: !!j?.hasMore,
+        comments: (Array.isArray(j?.hotComments) ? j.hotComments : []).map(commentFromApi),
+    };
+}
