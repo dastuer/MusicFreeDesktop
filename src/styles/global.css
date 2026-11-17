@@ -4382,6 +4382,42 @@ body.in-desktop-lyrics-window {
     transform: translateX(-50%) scale(1.03);
 }
 
+/* 评论页「切歌提示」悬浮条：浏览评论时切了歌，评论区不自动跟切（仍停留在
+   原歌），浮出这条提示，点了才切到当前播放曲的评论（参考网易云移动端） */
+.cmt-switch-tip {
+    position: absolute;
+    top: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: min(70vw, 520px);
+    padding: 8px 18px;
+    border: none;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-color) 10%, transparent);
+    backdrop-filter: blur(8px);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text-color);
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+    transition: background 0.15s, transform 0.15s;
+    z-index: 3;
+}
+
+.cmt-switch-tip:hover {
+    background: color-mix(in srgb, var(--text-color) 16%, transparent);
+    transform: translateX(-50%) scale(1.03);
+}
+
+.cmt-switch-tip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* 发布/回复：居中模态输入框（网易云样式） */
 .cmt-modal-mask {
     position: absolute;
