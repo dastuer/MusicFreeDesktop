@@ -79,9 +79,9 @@ interface IResolvedMediaSource {
  */
 interface IPreloadTask {
     musicItem: IMusic.IMusicItem;
-    /** 规划时的队列版本：对不上说明队列动过，随机挑定的那首可能已不在原位 */
+    /** 规划时的队列版本：对不上说明队列动过，定下的下一首可能已不在队列 / 顺序变了 */
     queueVersion: number;
-    /** 「下一首」是随机模式临场定下的：skipToNext 要采纳这个决定而不是再随机一次 */
+    /** 「下一首」是随机模式按本轮顺序定下的：skipToNext 要采纳这个决定而不是再算一次 */
     fromShuffle: boolean;
     /** 预载时的默认音质：期间用户改过音质的话，备好的音源就过期了 */
     qualityRequest: IMusic.IQualityKey;
@@ -157,6 +157,19 @@ function toQueueableList(musicItems: IMusic.IMusicItem[]) {
         seen.add(playListKey(it));
         return true;
     });
+}
+
+/**
+ * 原地 Fisher-Yates 洗牌。
+ * 不要用 `sort(() => Math.random() - 0.5)`：比较器时随机时固定，结果分布并不均匀，
+ * 某些位置组合会明显偏多，这本身就是随机播放「总撞到那几首」的一个来源。
+ */
+function shuffleInPlace<T>(list: T[]): T[] {
+    for (let i = list.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
 }
 
 /** MediaError 转成人话（见 HTMLMediaElement.error） */
@@ -357,6 +370,19 @@ class TrackPlayer extends EventEmitter {
      * 预加载把它记进计划：到点交接前对一下，版本变了说明「接下来那首」的推算可能已过期。
      */
     private _queueVersion = 0;
+    /**
+     * 随机播放的「一轮」顺序（只存 playListKey，不存队列下标，队列内拖拽/增删不影响已定顺序）。
+     *
+     * 旧实现每切一首就独立 `Math.random()` 挑一个下标（有放回抽样）：单看每次都是均匀的，
+     * 但一整个收听过程会成团——短短几首内反复撞上同几首、一轮下来又有不少歌一次没轮到，
+     * 体感就是「随机老随机到那几首」。现在把队列洗成一轮固定顺序顺着走，走完再洗新一轮：
+     * 一轮里每首歌恰好播一次，覆盖有保证，也不会出现局部聚簇。
+     */
+    private _shuffleOrder: string[] = [];
+    /** 当前这首在 _shuffleOrder 里的 key；空串 = 当前不在这一轮里（队列外的歌 / 新一轮刚起头） */
+    private _shuffleCursorKey = "";
+    /** _shuffleOrder 是按哪个队列版本对过账的：队列动过就增量对齐，不整轮重洗 */
+    private _shuffleSyncedVersion = -1;
     /**
      * 在途的预加载任务（可能没有）：临近播完时提前解析下一首的音源并预缓冲，
      * 到点直接交接，详见 maybePreloadNext / takePreloadFor。
@@ -1014,10 +1040,10 @@ class TrackPlayer extends EventEmitter {
      * 「当前这首播完之后该播哪首」的规划，与 onEnded → skipToNext 的实际走向同一套判据：
      * 待播登记优先；单曲循环没有下一首；队列空、off 模式到队尾就停。
      *
-     * 随机模式的下一首本来由临播时的一次随机数决定，这里提前把随机数定下来存进计划，
-     * skipToNext 到点直接采纳（见 takePlannedShuffleNext）——否则临播再随机一次，
+     * 随机模式的下一首本来由临播时从本轮顺序里取，这里提前把那一首定下来存进计划，
+     * skipToNext 到点直接采纳（见 takePlannedShuffleNext）——否则到点再沿顺序算一次，
      * 挑中的多半不是备好的那首，无缝就落空了。窗口期内队列动过的话 queueVersion
-     * 对不上，计划作废、按老路随机。
+     * 对不上，计划作废、按当前顺序重新取。
      */
     private planNextTrack(): { musicItem: IMusic.IMusicItem; fromShuffle: boolean } | null {
         if (this._repeatMode === "single") {
@@ -1037,14 +1063,7 @@ class TrackPlayer extends EventEmitter {
         }
         let nextIndex: number;
         if (this._repeatMode === "queue") {
-            if (len === 1) {
-                nextIndex = curIndex;
-            } else {
-                nextIndex = curIndex;
-                while (nextIndex === curIndex) {
-                    nextIndex = Math.floor(Math.random() * len);
-                }
-            }
+            nextIndex = this.nextShuffleIndex();
         } else {
             nextIndex = curIndex < 0 ? 0 : (curIndex + 1) % len;
         }
@@ -1173,8 +1192,8 @@ class TrackPlayer extends EventEmitter {
     }
 
     /**
-     * skipToNext 采纳预载时定下的随机决定（仅随机模式）：预载备好的歌就是这次要播的歌，
-     * 按老路再随机一次反而多半错过它。队列版本对不上（窗口期内动过队列）就作废。
+     * skipToNext 采纳预载时定下的下一首（仅随机模式）：预载备好的歌就是这次要播的歌，
+     * 到点再沿顺序算一次反而可能错过它。队列版本对不上（窗口期内动过队列）就作废。
      */
     private takePlannedShuffleNext(): IMusic.IMusicItem | null {
         const task = this.preload;
@@ -1441,7 +1460,7 @@ class TrackPlayer extends EventEmitter {
         const list = [...this._playList];
         const insertAt = beforeIndex === undefined ? list.length : beforeIndex;
         if (shouldShuffle) {
-            valid.sort(() => Math.random() - 0.5);
+            shuffleInPlace(valid);
         }
         list.splice(insertAt, 0, ...valid);
         this._playList = list;
@@ -1654,6 +1673,7 @@ class TrackPlayer extends EventEmitter {
     clearPlayList() {
         this._playList = [];
         this._queueVersion += 1;
+        this.resetShuffleOrder();
         setAtom(playListAtom, []);
         // 待播登记跟着队列一起作废（否则当前这首播完还会去找那首已经不在的歌）
         this._pendingNext = [];
@@ -1898,6 +1918,9 @@ class TrackPlayer extends EventEmitter {
         this.pendingPlayId = playId;
 
         const isNew = !this.isCurrentMusic(target);
+        // 「下一首播放」是插播：播完还要回到原来的顺序，不能把随机游标挪到插播这首上，
+        // 否则随机顺序里它前面的歌会被平白跳过（落在已播段还会倒退重播）
+        const fromPendingNext = this._pendingNext.includes(playListKey(target));
         const willLoad = isNew || !!forcePlay;
         /**
          * 起播位置 = 启动时还原出来的那个位置（其余情况都是 0）。
@@ -1921,6 +1944,12 @@ class TrackPlayer extends EventEmitter {
                 this.add(target);
             }
             this._currentMusic = target;
+            // 随机模式：把这一轮的游标挪到落点。手点队列中间的某首、按上一首从历史回去，
+            // 之后都从落点往后走，而不是接着旧游标（那样会平白跳过落点前的歌）。
+            // 插播的「下一首播放」除外：它不占随机顺序里的名次。
+            if (!fromPendingNext) {
+                this.markShufflePlayed(target);
+            }
             // 播到了就是兑现了：直接点队列里那首、待播自动播到、甚至从历史里回去，
             // 都算「下一首播放」已经生效过，之后交回播放模式（单曲循环下循环的就是它）
             this.consumePendingNext(target);
@@ -2078,23 +2107,175 @@ class TrackPlayer extends EventEmitter {
         }
     }
 
+    /** 整队换掉 / 清空队列：固有的随机顺序作废，下次按新队列重新洗一轮 */
+    private resetShuffleOrder() {
+        this._shuffleOrder = [];
+        this._shuffleCursorKey = "";
+        this._shuffleSyncedVersion = -1;
+    }
+
+    /**
+     * 把随机顺序增量对齐到当前队列，不整轮重洗：
+     * - 已删掉的歌从顺序里摘掉；
+     * - 新进队列的歌随机插到「还没播到」的一段里——已播过的顺序保持不动，
+     *   否则往队列里加一首歌就把这一轮的随机进度整个打乱了；
+     * - 顺序还是空的（第一次随机、刚换过队列）就以当前这首为起点洗一轮；
+     * - 当前这首不在队列里（清空过播放列表、播的是历史里已移出的歌）就整份队列重洗，
+     *   游标置空，下一首从新一轮第一首开始。
+     *
+     * 浮标只认 playListKey：队列内拖拽排序不会改变已经定好的随机顺序。
+     */
+    private syncShuffleOrder() {
+        if (this._shuffleSyncedVersion === this._queueVersion) {
+            return;
+        }
+        const queueKeys = this._playList.map(playListKey);
+        const inQueue = new Set(queueKeys);
+        const curKey =
+            this._currentMusic && inQueue.has(playListKey(this._currentMusic))
+                ? playListKey(this._currentMusic)
+                : "";
+
+        if (!this._shuffleOrder.length) {
+            // 新一轮从当前这首起头：它已经算「播过」，其余歌随机排到后面
+            this._shuffleOrder = curKey
+                ? [curKey, ...shuffleInPlace(queueKeys.filter((key) => key !== curKey))]
+                : shuffleInPlace(queueKeys);
+            this._shuffleCursorKey = curKey;
+            this._shuffleSyncedVersion = this._queueVersion;
+            return;
+        }
+
+        const kept = this._shuffleOrder.filter((key) => inQueue.has(key));
+        const keptSet = new Set(kept);
+        // 游标那首被移出队列 / 换了 key：游标失位，下一次从头接上
+        if (this._shuffleCursorKey && !keptSet.has(this._shuffleCursorKey)) {
+            this._shuffleCursorKey = "";
+        }
+        const additions = queueKeys.filter((key) => !keptSet.has(key));
+        if (additions.length) {
+            // 插在游标之后（还没播到的那一段）；游标为空就整轮撒开
+            const at = this._shuffleCursorKey
+                ? kept.indexOf(this._shuffleCursorKey)
+                : -1;
+            const head = at >= 0 ? kept.slice(0, at + 1) : [];
+            const tail = at >= 0 ? kept.slice(at + 1) : kept;
+            for (const key of shuffleInPlace(additions)) {
+                tail.splice(Math.floor(Math.random() * (tail.length + 1)), 0, key);
+            }
+            this._shuffleOrder = [...head, ...tail];
+        } else {
+            this._shuffleOrder = kept;
+        }
+        this._shuffleSyncedVersion = this._queueVersion;
+    }
+
+    /**
+     * 洗新一轮。第一首避开刚播完的这首：两轮交界处连着播同一首歌，
+     * 比「随机」本身更扎眼。新一轮的顺序仍然包含它（这一轮里它还会播一次），
+     * 只是不会紧挨着上一轮的结尾。
+     */
+    private startNewShuffleCycle(avoidKey: string) {
+        const order = shuffleInPlace(this._playList.map(playListKey));
+        if (order.length > 1 && order[0] === avoidKey) {
+            const swapAt = 1 + Math.floor(Math.random() * (order.length - 1));
+            [order[0], order[swapAt]] = [order[swapAt], order[0]];
+        }
+        this._shuffleOrder = order;
+        this._shuffleCursorKey = "";
+        this._shuffleSyncedVersion = this._queueVersion;
+    }
+
+    /**
+     * 随机模式的下一个队列下标：顺着本轮顺序往后走，走到本轮末尾就洗新一轮。
+     * 一轮里每首歌恰好播一次，所以不会出现旧算法那种连着撞同一首、
+     * 或者一轮下来有些歌一次都没轮到的聚簇。
+     */
+    private nextShuffleIndex(): number {
+        const len = this._playList.length;
+        if (!len) {
+            return -1;
+        }
+        if (len === 1) {
+            return 0;
+        }
+        this.syncShuffleOrder();
+        let nextKey: string | undefined;
+        const cursor = this._shuffleCursorKey
+            ? this._shuffleOrder.indexOf(this._shuffleCursorKey)
+            : -1;
+        if (cursor < 0) {
+            // 当前不在这轮顺序里（队列外 / 新一轮刚起头）：从第一个待播开始
+            nextKey = this._shuffleOrder[0];
+        } else if (cursor + 1 < this._shuffleOrder.length) {
+            nextKey = this._shuffleOrder[cursor + 1];
+        } else {
+            this.startNewShuffleCycle(
+                this._currentMusic ? playListKey(this._currentMusic) : "",
+            );
+            nextKey = this._shuffleOrder[0];
+        }
+        if (!nextKey) {
+            return -1;
+        }
+        return this._playList.findIndex((it) => playListKey(it) === nextKey);
+    }
+
+    /**
+     * 随机模式的「上一首」兜底（正常情况走历史栈）：沿着本轮顺序往回退。
+     * 退到本轮开头就停下，不回绕——「上一首」跳到队尾一首不相干的歌更奇怪。
+     */
+    private previousShuffleIndex(): number {
+        this.syncShuffleOrder();
+        const cursor = this._shuffleCursorKey
+            ? this._shuffleOrder.indexOf(this._shuffleCursorKey)
+            : -1;
+        if (cursor <= 0) {
+            return -1;
+        }
+        const key = this._shuffleOrder[cursor - 1];
+        return this._playList.findIndex((it) => playListKey(it) === key);
+    }
+
+    /**
+     * 记下这一轮走到哪了：队列里的歌一开播就把游标挪到它在顺序里的位置。
+     * 用户手点队列中间的某首、按「上一首」从历史回去，都以落点为新起点，
+     * 之后按「下一首」顺着它往后走；队列外的歌没有名次，游标置空。
+     */
+    private markShufflePlayed(musicItem: IMusic.IMusicItem) {
+        if (this._repeatMode !== "queue") {
+            return;
+        }
+        if (!this.isInPlayList(musicItem)) {
+            // 队列外的歌（从历史回到一首已移出的歌）：不占这一轮的名次，
+            // 这一轮作废，下一首从队列重新洗起
+            this.resetShuffleOrder();
+            return;
+        }
+        this.syncShuffleOrder();
+        const key = playListKey(musicItem);
+        if (this._shuffleOrder.includes(key)) {
+            this._shuffleCursorKey = key;
+        } else {
+            // 顺序里没有它（理论上对账后不会发生）：重置，下一首按新一轮来
+            this.resetShuffleOrder();
+        }
+    }
+
     private async getNextIndex(direction: 1 | -1): Promise<number> {
         const len = this._playList.length;
         if (!len) {
             return -1;
         }
-        const curIndex = this.getMusicIndexInPlayList(this._currentMusic);
         if (this._repeatMode === "queue") {
-            // 随机播放
             if (len === 1) {
-                return curIndex;
+                return 0;
             }
-            let next = curIndex;
-            while (next === curIndex) {
-                next = Math.floor(Math.random() * len);
-            }
-            return next;
+            return direction === 1
+                ? this.nextShuffleIndex()
+                : this.previousShuffleIndex();
         }
+        const curIndex = this.getMusicIndexInPlayList(this._currentMusic);
         if (curIndex < 0) {
             return 0;
         }
@@ -2219,6 +2400,8 @@ class TrackPlayer extends EventEmitter {
             this._playList = toQueueableList(newPlayList);
             this._currentListId = listId;
             this._queueVersion += 1;
+            // 随机顺序属于上一份队列，作废重洗：新队列从接下来播放的这首起头
+            this.resetShuffleOrder();
             // 整队换掉之后「排在当前这首后面」这个约定已经不成立了：待播登记作废
             // （没换队列时不动——上面 alreadyThisList 为真就是在同一份列表里继续点歌）
             this._pendingNext = [];
@@ -2237,6 +2420,11 @@ class TrackPlayer extends EventEmitter {
         const order: MusicRepeatMode[] = ["off", "queue", "single"];
         const next = order[(order.indexOf(this._repeatMode) + 1) % order.length];
         this._repeatMode = next;
+        // 切回随机时从当前这首重新洗一轮：中间在顺序 / 单曲模式里播过的歌
+        // 没有随机名次，接着旧游标走可能会把刚听过的歌又翻出来。
+        if (next === "queue") {
+            this.resetShuffleOrder();
+        }
         setAtom(repeatModeAtom, next);
         localStorage.setItem("repeatMode", next);
     }
