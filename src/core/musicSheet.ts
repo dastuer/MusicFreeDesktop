@@ -14,11 +14,21 @@ function bumpLikesVersion() {
     store.set(likesVersionAtom, store.get(likesVersionAtom) + 1);
 }
 
+/** 歌单正在从外部来源导入的标记：导入完成/取消后清除，详情页据此展示导入状态 */
+export interface ISheetImportSource {
+    type: "netease";
+    /** 外部歌单 id（网易云），也是匹配会话的 key 一部分 */
+    id: string;
+}
+
 export interface IUserSheet {
     id: string;
     title: string;
     createAt: number;
     musicList: IMusic.IMusicItem[];
+    importSource?: ISheetImportSource;
+    /** 歌单封面（外部导入时为原始歌单的封面 URL）；空则展示时回退第一首歌的封面 */
+    artwork?: string;
 }
 
 export async function getUserSheets(): Promise<IUserSheet[]> {
@@ -193,6 +203,35 @@ export async function renameSheet(id: string, title: string) {
         sheet.title = title;
         await saveSheets(sheets);
     }
+}
+
+/** 设置/清除歌单的导入标记（导入启动时设置，完成/取消/手动清除时置 null） */
+export async function setSheetImportSource(id: string, source: ISheetImportSource | null) {
+    const sheets = await getUserSheets();
+    const sheet = sheets.find((it) => it.id === id);
+    if (!sheet) {
+        return;
+    }
+    if (source) {
+        sheet.importSource = source;
+    } else {
+        delete sheet.importSource;
+    }
+    await saveSheets(sheets);
+}
+
+/** 设置歌单封面（外部导入时写入原始歌单的封面 URL）；artwork 为空时不覆盖已有值 */
+export async function setSheetArtwork(id: string, artwork: string) {
+    if (!artwork) {
+        return;
+    }
+    const sheets = await getUserSheets();
+    const sheet = sheets.find((it) => it.id === id);
+    if (!sheet || sheet.artwork === artwork) {
+        return;
+    }
+    sheet.artwork = artwork;
+    await saveSheets(sheets);
 }
 
 /**

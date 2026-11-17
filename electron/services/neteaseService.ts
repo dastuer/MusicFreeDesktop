@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { BrowserWindow } from "electron";
+import type { IncomingHttpHeaders } from "http";
 import https from "https";
 import configStore from "./configStore";
 import * as cookieCipher from "./cookieCipher";
@@ -200,7 +201,7 @@ function rawRequest(
     url: string,
     options: { method?: string; body?: string; headers?: Record<string, string> },
     timeoutMs = 15000,
-): Promise<{ statusCode: number; text: string }> {
+): Promise<{ statusCode: number; headers: IncomingHttpHeaders; text: string }> {
     return new Promise((resolve, reject) => {
         const u = new URL(url);
         const data = options.body ? Buffer.from(options.body) : null;
@@ -232,6 +233,7 @@ function rawRequest(
                 res.on("end", () =>
                     resolve({
                         statusCode: res.statusCode ?? 0,
+                        headers: res.headers,
                         text: Buffer.concat(chunks).toString("utf-8"),
                     }),
                 );
@@ -244,6 +246,32 @@ function rawRequest(
         }
         req.end();
     });
+}
+
+/**
+ * 跟随 HTTP 重定向解析分享短链（163cn.tv 等），返回最终 URL。
+ * 兜底：个别短链不走 3xx 而是返回一个跳转页，从页面内容里再找一次网易云链接。
+ */
+async function resolveShortLink(url: string): Promise<string> {
+    let current = url;
+    for (let hops = 0; hops < 5; hops++) {
+        if (/music\.163\.com/.test(current) && /[?&]id=\d+/.test(current)) {
+            return current; // 已经落到带 id 的网易云链接
+        }
+        const { statusCode, headers, text } = await rawRequest(current, { method: "GET" }, 10000);
+        const location = headers?.location;
+        if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+            current = new URL(String(Array.isArray(location) ? location[0] : location), current)
+                .toString();
+            continue;
+        }
+        const embedded = text.match(/music\.163\.com[^\s"'<>]*playlist\?[^\s"'<>]*/);
+        if (embedded) {
+            return `https://${embedded[0]}`;
+        }
+        break;
+    }
+    return current;
 }
 
 /** 带重试的接口调用；code 301 视为登录过期。刷新接口对未登录也开放，所以 cookie 有无都照发 */
@@ -372,7 +400,9 @@ async function getPersonalizedPlaylists(limit = 30): Promise<any[]> {
  * 拉一份歌单的全量曲目：v3 详情接口带 n=1000 时 tracks 通常已齐，
  * 缺的（超大歌单分页截断）按 trackIds 走 song/detail 批量补齐（与导入脚本同口径）。
  */
-async function getPlaylistDetail(id: string): Promise<{ name: string; tracks: any[] }> {
+async function getPlaylistDetail(
+    id: string,
+): Promise<{ name: string; tracks: any[]; coverImgUrl?: string; trackCount?: number }> {
     const detail = await apiRequest("/api/v3/playlist/detail", {
         method: "POST",
         body: `id=${id}&n=1000&s=0`,
@@ -403,6 +433,8 @@ async function getPlaylistDetail(id: string): Promise<{ name: string; tracks: an
     return {
         name: pl.name,
         tracks: ids.map((sid) => tracks.get(sid)).filter(Boolean),
+        coverImgUrl: pl.coverImgUrl ?? "",
+        trackCount: pl.trackCount ?? ids.length,
     };
 }
 
@@ -581,6 +613,7 @@ export default {
     getRecommendPlaylists,
     getPersonalizedPlaylists,
     getPlaylistDetail,
+    resolveShortLink,
     getSongComments,
     likeComment,
     addComment,

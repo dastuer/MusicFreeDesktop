@@ -708,6 +708,9 @@ ipcMain.handle("netease:getPersonalizedPlaylists", () =>
     wrapNetease(() => neteaseService.getPersonalizedPlaylists()));
 ipcMain.handle("netease:getPlaylistDetail", (_e, id: string) =>
     wrapNetease(() => neteaseService.getPlaylistDetail(String(id))));
+// 分享短链（163cn.tv 等）跟随重定向解析成完整链接，「导入外部歌单」用
+ipcMain.handle("netease:resolveShortLink", (_e, url: string) =>
+    wrapNetease(() => neteaseService.resolveShortLink(String(url))));
 
 /** ---------- 歌曲评论（见 services/neteaseService.ts，读取免登录、写操作需 MUSIC_U） ---------- */
 

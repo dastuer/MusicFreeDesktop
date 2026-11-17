@@ -14,6 +14,7 @@ import {
     addMusicToSheetMany,
     createSheet,
     getUserSheets,
+    setSheetArtwork,
 } from "@/core/musicSheet";
 import { navigate } from "@/core/router";
 
@@ -25,6 +26,11 @@ import { navigate } from "@/core/router";
 export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlaylistCard }) {
     const card = props.card;
     const sessionKey = card ? `playlist:${card.id}` : "";
+    const session = useMatchSession(sessionKey);
+
+    // 链接导入进页面时 card 只有 id，真实歌单名/封面由会话拉取曲目时回填
+    const sheetTitle = session?.title || card?.title || "";
+    const artwork = session?.artwork || card?.artwork || "";
 
     // hooks 必须在 early return 之前：无 card 时也会订阅（恒为 null）
     useEffect(() => {
@@ -34,8 +40,6 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionKey]);
-
-    const session = useMatchSession(sessionKey);
 
     const matchedItems = useMemo(
         () =>
@@ -64,11 +68,14 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
         }
         try {
             const sheets = await getUserSheets();
-            const existed = sheets.find((s) => s.title === card.title);
-            const sheet = existed ?? (await createSheet(card.title));
+            const existed = sheets.find((s) => s.title === sheetTitle);
+            const sheet = existed ?? (await createSheet(sheetTitle));
+            if (session?.artwork) {
+                await setSheetArtwork(sheet.id, session.artwork);
+            }
             const { added, skipped } = await addMusicToSheetMany(sheet.id, matchedItems);
             showToast(
-                `已导入「${card.title}」：新增 ${added} 首${skipped ? `，跳过重复 ${skipped} 首` : ""}` +
+                `已导入「${sheetTitle}」：新增 ${added} 首${skipped ? `，跳过重复 ${skipped} 首` : ""}` +
                     (session && session.missedCount > 0
                         ? `；${session.missedCount} 首未匹配到音源`
                         : ""),
@@ -109,9 +116,9 @@ export default function NeteasePlaylistDetailPage(props: { card?: INeteasePlayli
             <div className="page-header">
                 <div className="page-header-row">
                     <div style={{ display: "flex", gap: 16, minWidth: 0 }}>
-                        <Cover src={card.artwork} size={96} borderRadius={8} />
+                        <Cover src={artwork} size={96} borderRadius={8} />
                         <div style={{ minWidth: 0 }}>
-                            <div className="page-header-title">{card.title}</div>
+                            <div className="page-header-title">{sheetTitle}</div>
                             <div className="page-header-sub">{headerSub}</div>
                         </div>
                     </div>

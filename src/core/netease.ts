@@ -32,7 +32,8 @@ export interface INeteasePlaylistCard {
     /** 播放次数（接口给的是 1.5E8 这类科学计数法，展示时再格式化） */
     playCount?: number;
     trackCount?: number;
-    source: "daily" | "personalized";
+    /** link = 从分享链接/歌单 ID 导入（进详情页时还不知道歌单名，由会话拉取后回填） */
+    source: "daily" | "personalized" | "link";
 }
 
 function neteaseSongFromApi(s: any): INeteaseSong {
@@ -135,12 +136,53 @@ export async function fetchNeteasePersonalizedPlaylists(limit = 30): Promise<INe
 
 export async function fetchNeteasePlaylistDetail(
     id: string,
-): Promise<{ name: string; songs: INeteaseSong[] }> {
-    const { name, tracks } = await unwrap<{ name: string; tracks: any[] }>(
-        "netease:getPlaylistDetail",
-        id,
-    );
-    return { name, songs: tracks.map(neteaseSongFromApi) };
+): Promise<{ name: string; songs: INeteaseSong[]; artwork?: string; trackCount?: number }> {
+    const { name, tracks, coverImgUrl, trackCount } = await unwrap<{
+        name: string;
+        tracks: any[];
+        coverImgUrl?: string;
+        trackCount?: number;
+    }>("netease:getPlaylistDetail", id);
+    return {
+        name,
+        songs: tracks.map(neteaseSongFromApi),
+        // 接口偶尔给 http 形态的封面地址，统一升级 https（与日推封面一致，避免混合内容问题）
+        artwork: coverImgUrl?.replace(/^http:\/\//i, "https://"),
+        trackCount,
+    };
+}
+
+/** ---------- 歌单链接解析（「导入外部歌单」入口用） ---------- */
+
+/**
+ * 从分享文本/链接/纯 ID 里解析网易云歌单 id：
+ * 兼容 music.163.com/playlist?id=…、旧版 #/playlist?id=…、y.music.163.com/m/playlist?id=…，
+ * 多余的 uct2/userid 等参数忽略；纯数字串直接当歌单 ID。识别不了返回 null。
+ */
+export function parseNeteasePlaylistId(text: string): string | null {
+    const t = text.trim();
+    if (/^\d{4,}$/.test(t)) {
+        return t;
+    }
+    // 只认 playlist?…id= 形态：song?id= 等其他链接不该被当成歌单导入
+    const m = t.match(/playlist\?(?:[^#\s]*&)?id=(\d+)/i);
+    return m ? m[1] : null;
+}
+
+/**
+ * 导入入口的统一解析：普通链接/纯 ID 走 parseNeteasePlaylistId；
+ * 163cn.tv 分享短链先经主进程跟随重定向拿到完整链接再解析。
+ */
+export async function resolveNeteasePlaylistId(text: string): Promise<string | null> {
+    const t = text.trim();
+    if (!t) {
+        return null;
+    }
+    if (/163cn\.tv\//i.test(t)) {
+        const fullUrl = await unwrap<string>("netease:resolveShortLink", t);
+        return parseNeteasePlaylistId(fullUrl);
+    }
+    return parseNeteasePlaylistId(t);
 }
 
 /** 播放次数格式化：接口给的是 1.5080416E8 这类科学计数法字符串 */

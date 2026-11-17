@@ -2,15 +2,25 @@ import React, { useCallback, useEffect, useState } from "react";
 import MediaHeader from "@/components/base/MediaHeader";
 import MusicList from "@/components/base/MusicList";
 import Icon from "@/components/base/Icon";
+import NeteaseMatchingPanel from "@/components/base/NeteaseMatchingPanel";
 import { getPluginByMedia, pluginCall } from "@/core/ipc";
 import {
+    ISheetImportSource,
     LIKES_SHEET_ID,
     deleteSheet,
     getSheetById,
     removeMusicFromSheet,
     removeMusicFromSheetMany,
     renameSheet,
+    setSheetImportSource,
 } from "@/core/musicSheet";
+import {
+    IMatchSessionView,
+    neteaseSessionKey,
+    resetMatchSession,
+    startPlaylistMatchSession,
+    useMatchSession,
+} from "@/core/neteaseMatchSession";
 import { showAddToSheetPanel } from "@/components/base/AddToSheetPanel";
 import { showDownloadPanel } from "@/components/base/DownloadPanel";
 import { showPrompt } from "@/components/base/PromptDialog";
@@ -34,6 +44,111 @@ interface ISheetDetailPageProps {
     userSheetId?: string;
 }
 
+/**
+ * 链接导入状态（本地歌单带 importSource 标记时展示），样式与每日推荐的匹配态一致：
+ * 进行中/拉曲目 = NeteaseMatchingPanel（转圈 + 进度条 + 骨架列表），失败 = source-note，
+ * 应用重启中断 = 同款状态条换文案。匹配完成后的写入由会话自己完成（人不在本页也会写）。
+ */
+function SheetImportStatus(props: {
+    sheetId: string;
+    source: ISheetImportSource;
+    session: IMatchSessionView | null;
+    onChanged: () => void;
+}) {
+    const { session } = props;
+    const sessionKey = neteaseSessionKey(props.source.id);
+
+    // 完成即刷新列表/头部（写入在会话里已落盘，轮询兜底，这里只是更快）
+    useEffect(() => {
+        if (session?.status === "done") {
+            props.onChanged();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [session?.status]);
+
+    if (session?.status === "done") {
+        return null;
+    }
+
+    const retryImport = () => {
+        resetMatchSession(sessionKey);
+        startPlaylistMatchSession(
+            { id: props.source.id, title: "" },
+            { targetSheetId: props.sheetId },
+        );
+    };
+    const clearStatus = async () => {
+        await setSheetImportSource(props.sheetId, null);
+        props.onChanged();
+    };
+    const cancelImport = async () => {
+        resetMatchSession(sessionKey);
+        await setSheetImportSource(props.sheetId, null);
+        props.onChanged();
+    };
+
+    if (!session) {
+        return (
+            <div className="netease-matching-strip" role="status">
+                <span className="netease-matching-spin slow" aria-hidden>
+                    <Icon name="musicNote" size={13} />
+                </span>
+                <div className="netease-matching-text">
+                    <span className="netease-matching-title">上次导入未完成</span>
+                    <span className="netease-matching-sub">应用可能在中途重启过，可继续导入</span>
+                </div>
+                <div style={{ marginLeft: "auto", flexShrink: 0, display: "flex", gap: 8 }}>
+                    <button
+                        className="btn-primary"
+                        style={{ padding: "3px 12px", fontSize: 12 }}
+                        onClick={retryImport}
+                    >
+                        继续导入
+                    </button>
+                    <button
+                        className="btn-ghost"
+                        style={{ padding: "3px 12px", fontSize: 12 }}
+                        onClick={clearStatus}
+                    >
+                        清除状态
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (session.status === "error") {
+        return (
+            <div className="source-note">
+                {`导入失败：${session.error ?? "未知错误"}`}
+                <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                    <button className="btn-primary" onClick={retryImport}>
+                        重试
+                    </button>
+                    <button className="btn-ghost" onClick={clearStatus}>
+                        清除状态
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <NeteaseMatchingPanel
+            view={session}
+            actions={
+                <button
+                    className="btn-ghost"
+                    style={{ padding: "3px 12px", fontSize: 12 }}
+                    onClick={cancelImport}
+                >
+                    取消
+                </button>
+            }
+        />
+    );
+}
+
 export default function SheetDetailPage(props: ISheetDetailPageProps) {
     const { sheetItem, userSheetId } = props;
     const [title, setTitle] = useState(sheetItem?.title ?? "歌单");
@@ -47,6 +162,20 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
      * 有些插件不填这个字段，那时退回显示「已加载 N 首」。
      */
     const [worksNum, setWorksNum] = useState<number | undefined>(undefined);
+    /** 链接导入进行中的标记（完成/取消后清掉，状态条随之消失） */
+    const [importSource, setImportSource] = useState<ISheetImportSource | null>(null);
+    /** 导入会话的实时进度（无标记/无会话为 null），驱动状态条与骨架列表 */
+    const importSession = useMatchSession(importSource ? neteaseSessionKey(importSource.id) : "");
+    /**
+     * 导入未收尾期间列表保持骨架：拉曲目/匹配中，以及「已完成但本页还没刷到歌单数据」
+     * 的空档（会话先落盘再报完成，这里等 importSource 标记随刷新一起消失，避免闪「暂无歌曲」）
+     */
+    const importSkeleton =
+        !!importSource &&
+        !!importSession &&
+        (importSession.status === "loading" ||
+            importSession.status === "running" ||
+            importSession.status === "done");
 
     const isUserSheet = !!userSheetId;
     const isLikesSheet = userSheetId === LIKES_SHEET_ID;
@@ -63,10 +192,11 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
             return;
         }
         setTitle(sheet.title);
-        // 歌单封面取第一首歌的封面
-        setArtwork(sheet.musicList?.[0]?.artwork ?? "");
+        // 封面优先用导入时记下的原始歌单封面，没有再回退第一首歌的封面
+        setArtwork(sheet.artwork || (sheet.musicList?.[0]?.artwork ?? ""));
         // 本地歌单没有音源声明的总数，本来就一次性全量加载
         setWorksNum(undefined);
+        setImportSource(sheet.importSource ?? null);
         setDescription(
             sheet.id === LIKES_SHEET_ID
                 ? "红心喜欢的歌曲都会收藏在这里"
@@ -299,9 +429,19 @@ export default function SheetDetailPage(props: ISheetDetailPageProps) {
                     ) : null
                 }
             />
+            {importSource && userSheetId && (
+                <SheetImportStatus
+                    sheetId={userSheetId}
+                    source={importSource}
+                    session={importSession}
+                    onChanged={refreshUserSheet}
+                />
+            )}
             <MusicList
                 musicList={list.items}
-                loading={list.loading}
+                /* 导入进行中与每日推荐同款：骨架行撑起等高列表，刷到数据后原地换真实行 */
+                loading={list.loading || importSkeleton}
+                skeletonRows={importSkeleton ? importSession?.total : undefined}
                 loadingMore={list.loadingMore}
                 isEnd={list.isEnd}
                 stalled={list.stalled}

@@ -7,6 +7,11 @@ import { showToast } from "../base/Toast";
 import { navigate, useCurrentRoute, useNearestRoute } from "@/core/router";
 import type { RoutePath } from "@/core/router";
 import {
+    INeteaseSong,
+    fetchNeteasePlaylistDetail,
+    resolveNeteasePlaylistId,
+} from "@/core/netease";
+import {
     IUserSheet,
     LIKES_SHEET_ID,
     createSheet,
@@ -15,7 +20,13 @@ import {
     getUserSheets,
     renameSheet,
     reorderSheets,
+    setSheetArtwork,
+    setSheetImportSource,
 } from "@/core/musicSheet";
+import {
+    neteaseSessionKey,
+    startMatchSession,
+} from "@/core/neteaseMatchSession";
 import { TrackPlayerSingleton } from "@/core/trackPlayer";
 
 const mainNavItems = [
@@ -119,11 +130,60 @@ export default function Sidebar() {
         });
     };
 
+    /**
+     * 粘贴网易云歌单链接/ID 导入：先拉歌单名与曲目（弹窗停留，失败可改后重试），
+     * 随即在「我的歌单」建/复用同名歌单并跳进详情页展示导入进度，
+     * 匹配完成后由会话自动写入该歌单（见 neteaseMatchSession.finalizeSheetImport）。
+     */
+    const showImportPrompt = () => {
+        showPrompt({
+            title: "导入外部歌单",
+            placeholder: "粘贴网易云歌单链接（music.163.com/playlist?id=…）或歌单 ID",
+            confirmText: "导入",
+            onConfirm: async (text) => {
+                let playlistId: string | null = null;
+                try {
+                    playlistId = await resolveNeteasePlaylistId(text);
+                } catch (e: any) {
+                    showToast(e?.message ?? "短链接解析失败，请稍后再试");
+                    return false;
+                }
+                if (!playlistId) {
+                    showToast("无法识别网易云歌单链接，目前支持 music.163.com 歌单链接或歌单 ID");
+                    return false;
+                }
+                let detail: { name: string; songs: INeteaseSong[]; artwork?: string };
+                try {
+                    detail = await fetchNeteasePlaylistDetail(playlistId);
+                } catch (e: any) {
+                    showToast(`获取歌单失败：${e?.message ?? "未知错误"}`);
+                    return false;
+                }
+                // 同名歌单直接导入进去（与「存为本地歌单」的追加去重口径一致）
+                const sheets = await getUserSheets();
+                const existed = sheets.find((s) => s.title === detail.name);
+                const sheet = existed ?? (await createSheet(detail.name));
+                // 记下原始歌单的封面，详情页/歌单头直接展示
+                if (detail.artwork) {
+                    await setSheetArtwork(sheet.id, detail.artwork);
+                }
+                await setSheetImportSource(sheet.id, { type: "netease", id: playlistId });
+                // 曲目已在手上：直接进匹配阶段，完成后自动写入上面的歌单
+                startMatchSession(neteaseSessionKey(playlistId), detail.name, detail.songs, sheet.id);
+                navigate("sheetDetail", { userSheetId: sheet.id, title: sheet.title });
+            },
+        });
+    };
+
     const createSheetAction = () => {
         showPrompt({
             title: "新建歌单",
             placeholder: "请输入歌单名称",
             confirmText: "创建",
+            hint: {
+                text: "从链接导入（网易云歌单）→",
+                onClick: showImportPrompt,
+            },
             onConfirm: async (title) => {
                 await createSheet(title);
                 showToast(`歌单「${title}」已创建`);

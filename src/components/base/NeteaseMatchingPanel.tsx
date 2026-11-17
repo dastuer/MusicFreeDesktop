@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import Icon from "./Icon";
 import { IMatchSessionView } from "@/core/neteaseMatchSession";
 
@@ -6,9 +7,13 @@ import { IMatchSessionView } from "@/core/neteaseMatchSession";
  * 大面板完成时被整个列表替换会上下顶开页面，紧凑条 + 等高骨架行让
  * 「骨架 → 真实列表」原地切换、页面高度基本不动。
  * loading 阶段（拉曲目）进度为 0 但转圈照转。
+ * actions：条尾的附加操作（本地歌单导入态放「取消」），每日推荐流不传。
  */
-export default function NeteaseMatchingPanel(props: { view: IMatchSessionView }) {
-    const { view } = props;
+export default function NeteaseMatchingPanel(props: {
+    view: IMatchSessionView;
+    actions?: ReactNode;
+}) {
+    const { view, actions } = props;
     const pct = view.total ? Math.round((view.done / view.total) * 100) : 0;
     const loading = view.status === "loading";
     return (
@@ -31,6 +36,11 @@ export default function NeteaseMatchingPanel(props: { view: IMatchSessionView })
             <div className="netease-progress">
                 <div style={{ width: `${pct}%` }} />
             </div>
+            {actions ? (
+                <div style={{ flexShrink: 0, display: "flex", gap: 8, marginLeft: 4 }}>
+                    {actions}
+                </div>
+            ) : null}
         </div>
     );
 }
